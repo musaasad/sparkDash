@@ -705,6 +705,7 @@ export class DecodeBenchManager {
       host: rawHost = null,
       tls: rawTls = false,
       owner = null,
+      recipeId = null,
     } = opts;
 
     if (this.activeBySpark.has(sparkId)) {
@@ -749,6 +750,7 @@ export class DecodeBenchManager {
       config: {
         port: p,
         modelId: modelId || null,
+        recipeId: recipeId != null ? String(recipeId) : null,
         concurrencies,
         maxTokens,
         promptType,

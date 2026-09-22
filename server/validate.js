@@ -232,3 +232,148 @@ export function validatePrefillBudget(contextSizes, limit = 600_000) {
   }
   return work;
 }
+
+// ─── Control-plane validators (Model Registry / Recipes) ──
+// Every field that can later reach a remote command, a health probe, or a
+// persisted config file has a strict grammar here. Values are validated at
+// write time AND re-validated before interpolation (defense in depth).
+
+/** Slug id: lowercase alnum with single dots/hyphens, 1–64 chars. */
+export function isValidSlug(id) {
+  return (
+    typeof id === "string" &&
+    /^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$/.test(id) &&
+    !id.includes("..")
+  );
+}
+
+/** Absolute POSIX path with no traversal and no shell metacharacters. */
+export function isValidPosixPath(p) {
+  if (typeof p !== "string" || p.length === 0 || p.length > 512) return false;
+  if (!p.startsWith("/")) return false;
+  if (p.includes("..")) return false;
+  // letters/digits and . _ / - : + @ , only — no quotes, spaces, $, backticks…
+  return /^[A-Za-z0-9._/:@+-]+$/.test(p);
+}
+
+/** Environment variable name grammar (POSIX-ish, uppercase convention free). */
+export function isValidEnvName(name) {
+  return typeof name === "string" && /^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name);
+}
+
+/**
+ * Env value grammar for recipe env vars. Deliberately strict: these values are
+ * interpolated into launcher environments. No quotes, no command
+ * substitution, no newlines. Spaces allowed (quoted at launch time).
+ */
+export function isValidEnvValue(value) {
+  return typeof value === "string" && value.length <= 1024 && !/[\x00-\x1f`$"'\\|&;<>()\n\r]/.test(value);
+}
+
+/** taskset -c style CPU affinity list: "5-9,15-19" or "0,2,4". */
+export function isValidCpuAffinity(v) {
+  if (typeof v !== "string" || v.length === 0 || v.length > 256) return false;
+  return /^\d+(-\d+)?(,\d+(-\d+)?)*$/.test(v);
+}
+
+/** TCP port 1–65535. */
+export function isValidPort(p) {
+  const n = Number(p);
+  return Number.isInteger(n) && n >= 1 && n <= 65535;
+}
+
+/** Relative health path like "/v1/models" — path chars only, starts with /. */
+export function isValidHealthPath(p) {
+  return typeof p === "string" && /^\/[A-Za-z0-9._/-]{0,127}$/.test(p);
+}
+
+/** Free-text note fields: length-capped, no control characters. */
+export function isValidNoteText(t) {
+  return typeof t === "string" && t.length <= 4096 && !/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(t);
+}
+
+export const RECIPE_RUNTIMES = Object.freeze([
+  "tabbyapi-exl3",
+  "vllm",
+  "sglang",
+  "llama.cpp",
+  "custom",
+]);
+
+export const RECIPE_TOPOLOGIES = Object.freeze(["single", "tp2", "tp3"]);
+
+/**
+ * Validate a full recipe write. Returns { ok, errors: string[] }.
+ * Pure — no fs, no network.
+ * @param {object} body
+ * @param {{ nodeIds?: string[] }} [ctx] known spark ids for node references
+ */
+export function validateRecipeWrite(body, ctx = {}) {
+  const errors = [];
+  const knownNodes = Array.isArray(ctx.nodeIds) ? new Set(ctx.nodeIds) : null;
+  if (!isValidSlug(body?.id)) errors.push("recipe id must be a lowercase slug (a-z0-9._-)");
+  if (!isValidSlug(body?.modelId)) errors.push("modelId must be a lowercase slug");
+  if (!isValidNoteText(body?.name || "") || !body?.name?.trim())
+    errors.push("recipe name is required (≤4096 chars, no control characters)");
+  if (!RECIPE_RUNTIMES.includes(body?.runtime))
+    errors.push(`runtime must be one of: ${RECIPE_RUNTIMES.join(", ")}`);
+  if (!RECIPE_TOPOLOGIES.includes(body?.topology))
+    errors.push(`topology must be one of: ${RECIPE_TOPOLOGIES.join(", ")}`);
+  const nodeIds = Array.isArray(body?.nodeIds) ? body.nodeIds : [];
+  if (nodeIds.length === 0) errors.push("at least one node is required");
+  if (new Set(nodeIds).size !== nodeIds.length) errors.push("nodeIds must be unique");
+  const expectedNodes = body?.topology === "tp3" ? 3 : body?.topology === "tp2" ? 2 : 1;
+  if (nodeIds.length !== expectedNodes)
+    errors.push(`topology ${body?.topology} requires exactly ${expectedNodes} node(s)`);
+  if (knownNodes) {
+    for (const n of nodeIds) {
+      if (!knownNodes.has(n)) errors.push(`unknown node id: ${n}`);
+    }
+  }
+  if (!isValidPosixPath(body?.modelPath)) errors.push("modelPath must be an absolute POSIX path without .. or shell metacharacters");
+  if (!isValidPosixPath(body?.workdir)) errors.push("workdir must be an absolute POSIX path without .. or shell metacharacters");
+  if (body?.logDir != null && body.logDir !== "" && !isValidPosixPath(body.logDir))
+    errors.push("logDir must be an absolute POSIX path without .. or shell metacharacters");
+  if (!isValidPort(body?.apiPort)) errors.push("apiPort must be an integer 1–65535");
+  if (body?.healthPath != null && body.healthPath !== "" && !isValidHealthPath(body.healthPath))
+    errors.push('healthPath must look like "/v1/models"');
+  if (body?.contextLength != null) {
+    const c = Number(body.contextLength);
+    if (!Number.isInteger(c) || c < 1 || c > 10_000_000) errors.push("contextLength must be 1–10000000");
+  }
+  if (body?.cpuAffinity != null && body.cpuAffinity !== "" && !isValidCpuAffinity(body.cpuAffinity))
+    errors.push('cpuAffinity must be a taskset list like "5-9,15-19"');
+  const env = Array.isArray(body?.env) ? body.env : [];
+  if (env.length > 64) errors.push("too many env vars (max 64)");
+  const seenEnv = new Set();
+  for (const e of env) {
+    if (!isValidEnvName(e?.name)) {
+      errors.push(`invalid env var name: ${String(e?.name).slice(0, 64)}`);
+      continue;
+    }
+    if (seenEnv.has(e.name)) errors.push(`duplicate env var: ${e.name}`);
+    seenEnv.add(e.name);
+    if (!isValidEnvValue(e?.value == null ? "" : String(e.value)))
+      errors.push(`invalid env var value for ${e.name}`);
+  }
+  if (body?.launcher != null && body.launcher !== "") {
+    if (!isValidNoteText(body.launcher)) errors.push("launcher must be plain text ≤4096 chars");
+    // Launcher is stored metadata this phase; forbid the worst tokens early.
+    if (/(`|\$\(|rm\s+-rf|mkfs|dd\s+if=|:\(\)\s*\{)/.test(body.launcher))
+      errors.push("launcher contains forbidden shell constructs");
+  }
+  if (body?.notes != null && !isValidNoteText(body.notes)) errors.push("notes must be plain text ≤4096 chars");
+  return { ok: errors.length === 0, errors };
+}
+
+/** Validate a model write. Returns { ok, errors: string[] }. */
+export function validateModelWrite(body) {
+  const errors = [];
+  if (!isValidSlug(body?.id)) errors.push("model id must be a lowercase slug (a-z0-9._-)");
+  if (!isValidNoteText(body?.name || "") || !body?.name?.trim())
+    errors.push("model name is required (≤4096 chars)");
+  if (body?.family != null && !isValidNoteText(String(body.family)))
+    errors.push("family must be plain text");
+  if (body?.notes != null && !isValidNoteText(body.notes)) errors.push("notes must be plain text ≤4096 chars");
+  return { ok: errors.length === 0, errors };
+}

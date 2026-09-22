@@ -21,6 +21,20 @@ const LLM_DAILY_JSON_PATH =
 /** Rolling fleet energy estimates (gitignored; written atomically at mode 0600). */
 const FLEET_ENERGY_JSON_PATH =
   process.env.FLEET_ENERGY_JSON_PATH || path.join(ROOT, "config", "fleet-energy.json");
+// ─── Control-plane state (all gitignored lab config) ─────
+/** Model Registry (logical models/families). */
+const MODELS_JSON_PATH = process.env.MODELS_JSON_PATH || path.join(ROOT, "config", "models.json");
+/** Deployment Recipes (known-working ways to run a model). */
+const RECIPES_JSON_PATH =
+  process.env.RECIPES_JSON_PATH || path.join(ROOT, "config", "recipes.json");
+/** Active deployment-operation checkpoint (duplicate-launch guard). */
+const DEPLOYMENTS_ACTIVE_PATH =
+  process.env.DEPLOYMENTS_ACTIVE_PATH || path.join(ROOT, "config", "deployments-active.json");
+/** Append-only lifecycle audit trail. */
+const AUDIT_LOG_PATH = process.env.AUDIT_LOG_PATH || path.join(ROOT, "config", "audit.jsonl");
+/** Aggregated activity feed (bounded). */
+const ACTIVITY_LOG_PATH =
+  process.env.ACTIVITY_LOG_PATH || path.join(ROOT, "config", "activity.jsonl");
 
 // ─── LLM / Comfy probe timeouts ──────────────────────────
 const LLM_PROBE_TIMEOUT_MS = 3000;
@@ -110,6 +124,11 @@ export {
   SECRETS_KEY_PATH,
   LLM_DAILY_JSON_PATH,
   FLEET_ENERGY_JSON_PATH,
+  MODELS_JSON_PATH,
+  RECIPES_JSON_PATH,
+  DEPLOYMENTS_ACTIVE_PATH,
+  AUDIT_LOG_PATH,
+  ACTIVITY_LOG_PATH,
   LLM_PROBE_TIMEOUT_MS,
   COMFY_PROBE_TIMEOUT_MS,
   TAILSCALE_PROBE_TIMEOUT_MS,

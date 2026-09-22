@@ -46,6 +46,7 @@ import {
 } from "./energy/FleetEnergyRuntime.js";
 import { testSparkConnectivity } from "./connectivity.js";
 import { inspectStartupPreflight, logStartupPreflight } from "./startupPreflight.js";
+import { createControlPlane } from "./controlPlane.js";
 
 dotenv.config();
 
@@ -313,6 +314,28 @@ const server = createServer(app);
 
 app.use(express.json());
 app.use(createAuthMiddleware());
+
+// ─── Control plane (Model Registry / Recipes / Deployments / Console) ──
+// Routes register here; runtime callbacks (lifecycle broadcast, observation)
+// close over wss/monitors which are initialized further below.
+const controlPlane = createControlPlane({
+  app,
+  sparkRegistry: registry,
+  monitors,
+  decodeBenchManager,
+  prefillBenchManager,
+  showcaseManager,
+  broadcastLifecycle: (payload) => {
+    const text = JSON.stringify(payload);
+    try {
+      wss.clients.forEach((c) => {
+        if (c.readyState === 1) c.send(text);
+      });
+    } catch {
+      /* pre-listen or client churn */
+    }
+  },
+});
 
 app.get("/api/health", (_req, res) => {
   res.json(inspectHealth(process.env.BIND_HOST || "127.0.0.1"));
@@ -1029,6 +1052,7 @@ app.post("/api/sparks/:id/llm/bench", async (req, res) => {
       lanIp: llmProbeHost(spark),
       port,
       modelId,
+      recipeId: controlPlane.recipeForEndpoint(spark.id, port)?.id || null,
       concurrencies: req.body?.concurrencies,
       maxTokens: req.body?.maxTokens,
       promptType: req.body?.promptType,
@@ -1200,6 +1224,7 @@ app.post("/api/sparks/:id/llm/prefill-bench", async (req, res) => {
       lanIp: llmProbeHost(spark),
       port,
       modelId,
+      recipeId: controlPlane.recipeForEndpoint(spark.id, port)?.id || null,
       contextSizes: req.body?.contextSizes,
       apiKey: target.apiKey,
       host: target.host,
@@ -1640,7 +1665,26 @@ wss.on("connection", (ws) => {
   } catch {
     // The close handler will clean up a client that disappears during connect.
   }
+  // Control-plane channels (Live Console subscribe/unsubscribe).
+  ws.on("message", (data) => {
+    let msg = null;
+    try {
+      msg = JSON.parse(String(data));
+    } catch {
+      return; // ignore non-JSON frames
+    }
+    try {
+      controlPlane.handleWsMessage(ws, msg);
+    } catch (err) {
+      console.warn("[ws] control-plane message failed:", err.message);
+    }
+  });
   ws.on("close", () => {
+    try {
+      controlPlane.detachClient(ws);
+    } catch {
+      /* ignore */
+    }
     console.log("[ws] client disconnected");
   });
 });
@@ -1698,6 +1742,13 @@ function forceBroadcast() {
 function startBroadcast() {
   const interval = getSettings().pollIntervalMs;
   broadcastTimer = setInterval(() => {
+    // Control-plane observation runs every tick even when the snapshot is
+    // byte-identical (deployment state + activity transitions are derived).
+    try {
+      controlPlane.observeFleet();
+    } catch (err) {
+      console.warn("[control-plane] observe tick failed:", err.message);
+    }
     const payload = buildSnapshotPayload();
     // Skip the broadcast entirely when nothing changed since the last tick.
     // A 1s poll that produces identical snapshots becomes free for idle tabs.
@@ -1761,6 +1812,11 @@ async function shutdown(signal) {
     llmDaily.flush();
   } catch (err) {
     console.error("[sparkDash] failed to flush LLM daily history:", err.message);
+  }
+  try {
+    controlPlane.shutdown();
+  } catch (err) {
+    console.error("[sparkDash] failed to shut down control plane:", err.message);
   }
   const energyPersistenceSucceeded = fleetEnergyRuntime.stop();
   const streamAgentClosedGracefully = await closeLlmStreamAgent();
