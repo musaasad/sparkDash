@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { deriveFabric, fabricLayout } from "./fabricModel";
+import { deriveFabric, fabricLayout, fabricLinkProvenanceLabel } from "./fabricModel";
 import type { DeploymentView } from "./fleetModel";
 import type { SparkSnapshot, DeploymentStatus } from "../../api/types";
 
@@ -189,5 +189,33 @@ describe("fabricLayout", () => {
       for (const p of pos) rows.set(p.y, (rows.get(p.y) ?? 0) + 1);
       for (const count of rows.values()) expect(count).toBeLessThanOrEqual(2);
     }
+  });
+});
+
+describe("fabric link health + provenance label", () => {
+  it("link health follows PHYSICAL reachability, never node memory pressure", () => {
+    const pressured = spark({
+      id: "a",
+      metrics: { ...spark().metrics, unifiedMemory: { total: 130000, gpuUsed: 1, cpuUsed: 1, used: 90000, available: 40000, percentage: 69, oomRisk: "high", bandwidth: { current: 0, peak: 0 } } as never },
+    });
+    const off = spark({ id: "b", online: false });
+    off.fabricLinks = [{ to: "a", speedMbps: 200_000, medium: "cx7" }];
+    const f = deriveFabric([pressured, off], []);
+    expect(f.links[0].health).toBe("warn");
+    expect(f.nodes.find((n) => n.id === "a")?.health).toBe("warn");
+
+    // both online, only memory-warned => link stays healthy.
+    const healthy = deriveFabric([pressured, spark({ id: "c" })], []);
+    expect(healthy.links).toHaveLength(0); // no wiring between them
+  });
+
+  it("labels CONFIGURED vs DISCOVERED provenance honestly", () => {
+    const configured = [{ provenance: "configured" as const }, { provenance: "configured" as const }];
+    const discovered = [{ provenance: "discovered" as const }];
+    expect(fabricLinkProvenanceLabel(configured)).toBe("2 LINKS · CONFIGURED");
+    expect(fabricLinkProvenanceLabel(discovered)).toBe("1 LINK · DISCOVERED");
+    expect(fabricLinkProvenanceLabel([...configured, ...discovered])).toContain("2 CONFIGURED");
+    expect(fabricLinkProvenanceLabel([...configured, ...discovered])).toContain("1 DISCOVERED");
+    expect(fabricLinkProvenanceLabel([])).toBeNull();
   });
 });

@@ -3,9 +3,9 @@ import type { DeploymentStatus, RecipePublic, SparkSnapshot } from "../../api/ty
 import type { DeploymentView } from "./fleetModel";
 import {
   fabricHealthSummary,
+  fabricStateLabel,
   isPrimary,
   labBriefing,
-  labSummary,
   labVerdict,
   lastRequestAgo,
   nodeInstruments,
@@ -99,10 +99,6 @@ describe("lab verdict + summary", () => {
     expect(verdictHeadline("degraded", 2)).toBe("Degraded — 2 warnings to review");
   });
 
-  it("builds an all-caps data-driven summary with singular/plural", () => {
-    expect(labSummary(3, 3, 2, 0)).toBe("3 OF 3 NODES ONLINE · 2 MODELS ACTIVE · NO WARNINGS");
-    expect(labSummary(1, 1, 1, 1)).toBe("1 OF 1 NODE ONLINE · 1 MODEL ACTIVE · 1 WARNING");
-  });
 });
 
 describe("full config role", () => {
@@ -222,13 +218,20 @@ describe("recency", () => {
 describe("lab briefing + fabric aggregate", () => {
   it("is fully data-driven with '—' for an absent primary", () => {
     const b = labBriefing({ nodesOnline: 2, nodesTotal: 3, deploymentsActive: 1, primaryName: null, fabric: "ok", critical: 0, warning: 1 });
-    expect(b).toBe("2/3 COMPUTE ONLINE · 1 DEPLOYMENT ACTIVE · PRIMARY: — · FABRIC: NOMINAL · 0 CRITICAL · 1 WARNING");
+    expect(b).toBe("2/3 COMPUTE ONLINE · 1 DEPLOYMENT ACTIVE · PRIMARY: — · FABRIC: HEALTHY · 0 CRITICAL · 1 WARNING");
   });
 
-  it("aggregates fabric worst-case", () => {
-    expect(fabricHealthSummary(["ok", "warn", "ok"])).toBe("warn");
-    expect(fabricHealthSummary(["ok", "error"])).toBe("error");
+  it("aggregates PHYSICAL LINK worst-case (never node health)", () => {
+    expect(fabricHealthSummary([{ health: "ok" as const }, { health: "warn" as const }, { health: "ok" as const }])).toBe("warn");
+    expect(fabricHealthSummary([{ health: "ok" as const }, { health: "error" as const }])).toBe("error");
     expect(fabricHealthSummary([])).toBe("unknown");
+  });
+
+  it("keeps FABRIC healthy while a node carries memory pressure", () => {
+    const links = [{ health: "ok" as const }, { health: "ok" as const }];
+    expect(fabricStateLabel(fabricHealthSummary(links))).toBe("HEALTHY");
+    // every link up => HEALTHY even though a node itself is memory-warned.
+    expect(fabricHealthSummary(links)).toBe("ok");
   });
 });
 

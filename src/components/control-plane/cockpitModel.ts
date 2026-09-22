@@ -14,7 +14,7 @@ import type { SparkSnapshot } from "../../api/types";
 import type { DeploymentTelemetry, DeploymentView, RuntimeState } from "./fleetModel";
 import type { RuntimeLabelMap } from "./runtimeLabels";
 import type { RuntimeOption } from "./runtimeLabels";
-import type { FabricHealth } from "./fabricModel";
+import type { FabricHealth, FabricLink } from "./fabricModel";
 import { resolveSparkRole } from "../../api/sparkRole";
 
 /**
@@ -109,17 +109,6 @@ export function verdictHeadline(verdict: LabVerdict, warningCount: number): stri
   const warnings = `${warningCount} warning${warningCount === 1 ? "" : "s"} to review`;
   if (verdict === "attention") return warningCount > 0 ? warnings : "Attention needed";
   return warningCount > 0 ? `Degraded — ${warnings}` : "A model or node is degraded";
-}
-
-/**
- * One-line, ALL-CAPS, fully data-driven summary. Never states a number the
- * data does not carry. Uses the same "warning" wording as the pill/headline.
- */
-export function labSummary(nodesOnline: number, nodesTotal: number, modelsActive: number, alertCount: number): string {
-  const nodes = `${nodesOnline} OF ${nodesTotal} NODE${nodesTotal === 1 ? "" : "S"} ONLINE`;
-  const models = `${modelsActive} MODEL${modelsActive === 1 ? "" : "S"} ACTIVE`;
-  const warnings = alertCount === 0 ? "NO WARNINGS" : `${alertCount} WARNING${alertCount === 1 ? "" : "S"}`;
-  return `${nodes} · ${models} · ${warnings}`;
 }
 
 const ROLE_UPPER: Record<string, InstrumentRole> = {
@@ -301,14 +290,19 @@ export function lastRequestAgo(lastRequestAt: number | null, now: number): strin
 
 const FABRIC_RANK: Record<FabricHealth, number> = { error: 0, warn: 1, offline: 2, unknown: 3, ok: 4 };
 
-/** Worst fabric health across nodes — the honest aggregate, never a fabricated one. */
-export function fabricHealthSummary(healths: readonly FabricHealth[]): FabricHealth {
-  if (healths.length === 0) return "unknown";
-  return [...healths].sort((a, b) => FABRIC_RANK[a] - FABRIC_RANK[b])[0];
+/**
+ * PHYSICAL LINK health aggregate — worst link wins, never a fabricated one.
+ * Deliberately NOT node health: a memory-warned node with every link up keeps
+ * FABRIC healthy; memory pressure surfaces as its own attention row.
+ * No links (wiring undiscovered) => unknown.
+ */
+export function fabricHealthSummary(links: readonly Pick<FabricLink, "health">[]): FabricHealth {
+  if (links.length === 0) return "unknown";
+  return [...links].map((l) => l.health).sort((a, b) => FABRIC_RANK[a] - FABRIC_RANK[b])[0];
 }
 
 export function fabricStateLabel(h: FabricHealth): string {
-  return h === "ok" ? "NOMINAL" : h === "warn" ? "WARN" : h === "error" ? "DEGRADED" : h === "offline" ? "OFFLINE" : "UNKNOWN";
+  return h === "ok" ? "HEALTHY" : h === "warn" ? "WARN" : h === "error" ? "FAILED" : h === "offline" ? "OFFLINE" : "UNKNOWN";
 }
 
 export interface LabBriefing {

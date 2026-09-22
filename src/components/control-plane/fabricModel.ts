@@ -46,6 +46,12 @@ export interface FabricLink {
   /** Discovered NIC speed in Mbps, else the CX7 nominal 200 Gb/s when unset. */
   speedMbps: number | null;
   degraded: boolean;
+  /**
+   * PHYSICAL LINK health — endpoint reachability only. Node health (memory /
+   * temp) never leaks into fabric health: a link is healthy when both ends are
+   * online, warn when either end is offline.
+   */
+  health: FabricHealth;
 }
 
 export interface FabricModel {
@@ -119,13 +125,17 @@ function subnet(ip: string | null | undefined): string | null {
   return parts.length === 4 ? parts.slice(0, 3).join(".") : null;
 }
 
-/** Coarse node health from live signals only; nothing is fabricated. */
+/**
+ * Coarse NODE health from live signals only. Thermal state comes ONLY from the
+ * provider's own throttle flag — no invented 90 °C threshold. A measured temp
+ * with no throttle stays "ok"; a MISSING temp renders `—` and never degrades.
+ */
 function healthOf(s: SparkSnapshot, hasDegradedDeployment: boolean): FabricHealth {
   if (!s.online) return "offline";
   if (hasDegradedDeployment) return "error";
   const gpu = s.metrics?.gpu;
   const diskPressure = (s.metrics?.storage || []).some((st) => !st.disabled && st.percentage >= 90);
-  if (gpu?.throttle?.active || (typeof gpu?.temperature === "number" && gpu.temperature >= 90) || diskPressure) return "warn";
+  if (gpu?.throttle?.active || diskPressure) return "warn";
   if (s.metrics?.unifiedMemory?.oomRisk === "high") return "warn";
   return s.metrics ? "ok" : "unknown";
 }
@@ -173,6 +183,7 @@ export function deriveFabric(sparks: SparkSnapshot[], deploymentViews: readonly 
     const key = [a.id, b.id].sort().join("~");
     if (a.id === b.id || seen.has(key)) return;
     seen.add(key);
+    const degraded = !a.online || !b.online;
     links.push({
       id: `${provenance}:${kind}:${key}`,
       from: a.id,
@@ -180,7 +191,9 @@ export function deriveFabric(sparks: SparkSnapshot[], deploymentViews: readonly 
       kind,
       provenance,
       speedMbps: speedOverride ?? nominalSpeed(a, b),
-      degraded: !a.online || !b.online,
+      degraded,
+      // Link health is PHYSICAL reachability, never node memory pressure.
+      health: degraded ? "warn" : "ok",
     });
   };
 
@@ -219,6 +232,21 @@ export function deriveFabric(sparks: SparkSnapshot[], deploymentViews: readonly 
   return { nodes, links, wiringDiscovered: links.length > 0 };
 }
 
+/**
+ * Provenance-honest link count label. CONFIGURED is never mislabelled as
+ * DISCOVERED: configured-only reads CONFIGURED, discovered-only reads
+ * DISCOVERED, a mixed graph names both. Returns null when there are no links.
+ */
+export function fabricLinkProvenanceLabel(links: readonly Pick<FabricLink, "provenance">[]): string | null {
+  if (links.length === 0) return null;
+  const configured = links.filter((l) => l.provenance === "configured").length;
+  const discovered = links.length - configured;
+  const noun = `${links.length} LINK${links.length === 1 ? "" : "S"}`;
+  if (discovered === 0) return `${noun} · CONFIGURED`;
+  if (configured === 0) return `${noun} · DISCOVERED`;
+  return `${noun} · ${configured} CONFIGURED · ${discovered} DISCOVERED`;
+}
+
 export interface FabricPosition {
   index: number;
   x: number;
@@ -226,7 +254,7 @@ export interface FabricPosition {
 }
 
 const FABRIC_COL_W = 268;
-const FABRIC_ROW_H = 136;
+const FABRIC_ROW_H = 122;
 
 /**
  * Pure layout for 1..N nodes (data only, no rendering). Rows of ≤2 with the

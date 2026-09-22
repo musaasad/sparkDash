@@ -3370,8 +3370,8 @@ html {
 .cp-deploy-row:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
 .cp-deploy-state { padding: 3px 11px 3px 10px; font-size: 12px; }
 .cp-deploy-model { display: flex; flex-direction: column; gap: 1px; min-width: 150px; }
-.cp-deploy-name { font-size: 12px; font-weight: 600; color: var(--color-text-strong); }
-.cp-deploy-id { font-size: 10px; color: var(--color-muted); font-family: "JetBrains Mono", ui-monospace, monospace; }
+.cp-deploy-name { font-size: 12px; font-weight: 600; color: var(--color-text-strong); max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cp-deploy-id { font-size: 10px; color: var(--color-muted); font-family: "JetBrains Mono", ui-monospace, monospace; max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cp-deploy-err { font-size: 10px; color: var(--color-warning); }
 .cp-deploy-meta { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
 .cp-deploy-nodes { flex: 1; min-width: 0; display: flex; }
@@ -4491,7 +4491,7 @@ button.cp-link { background: none; border: none; padding: 0; cursor: pointer; fo
 .cp-verdict-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 
 /* ─── Cluster grid: instruments + physical fabric beside ── */
-.cp-cluster { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: var(--space-4); align-items: start; }
+.cp-cluster { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: var(--space-4); align-items: stretch; }
 .cp-cluster-instruments { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: var(--space-3); }
 
 /* ─── One deployment instrument ────────────────────────── */
@@ -4518,7 +4518,7 @@ button.cp-link { background: none; border: none; padding: 0; cursor: pointer; fo
   color: var(--color-muted); border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-chip); padding: 2px 6px;
 }
-.cp-inst-name { font-size: 22px; font-weight: 600; line-height: 1.15; margin: 0; overflow: hidden; text-overflow: ellipsis; }
+.cp-inst-name { font-size: 22px; font-weight: 600; line-height: 1.15; margin: 0; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cp-inst-runtime { font-size: 12px; color: var(--color-muted); }
 
 .cp-inst-state {
@@ -4600,13 +4600,15 @@ button.cp-link { background: none; border: none; padding: 0; cursor: pointer; fo
   border: 1px solid var(--color-border); border-radius: var(--radius-card);
   background: var(--color-surface); padding: var(--space-4);
   display: flex; flex-direction: column; gap: var(--space-3);
+  height: 100%;
 }
 .cp-fabric-head { display: flex; align-items: baseline; gap: var(--space-2); }
 .cp-fabric-title { font-size: 11px; font-weight: 600; letter-spacing: 0.12em; color: var(--color-muted-strong); }
 .cp-fabric-count { font-size: 12px; color: var(--color-muted); }
 .cp-fabric-wiring { margin-left: auto; font-size: 10px; letter-spacing: 0.1em; color: var(--color-muted-strong); }
 .cp-fabric-wiring.is-honest { color: var(--color-warning); }
-.cp-fabric-canvas { position: relative; }
+/* Centre the graph in the leftover panel space so no empty band remains. */
+.cp-fabric-canvas { position: relative; align-self: center; margin-block: auto; }
 .cp-fabric-links { position: absolute; inset: 0; }
 .cp-fabric-placeholders { position: absolute; inset: 0; }
 .cp-fabric-placeholders line { stroke: var(--color-border); stroke-width: 1; stroke-dasharray: 2 5; }
@@ -4640,7 +4642,7 @@ button.cp-link { background: none; border: none; padding: 0; cursor: pointer; fo
 }
 .cp-fabric-node-models {
   font-size: 10px; line-height: 1.35; color: var(--color-muted);
-  white-space: normal; overflow-wrap: anywhere;
+  max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .cp-fabric-note { font-size: 11px; color: var(--color-muted); }
 .cp-fabric-empty { font-size: 12px; color: var(--color-muted); }

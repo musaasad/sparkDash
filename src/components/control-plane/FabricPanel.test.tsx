@@ -54,7 +54,7 @@ describe("FabricPanel honesty", () => {
     const nodes = [spark({ id: "a", cx7Ip: "10.0.0.1" }), spark({ id: "b", cx7Ip: "10.0.0.2" })];
     const { container } = render(<FabricPanel sparks={nodes} views={[]} navigate={() => {}} />);
     expect(container.querySelectorAll(".cp-fabric-link")).toHaveLength(1);
-    expect(container.querySelector(".cp-fabric-wiring")?.textContent).toContain("1 LINKS DISCOVERED");
+    expect(container.querySelector(".cp-fabric-wiring")?.textContent).toContain("1 LINK · DISCOVERED");
     expect(container.querySelector(".cp-fabric-note")).toBeNull();
   });
 

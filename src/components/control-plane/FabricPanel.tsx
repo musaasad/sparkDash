@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import type { SparkSnapshot } from "../../api/types";
 import type { DeploymentView } from "./fleetModel";
-import { deriveFabric, derivePlacement, fabricLayout, type FabricHealth } from "./fabricModel";
+import { deriveFabric, derivePlacement, fabricLayout, fabricLinkProvenanceLabel, type FabricHealth } from "./fabricModel";
 
 export interface FabricPanelProps {
   sparks: readonly SparkSnapshot[];
@@ -107,7 +107,7 @@ export function FabricPanel({ sparks, views, navigate, onAddCompute }: FabricPan
         <span className="cp-fabric-count mono">{fabric.nodes.length}</span>
         {physical ? (
           <span className={`cp-fabric-wiring mono${fabric.wiringDiscovered ? "" : " is-honest"}`}>
-            {fabric.wiringDiscovered ? `${fabric.links.length} LINKS DISCOVERED` : "WIRING NOT DISCOVERED"}
+            {fabricLinkProvenanceLabel(fabric.links) ?? "WIRING NOT DISCOVERED"}
           </span>
         ) : (
           <span className="cp-fabric-wiring mono">{placement.placements.length} PLACEMENTS</span>
@@ -197,7 +197,9 @@ export function FabricPanel({ sparks, views, navigate, onAddCompute }: FabricPan
               </span>
               {physical ? <span className="cp-fabric-node-speed mono">{fmtSpeed(n.linkSpeedMbps)}</span> : null}
               {placed.length > 0 ? (
-                <span className="cp-fabric-node-models">{placed.slice(0, 2).join(" · ")}</span>
+                <span className="cp-fabric-node-models" title={placed.join(" · ")}>
+                  {placed.slice(0, 2).join(" · ")}
+                </span>
               ) : !physical ? (
                 <span className="cp-fabric-node-models is-empty muted">no model placed</span>
               ) : null}

@@ -24,7 +24,6 @@ import {
   fabricHealthSummary,
   isPrimary,
   labBriefing,
-  labSummary,
   labVerdict,
   primaryView,
   rankViews,
@@ -105,14 +104,11 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
     () => labVerdict(health.nodesOnline, health.nodesTotal, attention.length, views, states),
     [health.nodesOnline, health.nodesTotal, attention.length, views, states]
   );
-  const summary = useMemo(
-    () => labSummary(health.nodesOnline, health.nodesTotal, health.modelsRunning, attention.length),
-    [health.nodesOnline, health.nodesTotal, health.modelsRunning, attention.length]
-  );
   const headline = useMemo(() => verdictHeadline(verdict, attention.length), [verdict, attention.length]);
 
   const fabric = useMemo(() => deriveFabric([...sparks], views), [sparks, views]);
-  const fabricHealth = useMemo(() => fabricHealthSummary(fabric.nodes.map((n) => n.health)), [fabric]);
+  // Fabric health is PHYSICAL LINK health, never node memory pressure.
+  const fabricHealth = useMemo(() => fabricHealthSummary(fabric.links), [fabric]);
 
   const critical = useMemo(() => attention.filter((a) => a.severity === "error").length, [attention]);
   const warning = useMemo(() => attention.filter((a) => a.severity === "warn").length, [attention]);
@@ -222,7 +218,6 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
         <div className="cp-verdict-mid cp-labhead-mid">
           <div className="cp-verdict-text cp-labhead-text">{headline}</div>
           <div className="cp-verdict-summary cp-labhead-brief mono">{brief}</div>
-          <div className="cp-verdict-summary cp-labhead-sub mono">{summary}</div>
           <div className="cp-verdict-meta">
             updated {relativeAge(lastUpdated, now)} · auto-refresh {autoRefresh ? "on" : "paused"}
           </div>
