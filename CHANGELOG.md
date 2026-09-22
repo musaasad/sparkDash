@@ -26,6 +26,8 @@ Format: version sections are listed newest first.
 
 ### Changed
 - **Overview is now an ops summary** — health strip (nodes online / models running / active alerts / fleet tok/s), exceptions-first alert list, and a real fleet **table** instead of card soup. Node drill-down keeps the proven monitoring page intact under a breadcrumb.
+- **Overview 4-layer information model (design-council pass)** — the screen now reads Fleet health → **Deployments** (hero: one compact row per deployment with a prominent state pill, friendly model name, runtime/topology/context chips, member nodes rendered as ONE bracketed cluster for TP2, per-deployment live decode tok/s) → Runtime activity → demoted node table. Topology draws per-deployment enclosures so a 2-node deployment reads as a single unit; workers are never silently dropped. Semantic labels fixed throughout (GPU Util / Memory Used with GB / GPU Temp with explicit °C/°F; muted unit suffixes; friendly registry names replace raw ids; aggregated alerts; throughput lives on deployments, not the fleet strip).
+- **DeepSeek V4.1 TP2 deployment seeded** — the real vLLM `--tensor-parallel-size 2 --nnodes 2` deployment across dgx-1 + dgx-2 (ctx 600k, observe-only) joins the seeded Qwen standalone deployment, so the node↔deployment relationship is exercised with real data.
 - **Vite dev proxy target configurable** via `VITE_API_TARGET` — the hardcoded `127.0.0.1:5555` default could accidentally proxy a dev frontend into another backend; point it at a dev instance when the default port is occupied.
 
 ### Fixed
