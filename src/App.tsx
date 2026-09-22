@@ -246,6 +246,9 @@ function DashboardApp() {
                 recipes={cp.recipes}
                 navigate={navigate}
                 loaded={cp.loaded || sparks.length > 0}
+                models={cp.models}
+                activity={cp.activity}
+                temperatureUnit={settings?.temperatureUnit ?? "celsius"}
               />
             ) : null}
             {route.section === "fleet" ? (

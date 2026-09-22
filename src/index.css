@@ -3084,3 +3084,101 @@ html {
   display: flex; align-items: center; gap: 10px;
   padding: 10px 12px; background: var(--color-surface-elevated); font-size: 13px;
 }
+
+/* ─── Overview 4-layer rebuild (appended) ───────────────── */
+.cp-health-value.is-warning { color: var(--color-warning); }
+.cp-health-value.is-muted { color: var(--color-muted); }
+
+/* warn tone dot — warnings must not borrow the hollow 'stopping' dot */
+.cp-dot.warn { background: var(--color-warning); }
+
+/* Muted unit suffix + secondary cell text */
+.cp-unit { font-size: 10px; color: var(--color-muted); font-weight: 500; }
+.cp-cell-sub { font-size: 10px; color: var(--color-muted); }
+
+/* Deployment row — compact, one per deployment (layer 2 hero) */
+.cp-deploy-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 9px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface-elevated);
+  cursor: pointer;
+}
+.cp-deploy-row:hover { border-color: var(--color-border-strong); background: var(--color-surface-hover); }
+.cp-deploy-row:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.cp-deploy-state { padding: 3px 11px 3px 10px; font-size: 12px; }
+.cp-deploy-model { display: flex; flex-direction: column; gap: 1px; min-width: 150px; }
+.cp-deploy-name { font-size: 12px; font-weight: 600; color: var(--color-text-strong); }
+.cp-deploy-id { font-size: 10px; color: var(--color-muted); font-family: "JetBrains Mono", ui-monospace, monospace; }
+.cp-deploy-err { font-size: 10px; color: var(--color-warning); }
+.cp-deploy-meta { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.cp-deploy-nodes { flex: 1; min-width: 0; display: flex; }
+.cp-deploy-right { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
+.cp-deploy-tps { font-size: 13px; font-weight: 600; color: var(--color-text-strong); font-variant-numeric: tabular-nums; }
+.cp-deploy-tps.is-idle { color: var(--color-muted); }
+.cp-deploy-port { font-size: 10px; color: var(--color-muted); }
+
+/* TP2 member-node cluster — one bordered unit for a multi-node deployment */
+.cp-node-cluster {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 7px;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: 8px;
+}
+.cp-node-cluster-label { font-size: 9px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--color-muted); white-space: nowrap; }
+.cp-node-cluster-chips { display: flex; gap: 5px; flex-wrap: wrap; }
+.cp-node-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  background: var(--color-surface);
+  font-size: 11px;
+  color: var(--color-text);
+  white-space: nowrap;
+}
+.cp-node-chip-role { font-size: 9px; color: var(--color-muted); }
+
+/* Runtime activity row (layer 3) */
+.cp-activity-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--color-border); font-size: 12px; }
+.cp-activity-row:last-child { border-bottom: none; }
+.cp-activity-msg { flex: 1; min-width: 0; color: var(--color-text); }
+.cp-activity-ts { font-size: 10px; color: var(--color-muted); white-space: nowrap; }
+
+/* Topology deployment enclosure (layer 2 visual) */
+.cp-topo-cluster rect { fill: none; stroke: var(--color-border-strong); stroke-width: 1; }
+.cp-topo-cluster.is-degraded rect { stroke: var(--color-warning); stroke-dasharray: 4 3; }
+.cp-topo-cluster-label { fill: var(--color-text); font-size: 10px; font-weight: 600; }
+.cp-dot.info { background: var(--color-info); }
+
+/* ─── Council pass refinements ──────────────────────────── */
+/* Sort carets: silent until the column is sorted or hovered. */
+.cp-sort-caret { transition: opacity 100ms ease; }
+.cp-table thead th:hover .cp-sort-caret { opacity: 0.4; }
+
+/* Fleet health strip — 3 cells (throughput belongs on deployment rows). */
+.cp-health.is-3 { grid-template-columns: repeat(3, 1fr); }
+@media (max-width: 700px) {
+  .cp-health.is-3 { grid-template-columns: repeat(3, 1fr); }
+}
+
+/* Attention list — one bordered container, rows inside. */
+.cp-alerts {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+/* Deployment rows wrap gracefully on narrow screens. */
+@media (max-width: 900px) {
+  .cp-deploy-row { flex-wrap: wrap; row-gap: 8px; }
+  .cp-deploy-nodes { flex-basis: 100%; }
+  .cp-deploy-right { margin-left: auto; }
+}

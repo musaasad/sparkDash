@@ -72,8 +72,13 @@ export function DataTable<T>({
                       }}
                     >
                       {col.header}
-                      <span aria-hidden="true" style={{ opacity: isSorted ? 1 : 0.3 }}>
-                        {isSorted ? (sortDir === "asc" ? "▲" : "▼") : "▲"}
+                      <span
+                        aria-hidden="true"
+                        className="cp-sort-caret"
+                        data-sorted={isSorted ? (sortDir === "asc" ? "asc" : "desc") : undefined}
+                        style={{ opacity: isSorted ? 1 : 0 }}
+                      >
+                        {isSorted && sortDir === "desc" ? "▼" : "▲"}
                       </span>
                     </button>
                   ) : (
