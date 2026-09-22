@@ -110,7 +110,7 @@ describe("filter pipeline", () => {
 
   it("groups node ids into an enclosure label and defaults the tab to the focused recipe", () => {
     expect(sourceLabel(["dgx-1", "dgx-2"], "m")).toBe("TP2");
-    expect(sourceLabel(["dgx-3"], "m")).toBe("Qwen");
+    expect(sourceLabel(["dgx-3"], "m")).toBe("m");
     expect(sourceLabel(["dgx-9"], "ModelX")).toBe("ModelX");
 
     const sources = buildSources(
@@ -120,8 +120,8 @@ describe("filter pipeline", () => {
       ] as never,
       "b"
     );
-    expect(sources.map((s) => s.label)).toEqual(["TP2", "Qwen", "All"]);
-    expect(sourceForRecipe(sources, "b")).toBe("Qwen");
+    expect(sources.map((s) => s.label)).toEqual(["m", "m2", "All"]);
+    expect(sourceForRecipe(sources, "b")).toBe("m2");
   });
 
   it("indexes raw lines by reqId so rows keep their original log line", () => {

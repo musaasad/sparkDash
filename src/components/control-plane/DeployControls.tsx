@@ -11,7 +11,7 @@ interface DeployControlsProps {
 
 /**
  * Lifecycle controls. This phase is DRY-RUN: managed recipes simulate; the
- * externally-managed Qwen renders controls DISABLED with an explicit reason —
+ * externally-managed deployment renders controls DISABLED with an explicit reason —
  * showing live controls on a never-touch process is a trust violation.
  */
 export function DeployControls({ recipe, deployment, onUpdated }: DeployControlsProps) {
@@ -19,6 +19,7 @@ export function DeployControls({ recipe, deployment, onUpdated }: DeployControls
   const [error, setError] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<"stop" | "restart" | null>(null);
 
+  const targetId = deployment?.deploymentId ?? recipe.id;
   const external = deployment?.managedBy === "external";
   const state = deployment?.state ?? "available";
   const reason = external
@@ -29,7 +30,7 @@ export function DeployControls({ recipe, deployment, onUpdated }: DeployControls
     setBusy(action);
     setError(null);
     try {
-      await deploymentAction(recipe.id, action);
+      await deploymentAction(targetId, action);
       onUpdated?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 2,
+  "models": [
+    {
+      "id": "qwen38-flash-next",
+      "schemaVersion": 2,
+      "name": "Qwen 3.8 Flash Next",
+      "family": "Qwen",
+      "weightPaths": {
+        "default": "/home/musaasad/models/Qwen3.8-Flash-Next-EXL3"
+      },
+      "archived": false,
+      "archivedAt": null,
+      "tags": ["exl3", "moe", "mtp"],
+      "notes": "EXL3 quantized MoE with MTP speculative decoding.",
+      "createdAt": 1790040631823,
+      "updatedAt": 1790040631823
+    },
+    {
+      "id": "deepseek-v41-flash",
+      "schemaVersion": 2,
+      "name": "DeepSeek V4.1 Flash",
+      "family": "DeepSeek",
+      "weightPaths": {
+        "default": "/model",
+        "2.9bpw": "/model"
+      },
+      "archived": false,
+      "archivedAt": null,
+      "tags": ["exl3", "moe", "tp2"],
+      "notes": "EXL3-quantized MoE served tensor-parallel across two DGX Sparks.",
+      "createdAt": 1790041919791,
+      "updatedAt": 1790041919791
+    }
+  ]
+}

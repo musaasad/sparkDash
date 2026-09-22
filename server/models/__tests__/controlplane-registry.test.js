@@ -3,8 +3,15 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ModelRegistry } from "../ModelRegistry.js";
-import { RecipeRegistry } from "../../recipes/RecipeRegistry.js";
+
+// Never write the live config/*.json (or live secrets) during tests.
+const SD_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "sd-cp-"));
+process.env.SPARKDASH_CONFIG_DIR = SD_ROOT;
+process.env.SPARKS_SECRETS_PATH = path.join(SD_ROOT, "secrets.json");
+process.env.SECRETS_KEY_PATH = path.join(SD_ROOT, ".secrets-key");
+
+const { ModelRegistry } = await import("../ModelRegistry.js");
+const { RecipeRegistry } = await import("../../recipes/RecipeRegistry.js");
 
 function tmp(name) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `sd-${name}-`));

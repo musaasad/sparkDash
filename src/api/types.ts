@@ -948,16 +948,95 @@ export type DeploymentDisplay =
   | "available";
 
 export type RecipeRuntime = "tabbyapi-exl3" | "vllm" | "sglang" | "llama.cpp" | "custom";
-export type RecipeTopology = "single" | "tp2" | "tp3";
+export type RecipeTopology =
+  | "single"
+  | "tp2"
+  | "tp3"
+  | "tp4"
+  | "pp2"
+  | "pp3"
+  | "dp2"
+  | "dp3";
+/** v2 structured topology mode (recipe.topology.mode). */
+export type TopologyMode = "single" | "tp" | "pp" | "dp";
+/** Recipe lifecycle badge — flows through the API for read-only rendering. */
+export type RecipeLifecycleState = "draft" | "validated" | "proven" | "deprecated" | "archived";
+
+/** v2 structured recipe blocks (all optional for fixture tolerance). */
+export interface RecipeEngine {
+  runtime: RecipeRuntime;
+  quantization?: string | null;
+  apiProtocol?: "openai" | "custom";
+}
+export interface RecipeServing {
+  contextLength?: number | null;
+  maxParallel?: number | null;
+  flags?: { name: string; value?: string | null }[];
+}
+export interface RecipeLaunch {
+  mechanism?: "command" | "systemd" | "docker" | "external";
+  executable?: string | null;
+  args?: string[];
+  command?: string | null;
+  workdir?: string | null;
+  affinity?: string | null;
+  env?: RecipeEnvPublic[];
+}
+export interface RecipeEndpoint {
+  scheme?: "http" | "https";
+  hostTemplate?: string;
+  port?: number;
+  path?: string;
+}
+export interface RecipeTopologyBlock {
+  mode?: TopologyMode;
+  parallelism?: number;
+  minNodes?: number;
+  maxNodes?: number;
+  nodeConstraints?: Record<string, unknown>;
+}
+export interface RecipeHealthProbe {
+  kind?: "http" | "tcp" | "process";
+  path?: string;
+  expectUp?: number[];
+}
+export interface RecipeProvenance {
+  validatedAt?: number;
+  provenAt?: number;
+  note?: string;
+  sourceRecipeId?: string;
+}
 
 export interface ModelEntry {
   id: string;
   name: string;
   family: string | null;
+  /** Weights identity lives here: variantId -> absolute path. */
+  weightPaths?: Record<string, string>;
+  tags?: string[];
   notes: string;
   archived: boolean;
+  archivedAt?: number | null;
   createdAt: number;
   updatedAt: number;
+}
+
+/** Where SHOULD this recipe run — first-class deployment binding. */
+export interface DeploymentBinding {
+  id: string;
+  modelId: string;
+  recipeId: string;
+  nodeIds: string[];
+  desiredState: DeploymentDesired;
+  metadata: Record<string, unknown>;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface RecipeValidateResponse {
+  ok: boolean;
+  errors: string[];
+  warnings: string[];
 }
 
 /** Env entry as returned by the API — secret values are stripped. */
@@ -977,10 +1056,28 @@ export interface RecipeEnvWrite {
 
 export interface RecipePublic {
   id: string;
-  modelId: string;
+  schemaVersion?: number;
+  modelRef?: { modelId: string; weightId?: string | null };
   name: string;
-  runtime: RecipeRuntime;
+  engine?: RecipeEngine;
+  serving?: RecipeServing;
+  launch?: RecipeLaunch;
+  endpoint?: RecipeEndpoint;
+  /** Legacy flat topology slug (compat); structured block in `topologyBlock`. */
   topology: RecipeTopology;
+  topologyBlock?: RecipeTopologyBlock;
+  healthProbe?: RecipeHealthProbe;
+  discovery?: { strategy: "openai-models" | "process" | "manual" };
+  logSource?: { kind: "file" | "docker" | "journal"; path?: string | null };
+  lifecycleCommands?: { start?: string | null; stop?: string | null; status?: string | null };
+  tags?: string[];
+  /** Recipe lifecycle badge — Draft/Validated/Proven/Deprecated/Archived. */
+  lifecycleState?: RecipeLifecycleState;
+  provenance?: RecipeProvenance;
+  /** Legacy flat model id (compat); canonical ref in `modelRef`. */
+  modelId: string;
+  /** Legacy flat runtime slug (compat); structured block in `engine`. */
+  runtime: RecipeRuntime;
   nodeIds: string[];
   modelPath: string;
   workdir: string;
@@ -999,8 +1096,13 @@ export interface RecipePublic {
 }
 
 export interface DeploymentStatus {
+  /** Deployment binding id (runtime view is computed PER deployment). */
+  deploymentId?: string;
   recipeId: string;
   modelId: string;
+  servedModelId?: string | null;
+  endpoint?: string | null;
+  processEvidence?: boolean | null;
   nodeIds: string[];
   apiPort: number;
   managedBy: "external" | "sparkdash";

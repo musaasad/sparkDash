@@ -27,6 +27,7 @@ async function startServer(t) {
       BIND_HOST: "127.0.0.1",
       PORT: String(port),
       SPARKS_JSON_PATH: path.join(tmp, "sparks.json"),
+      SPARKDASH_CONFIG_DIR: tmp,
       SPARKS_SECRETS_PATH: path.join(tmp, "sparks-secrets.json"),
       SECRETS_KEY_PATH: path.join(tmp, ".secrets-key"),
       LLM_DAILY_JSON_PATH: path.join(tmp, "llm-daily.json"),

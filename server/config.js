@@ -22,19 +22,29 @@ const LLM_DAILY_JSON_PATH =
 const FLEET_ENERGY_JSON_PATH =
   process.env.FLEET_ENERGY_JSON_PATH || path.join(ROOT, "config", "fleet-energy.json");
 // ─── Control-plane state (all gitignored lab config) ─────
-/** Model Registry (logical models/families). */
-const MODELS_JSON_PATH = process.env.MODELS_JSON_PATH || path.join(ROOT, "config", "models.json");
-/** Deployment Recipes (known-working ways to run a model). */
+/**
+ * Config directory override. Tests MUST point this at a temp dir so the live
+ * config/*.json is never written; individual *_PATH env vars still win.
+ */
+const CONFIG_DIR = process.env.SPARKDASH_CONFIG_DIR || path.join(ROOT, "config");
+/** Model Registry v2 (weights identity lives here). */
+const MODELS_JSON_PATH = process.env.MODELS_JSON_PATH || path.join(CONFIG_DIR, "models.json");
+/** Deployment Recipes v2 (declarative; no node bindings). */
 const RECIPES_JSON_PATH =
-  process.env.RECIPES_JSON_PATH || path.join(ROOT, "config", "recipes.json");
+  process.env.RECIPES_JSON_PATH || path.join(CONFIG_DIR, "recipes.json");
+/** Deployment bindings (model + recipe + nodes + desired). */
+const DEPLOYMENTS_JSON_PATH =
+  process.env.DEPLOYMENTS_JSON_PATH || path.join(CONFIG_DIR, "deployments.json");
 /** Active deployment-operation checkpoint (duplicate-launch guard). */
 const DEPLOYMENTS_ACTIVE_PATH =
-  process.env.DEPLOYMENTS_ACTIVE_PATH || path.join(ROOT, "config", "deployments-active.json");
+  process.env.DEPLOYMENTS_ACTIVE_PATH || path.join(CONFIG_DIR, "deployments-active.json");
 /** Append-only lifecycle audit trail. */
-const AUDIT_LOG_PATH = process.env.AUDIT_LOG_PATH || path.join(ROOT, "config", "audit.jsonl");
+const AUDIT_LOG_PATH = process.env.AUDIT_LOG_PATH || path.join(CONFIG_DIR, "audit.jsonl");
 /** Aggregated activity feed (bounded). */
 const ACTIVITY_LOG_PATH =
-  process.env.ACTIVITY_LOG_PATH || path.join(ROOT, "config", "activity.jsonl");
+  process.env.ACTIVITY_LOG_PATH || path.join(CONFIG_DIR, "activity.jsonl");
+/** Committed v2 seed files copied into config on first load with empty config. */
+const SEEDS_DIR = process.env.SPARKDASH_SEEDS_DIR || path.join(ROOT, "server", "seeds");
 
 // ─── LLM / Comfy probe timeouts ──────────────────────────
 const LLM_PROBE_TIMEOUT_MS = 3000;
@@ -124,11 +134,14 @@ export {
   SECRETS_KEY_PATH,
   LLM_DAILY_JSON_PATH,
   FLEET_ENERGY_JSON_PATH,
+  CONFIG_DIR,
   MODELS_JSON_PATH,
   RECIPES_JSON_PATH,
+  DEPLOYMENTS_JSON_PATH,
   DEPLOYMENTS_ACTIVE_PATH,
   AUDIT_LOG_PATH,
   ACTIVITY_LOG_PATH,
+  SEEDS_DIR,
   LLM_PROBE_TIMEOUT_MS,
   COMFY_PROBE_TIMEOUT_MS,
   TAILSCALE_PROBE_TIMEOUT_MS,

@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 2,
+  "recipes": [
+    {
+      "id": "qwen38-tabbyapi-dgx3",
+      "schemaVersion": 2,
+      "modelRef": { "modelId": "qwen38-flash-next", "weightId": "default" },
+      "name": "TabbyAPI EXL3 (dgx-3)",
+      "engine": { "runtime": "tabbyapi-exl3", "quantization": "exl3", "apiProtocol": "openai" },
+      "serving": {
+        "contextLength": 262144,
+        "flags": [
+          { "name": "cpuAffinity", "value": "5-9,15-19" },
+          { "name": "serveWebUi", "value": "true" }
+        ]
+      },
+      "launch": {
+        "mechanism": "external",
+        "executable": "taskset",
+        "args": ["-c", "5-9,15-19", "python", "main.py"],
+        "command": "taskset -c 5-9,15-19 python main.py",
+        "workdir": "/home/musaasad/tabbyAPI",
+        "env": [
+          { "name": "EXL3_INT8_GEMV", "value": "0" },
+          { "name": "EXL3_MOE_COOP_WIDE", "value": "1" },
+          { "name": "EXL3_GR_INT8", "value": "1" },
+          { "name": "EXL3_MTP_HEAD_N", "value": "65536" },
+          { "name": "EXL3_NGRAM_STREAM", "value": "0" },
+          { "name": "TORCH_CUDA_ARCH_LIST", "value": "12.1" }
+        ]
+      },
+      "endpoint": { "scheme": "http", "hostTemplate": "{nodeIp}", "port": 8889, "path": "/v1" },
+      "topology": {
+        "mode": "single",
+        "parallelism": 1,
+        "minNodes": 1,
+        "maxNodes": 1,
+        "nodeConstraints": {}
+      },
+      "healthProbe": { "kind": "http", "path": "/v1/models", "expectUp": [200, 401, 403] },
+      "discovery": { "strategy": "process" },
+      "logSource": { "kind": "file", "path": "/home/musaasad/tabbyAPI/logs" },
+      "lifecycleCommands": {
+        "start": "taskset -c 5-9,15-19 python main.py &",
+        "stop": "pkill -f main.py",
+        "status": "pgrep -f tabbyapi"
+      },
+      "tags": ["tabbyapi", "exl3", "single"],
+      "metadata": { "managedBy": "external", "venv": "/home/musaasad/exllamav3/.venv" },
+      "lifecycleState": "proven",
+      "provenance": {
+        "validatedAt": 1790040631830,
+        "provenAt": 1790040631831,
+        "note": "Known-good single-node deployment, started outside SparkDash."
+      },
+      "notes": "Known-good single-node deployment. Started outside SparkDash — observe-only.",
+      "createdAt": 1790040631824,
+      "updatedAt": 1790040631824
+    },
+    {
+      "id": "v41-tp2-vllm-dgx12",
+      "schemaVersion": 2,
+      "modelRef": { "modelId": "deepseek-v41-flash", "weightId": "default" },
+      "name": "vLLM TP2 (dgx-1 + dgx-2)",
+      "engine": { "runtime": "vllm", "quantization": "exl3", "apiProtocol": "openai" },
+      "serving": { "contextLength": 600000, "maxParallel": 2, "flags": [] },
+      "launch": {
+        "mechanism": "external",
+        "executable": "vllm",
+        "args": [
+          "serve",
+          "/model",
+          "--served-model-name",
+          "DeepSeek-V4.1-Flash-UNCENSORED-EXL3",
+          "--tensor-parallel-size",
+          "2",
+          "--nnodes",
+          "2"
+        ],
+        "command": "vllm serve /model --served-model-name DeepSeek-V4.1-Flash-UNCENSORED-EXL3 --tensor-parallel-size 2 --nnodes 2 (containerized)",
+        "workdir": "/model",
+        "env": []
+      },
+      "endpoint": { "scheme": "http", "hostTemplate": "{nodeIp}", "port": 8888, "path": "/v1" },
+      "topology": {
+        "mode": "tp",
+        "parallelism": 2,
+        "minNodes": 2,
+        "maxNodes": 2,
+        "nodeConstraints": {}
+      },
+      "healthProbe": { "kind": "http", "path": "/v1/models", "expectUp": [200, 401, 403] },
+      "discovery": { "strategy": "process" },
+      "logSource": { "kind": "docker", "path": null },
+      "lifecycleCommands": {
+        "start": "docker start vllm-tp2",
+        "stop": "docker stop vllm-tp2",
+        "status": "docker ps --filter name=vllm-tp2"
+      },
+      "tags": ["vllm", "tp2", "distributed"],
+      "metadata": {
+        "managedBy": "external",
+        "servedModelId": "DeepSeek-V4.1-Flash-UNCENSORED-EXL3",
+        "masterAddr": "10.100.124.2",
+        "speculative": "dspark x3"
+      },
+      "lifecycleState": "proven",
+      "provenance": {
+        "validatedAt": 1790041919800,
+        "provenAt": 1790041919801,
+        "note": "Distributed TP2 deployment verified live via /v1/models + process table."
+      },
+      "notes": "Distributed deployment: dgx-1 rank 0 (API) + dgx-2 rank 1 (worker). Started outside SparkDash — observe-only.",
+      "createdAt": 1790041919792,
+      "updatedAt": 1790041919792
+    }
+  ]
+}

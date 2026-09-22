@@ -1,29 +1,37 @@
 /**
- * RecipeRegistry — Deployment Recipes: known-working ways to run a model.
+ * RecipeRegistry — Deployment RECIPES v2: declarative, reusable, protected.
  *
- * A recipe describes runtime, model path, workdir, topology (single/tp2/tp3),
- * assigned nodes, API port, health endpoint, context, env vars, CPU affinity,
- * launcher and notes. Node references are SparkRegistry ids (never free host
- * strings) so the target allowlist keeps its teeth.
+ * A recipe answers "how CAN this model run" — engine, serving, launch, endpoint,
+ * topology, probes, discovery, log source and dry-run lifecycle command
+ * templates. It carries NO weight paths (those live on the MODEL), NO raw
+ * secret values (secretRef only) and keeps `nodeIds` only as a legacy binding
+ * hint — the canonical binding lives in the DEPLOYMENT registry.
  *
- * Env entries may be flagged `secret: true`; their values are then treated as
- * credentials: stored in the JSON file (lab-local, mode 0600) but STRIPPED
- * from every API response by `toPublic`.
+ * Secret env entries use `secretRef: 'recipe:<recipeId>:<NAME>'`; the value is
+ * moved to the existing encrypted secrets store and STRIPPED from API responses.
  */
 import fs from "fs";
 import { atomicWrite } from "../util/atomicWrite.js";
 import { RECIPES_JSON_PATH } from "../config.js";
-import { validateRecipeWrite, isValidSlug } from "../validate.js";
+import { isValidSlug, isValidPosixPath } from "../validate.js";
+import { normalizeRecipe, validateRecipeV2, topologySlug } from "../domain/schema.js";
+import { validateRecipeFeasibility } from "../domain/recipeValidate.js";
+import { applyTransition } from "../domain/recipeLifecycle.js";
+import { migrateRecipesFile } from "../domain/migrate.js";
+import { saveRecipeEnv, loadRecipeEnv } from "../secretsStore.js";
 
 const MAX_RECIPES = 1024;
 
 export class RecipeRegistry {
-  /**
-   * @param {{ path?: string, getKnownNodeIds?: () => string[] }} [opts]
-   */
+  /** @param {{ path?: string, getKnownNodeIds?: () => string[] }} [opts] */
   constructor(opts = {}) {
     this.path = opts.path || RECIPES_JSON_PATH;
     this.getKnownNodeIds = opts.getKnownNodeIds || (() => null);
+    /** Optional resolver: recipe -> model weight absolute path (for toPublic). */
+    this.getModelWeightPath = opts.getModelWeightPath || (() => null);
+    /** Optional deps for feasibility validation (set by the control plane). */
+    this.modelRegistry = null;
+    this.deploymentRegistry = null;
     /** @type {Map<string, object>} */
     this._recipes = new Map();
     this._load();
@@ -33,17 +41,36 @@ export class RecipeRegistry {
     try {
       if (!fs.existsSync(this.path)) return;
       const raw = JSON.parse(fs.readFileSync(this.path, "utf8"));
-      const list = Array.isArray(raw?.recipes) ? raw.recipes : [];
-      for (const r of list) {
-        if (r && isValidSlug(r.id)) this._recipes.set(r.id, r);
+      for (const r of Array.isArray(raw?.recipes) ? raw.recipes : []) {
+        if (r && r.id) this._recipes.set(r.id, normalizeRecipe(r));
       }
     } catch (err) {
       console.error("[RecipeRegistry] load failed:", err.message);
     }
   }
 
+  reload() {
+    this._recipes.clear();
+    this._load();
+  }
+
+  /** Migrate an on-disk v1 file to v2 in place (idempotent, writes a .v1.bak). */
+  migrate() {
+    return migrateRecipesFile(this.path);
+  }
+
   _save() {
-    atomicWrite(this.path, JSON.stringify({ recipes: [...this._recipes.values()] }, null, 2), 0o600);
+    // Secret values never persist in recipes.json — only secretRef by name.
+    const strip = (r) => {
+      if (!r?.launch?.env) return r;
+      const env = r.launch.env.map((e) => (e.secretRef ? { name: e.name, secretRef: e.secretRef } : e));
+      return { ...r, env, launch: { ...r.launch, env } };
+    };
+    atomicWrite(
+      this.path,
+      JSON.stringify({ schemaVersion: 2, recipes: [...this._recipes.values()].map(strip) }, null, 2),
+      0o600
+    );
   }
 
   list({ includeArchived = false } = {}) {
@@ -52,7 +79,7 @@ export class RecipeRegistry {
   }
 
   listForModel(modelId, opts = {}) {
-    return this.list(opts).filter((r) => r.modelId === modelId);
+    return this.list(opts).filter((r) => r.modelRef?.modelId === modelId);
   }
 
   get(id) {
@@ -60,38 +87,72 @@ export class RecipeRegistry {
   }
 
   hasRecipesForModel(modelId) {
-    return [...this._recipes.values()].some((r) => r.modelId === modelId);
+    return [...this._recipes.values()].some((r) => r.modelRef?.modelId === modelId);
   }
 
   /**
-   * Redacted view for API responses: secret-flagged env values never leave
-   * the server. Mirrors SparkRegistry.toPublic conventions.
+   * Redacted public view: secret values never cross the API boundary, but the
+   * secretRef and hasValue do so the client can round-trip safely. Also exposes
+   * legacy flat projection fields (modelId/runtime/topology/nodeIds/apiPort/…)
+   * so existing consumers keep working without changes.
    */
   toPublic(recipe) {
     if (!recipe) return recipe;
-    const env = Array.isArray(recipe.env)
-      ? recipe.env.map((e) =>
-          e?.secret
-            ? { name: e.name, secret: true, hasValue: e.value != null && e.value !== "" }
-            : { name: e.name, value: e.value ?? "", secret: false }
-        )
-      : [];
-    return { ...recipe, env };
+    const env = (recipe.launch?.env || []).map((e) =>
+      e.secretRef
+        ? { name: e.name, secret: true, hasValue: e.value != null && e.value !== "", secretRef: e.secretRef }
+        : { name: e.name, value: e.value ?? "", secret: false }
+    );
+    const modelId = recipe.modelRef?.modelId ?? null;
+    const weightPath =
+      this.getModelWeightPath(recipe) || recipe.launch?.workdir || null;
+    return {
+      ...recipe,
+      launch: { ...recipe.launch, env },
+      env,
+      modelId,
+      runtime: recipe.engine.runtime,
+      topology: topologySlug(recipe.topology),
+      topologyBlock: recipe.topology,
+      apiPort: recipe.endpoint.port,
+      healthPath: recipe.healthProbe.path,
+      contextLength: recipe.serving.contextLength,
+      cpuAffinity: recipe.launch.affinity ?? null,
+      logDir: recipe.logSource.path ?? null,
+      launcher: recipe.launch.command ?? null,
+      modelPath: weightPath,
+      archived: Boolean(recipe.archived || recipe.lifecycleState === "archived"),
+    };
   }
 
   listPublic(opts = {}) {
     return this.list(opts).map((r) => this.toPublic(r));
   }
 
-  /** Port-conflict guard: same node + same API port across active recipes. */
+  /** Persist any secret env values to the encrypted store (keyed by secretRef). */
+  _persistSecrets(recipe) {
+    const store = loadRecipeEnv();
+    let changed = false;
+    for (const e of recipe.launch?.env || []) {
+      if (e.secretRef && e.value != null && e.value !== "") {
+        if (store.get(e.secretRef) !== e.value) {
+          store.set(e.secretRef, e.value);
+          changed = true;
+        }
+      }
+    }
+    if (changed) saveRecipeEnv(store);
+  }
+
+  /** Port-conflict guard: same node + same endpoint port across active recipes. */
   _assertNoPortConflict(candidate) {
     for (const other of this._recipes.values()) {
       if (other.id === candidate.id || other.archived) continue;
-      if (Number(other.apiPort) !== Number(candidate.apiPort)) continue;
+      if (Number(other.endpoint?.port) !== Number(candidate.endpoint?.port)) continue;
       const overlap = (other.nodeIds || []).filter((n) => (candidate.nodeIds || []).includes(n));
       if (overlap.length > 0) {
         const err = new Error(
-          `Port ${candidate.apiPort} is already used by recipe "${other.id}" on node(s) ${overlap.join(", ")}`
+          `Port ${candidate.endpoint.port} is already used by recipe "${other.id}" on node(s) ${overlap.join(", ")}`
         );
         err.status = 409;
         throw err;
@@ -100,61 +161,45 @@ export class RecipeRegistry {
   }
 
   /**
-   * Create or replace a recipe. `knownNodes` defaults to the live Spark
-   * registry ids via the injected getter; pass `skipNodeCheck` only in tests.
+   * Create or replace a recipe. `body` may be v1-flat or v2 structured.
    * @throws {Error & {status: number}}
    */
   upsert(body, { skipNodeCheck = false } = {}) {
-    const known = skipNodeCheck ? [] : this.getKnownNodeIds() || [];
-    const { ok, errors } = validateRecipeWrite(body, { nodeIds: skipNodeCheck ? undefined : known });
-    if (!ok) {
+    const prev = this._recipes.get(body?.id) || null;
+    const recipe = normalizeRecipe(body, prev);
+    const errors = [];
+
+    if (body?.modelPath != null && body.modelPath !== "" && !isValidPosixPath(body.modelPath))
+      errors.push("modelPath must be an absolute POSIX path without .. or shell metacharacters");
+    if (body?.logDir != null && body.logDir !== "" && !isValidPosixPath(body.logDir))
+      errors.push("logDir (logSource.path) must be an absolute POSIX path");
+
+    const known = skipNodeCheck ? null : this.getKnownNodeIds() || [];
+    const feasibility = validateRecipeFeasibility(recipe, {
+      knownNodeIds: skipNodeCheck ? null : known,
+      modelRegistry: skipNodeCheck ? null : this.modelRegistry,
+      recipeRegistry: this,
+      deploymentRegistry: skipNodeCheck ? null : this.deploymentRegistry,
+    });
+    errors.push(...feasibility.errors);
+
+    if (errors.length === 0) {
+      // Fold resume note-less seeding: keep state as-is.
+    }
+    if (errors.length > 0) {
       const err = new Error(errors.join("; "));
       err.status = 400;
       throw err;
     }
-    const prev = this._recipes.get(body.id);
     if (!prev && this._recipes.size >= MAX_RECIPES) {
       const err = new Error(`Recipe registry is full (${MAX_RECIPES})`);
       err.status = 409;
       throw err;
     }
-    // Preserve stored secret values when the client echoes back a redacted
-    // env entry (name + secret + hasValue, no value) on edit.
-    const prevEnvByName = new Map((prev?.env || []).map((e) => [e.name, e]));
-    const env = (Array.isArray(body.env) ? body.env : []).map((e) => {
-      const stored = prevEnvByName.get(e.name);
-      if (e.secret && (e.value == null || e.value === "") && stored?.secret) {
-        return { name: e.name, value: stored.value, secret: true };
-      }
-      return { name: e.name, value: e.value ?? "", secret: Boolean(e.secret) };
-    });
-    const recipe = {
-      id: body.id,
-      modelId: body.modelId,
-      name: String(body.name).trim(),
-      runtime: body.runtime,
-      topology: body.topology,
-      nodeIds: [...body.nodeIds],
-      modelPath: body.modelPath,
-      workdir: body.workdir,
-      logDir: body.logDir || null,
-      apiPort: Number(body.apiPort),
-      healthPath: body.healthPath || "/v1/models",
-      contextLength: body.contextLength != null ? Number(body.contextLength) : null,
-      cpuAffinity: body.cpuAffinity || null,
-      launcher: body.launcher || null,
-      metadata:
-        body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata)
-          ? body.metadata
-          : {},
-      notes: body.notes || "",
-      env,
-      archived: Boolean(body.archived ?? prev?.archived ?? false),
-      createdAt: prev?.createdAt ?? Date.now(),
-      updatedAt: Date.now(),
-    };
+    if (recipe.lifecycleState === "archived" && !prev) recipe.archived = true;
     this._assertNoPortConflict(recipe);
     this._recipes.set(recipe.id, recipe);
+    this._persistSecrets(recipe);
     this._save();
     return recipe;
   }
@@ -169,6 +214,7 @@ export class RecipeRegistry {
       return { deleted: true, id };
     }
     recipe.archived = true;
+    recipe.lifecycleState = "archived";
     recipe.updatedAt = Date.now();
     this._recipes.set(id, recipe);
     this._save();
@@ -179,6 +225,7 @@ export class RecipeRegistry {
     const recipe = this._recipes.get(id);
     if (!recipe) return null;
     recipe.archived = false;
+    if (recipe.lifecycleState === "archived") recipe.lifecycleState = "deprecated";
     recipe.updatedAt = Date.now();
     this._recipes.set(id, recipe);
     this._save();
@@ -186,10 +233,10 @@ export class RecipeRegistry {
   }
 
   /**
-   * Clone an existing recipe under a new id (server-side copy; secret env
-   * values carry over without ever crossing the API boundary).
+   * Deep-copy duplicate as a new draft.
+   * @throws {Error & {status:number}}
    */
-  clone(sourceId, newId, overrides = {}) {
+  duplicate(sourceId, newId, overrides = {}) {
     const src = this._recipes.get(sourceId);
     if (!src) return null;
     if (!isValidSlug(newId)) {
@@ -202,15 +249,69 @@ export class RecipeRegistry {
       err.status = 409;
       throw err;
     }
-    const body = {
-      ...src,
-      ...overrides,
-      id: newId,
-      name: overrides.name || `${src.name} (copy)`,
-      env: (src.env || []).map((e) => ({ ...e })),
-      nodeIds: overrides.nodeIds || [...(src.nodeIds || [])],
-    };
+    const body = JSON.parse(JSON.stringify(src));
+    Object.assign(body, overrides, { id: newId });
+    // Overrides may use legacy flat keys; map them onto the structured blocks.
+    if (overrides.apiPort != null) body.endpoint = { ...body.endpoint, port: overrides.apiPort };
+    if (overrides.nodeIds) body.nodeIds = [...overrides.nodeIds];
+    if (overrides.modelPath && body.modelRef) body.weightId = overrides.weightId || body.modelRef.weightId;
+    if (!overrides.name) body.name = `${src.name} (copy)`;
+    body.lifecycleState = "draft";
+    body.provenance = { sourceRecipeId: src.id };
+    body.createdAt = null;
+    body.updatedAt = null;
+    // Re-point secret refs at the new id so they resolve independently.
+    body.launch.env = (body.launch.env || []).map((e) =>
+      e.secretRef ? { ...e, secretRef: `recipe:${newId}:${e.name}` } : { ...e }
+    );
+    body.archived = false;
     return this.upsert(body);
+  }
+
+  /** Backward-compatible alias for the old clone endpoint. */
+  clone(sourceId, newId, overrides = {}) {
+    return this.duplicate(sourceId, newId, overrides);
+  }
+
+  /**
+   * Feasibility validation for an existing (or hypothetical) recipe.
+   * NEVER executes commands — pure dry-run.
+   */
+  validate(id, ctx = {}) {
+    const recipe = typeof id === "object" ? id : this._recipes.get(id);
+    if (!recipe) return null;
+    return validateRecipeFeasibility(recipe, {
+      knownNodeIds: ctx.knownNodeIds ?? (this.getKnownNodeIds() || []),
+      modelRegistry: this.modelRegistry,
+      recipeRegistry: this,
+      deploymentRegistry: this.deploymentRegistry,
+      nodeIds: ctx.nodeIds,
+    });
+  }
+
+  /**
+   * Apply a legal lifecycle transition. `validated` requires a passing validate.
+   * @throws {Error & {status:number}}
+   */
+  transition(id, to, opts = {}) {
+    const recipe = this._recipes.get(id);
+    if (!recipe) {
+      const err = new Error("recipe not found");
+      err.status = 404;
+      throw err;
+    }
+    if (to === "validated") {
+      const check = this.validate(id);
+      if (!check?.ok) {
+        const err = new Error(`cannot validate: ${check.errors.join("; ")}`);
+        err.status = 400;
+        throw err;
+      }
+    }
+    applyTransition(recipe, to, opts);
+    this._recipes.set(id, recipe);
+    this._save();
+    return recipe;
   }
 }
 

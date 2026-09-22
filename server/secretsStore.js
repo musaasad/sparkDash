@@ -32,6 +32,13 @@ const KEY_LEN = 32;
 
 /** Cached key so we never regenerate mid-process. */
 let _cachedKey = null;
+/**
+ * Recipe env secrets keyed `recipe:<recipeId>:<NAME>` (encrypted at rest,
+ * never returned by the API). Session cache so a plain `saveSecrets` by the
+ * SparkRegistry never clobbers recipe material.
+ * @type {Map<string,string>|null}
+ */
+let _recipeEnv = null;
 
 function ensureDir(filePath) {
   const dir = path.dirname(filePath);
@@ -160,6 +167,21 @@ export function loadSecrets() {
       }
     }
 
+    const recipeEntries = data?.recipeEnv || {};
+    if (_recipeEnv === null && typeof recipeEntries === "object" && recipeEntries !== null) {
+      const map = new Map();
+      for (const [ref, blob] of Object.entries(recipeEntries)) {
+        if (!ref || typeof blob !== "string") continue;
+        try {
+          const val = decrypt(blob, key);
+          if (val !== "") map.set(ref, val);
+        } catch {
+          console.error(`[secretsStore] Failed to decrypt recipe env ${ref} (wrong/missing key?)`);
+        }
+      }
+      _recipeEnv = map;
+    }
+
     const keyEntries = data?.llmApiKeys || {};
     if (typeof keyEntries === "object" && keyEntries !== null) {
       let failed = 0;
@@ -198,7 +220,38 @@ export function loadSecrets() {
     console.error(`[secretsStore] Failed to load secrets: ${err.message}`);
   }
 
-  return { passwords, llmApiKeys };
+  if (_recipeEnv === null) _recipeEnv = new Map();
+  return { passwords, llmApiKeys, recipeEnv: _recipeEnv };
+}
+
+// ─── Recipe env secrets: `recipe:<recipeId>:<NAME>` refs ─────
+// Values live ONLY here (encrypted); recipes carry secretRef by name.
+
+/** All stored recipe secret refs -> plaintext values. */
+export function loadRecipeEnv() {
+  if (_recipeEnv === null) {
+    try {
+      loadSecrets();
+    } catch {
+      _recipeEnv = new Map();
+    }
+  }
+  return _recipeEnv || new Map();
+}
+
+/** True when a `recipe:<recipeId>:<NAME>` ref resolves to stored material. */
+export function hasRecipeSecret(ref) {
+  if (typeof ref !== "string") return false;
+  return loadRecipeEnv().has(ref);
+}
+
+/** Persist the full recipe-ref -> value map (encrypted). */
+export function saveRecipeEnv(map) {
+  const next = new Map(map || []);
+  // Reuse the single writer: read current spark material from the file.
+  const { passwords, llmApiKeys } = loadSecrets();
+  _recipeEnv = next;
+  saveSecrets(passwords, llmApiKeys);
 }
 
 /**
@@ -220,7 +273,8 @@ export function saveSecrets(passwords, llmApiKeys = new Map()) {
     }
   }
 
-  if (!hasPasswords && !hasKeys) {
+  const recipeEnv = _recipeEnv || new Map();
+  if (!hasPasswords && !hasKeys && recipeEnv.size === 0) {
     if (fs.existsSync(SPARKS_SECRETS_PATH)) {
       try {
         fs.accessSync(SPARKS_SECRETS_PATH, fs.constants.W_OK);
@@ -257,8 +311,15 @@ export function saveSecrets(passwords, llmApiKeys = new Map()) {
     }
   }
 
+  /** @type {Record<string, string>} */
+  const recipeOut = {};
+  for (const [ref, val] of recipeEnv.entries()) {
+    if (ref && val != null && val !== "") recipeOut[ref] = encrypt(String(val), key);
+  }
+
   const payload =
-    JSON.stringify({ version: 2, secrets, llmApiKeys: llmOut }, null, 2) + "\n";
+    JSON.stringify({ version: 3, secrets, llmApiKeys: llmOut, recipeEnv: recipeOut }, null, 2) +
+    "\n";
   atomicWrite(SPARKS_SECRETS_PATH, payload, 0o644);
   const keyCount = Object.keys(llmOut).length;
   console.log(

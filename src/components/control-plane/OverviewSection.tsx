@@ -12,6 +12,7 @@ import {
   friendlyName,
   fmtUptime,
   relativeAge,
+  runtimeLabel,
 } from "./fleetModel";
 import { Topology } from "./Topology";
 
@@ -62,13 +63,7 @@ function fmtContext(ctx: number | null): string | null {
   return String(ctx);
 }
 
-const RUNTIME_LABELS: Record<string, string> = {
-  "tabbyapi-exl3": "TabbyAPI",
-  vllm: "vLLM",
-  sglang: "SGLang",
-  "llama.cpp": "llama.cpp",
-  custom: "custom",
-};
+
 
 export function OverviewSection({ sparks, deployments, recipes, navigate, loaded, models = [], activity = [], temperatureUnit = "celsius" }: OverviewProps) {
   const [sortKey, setSortKey] = useState<string | null>(null);
@@ -239,7 +234,7 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
                   </div>
 
                   <div className="cp-deploy-meta">
-                    <Chip>{RUNTIME_LABELS[v.runtime] ?? v.runtime}</Chip>
+                    <Chip>{runtimeLabel(v.runtime)}</Chip>
                     {v.topology !== "single" ? <Chip>{v.topology.toUpperCase()}</Chip> : <Chip>single</Chip>}
                     {ctx ? <Chip tone="mono">{ctx} ctx</Chip> : null}
                     {v.deployment.managedBy === "external" ? <Chip>external</Chip> : null}

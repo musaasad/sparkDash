@@ -447,7 +447,11 @@ export function updateSettings(patch: Partial<Settings>): Promise<Settings> {
 import type {
   ModelEntry,
   RecipePublic,
+  RecipeValidateResponse,
+  RecipeLifecycleState,
   DeploymentStatus,
+  DeploymentBinding,
+  DeploymentDesired,
   ActivityEvent,
   AuditEntry,
 } from "./types";
@@ -496,16 +500,53 @@ export function cloneRecipe(id: string, newId: string, overrides?: Record<string
   });
 }
 
-// ─── Control plane: Deployments (DRY-RUN lifecycle) ───────
+/** Deep-copy a recipe as a new draft (provenance reset + sourceRecipeId). */
+export function duplicateRecipe(id: string, newId?: string, overrides?: Record<string, unknown>): Promise<{ recipe: RecipePublic }> {
+  return apiFetch(`/api/recipes/${encodeURIComponent(id)}/duplicate`, {
+    method: "POST",
+    body: JSON.stringify({ id: newId, overrides }),
+  });
+}
+
+/** Dry-run feasibility validation — never executes commands. */
+export function validateRecipe(id: string, nodeIds?: string[]): Promise<RecipeValidateResponse> {
+  return apiFetch(`/api/recipes/${encodeURIComponent(id)}/validate`, {
+    method: "POST",
+    body: JSON.stringify({ nodeIds }),
+  });
+}
+
+export function recipeLifecycle(id: string, to: RecipeLifecycleState, note?: string): Promise<{ recipe: RecipePublic }> {
+  return apiFetch(`/api/recipes/${encodeURIComponent(id)}/lifecycle`, {
+    method: "POST",
+    body: JSON.stringify({ to, note }),
+  });
+}
+
+// ─── Control plane: Deployments (bindings + DRY-RUN lifecycle) ─
 export function fetchDeployments(): Promise<{ deployments: DeploymentStatus[]; dryRun: boolean }> {
   return apiFetch("/api/deployments");
 }
 
+export function createDeployment(body: {
+  modelId: string;
+  recipeId: string;
+  nodeIds: string[];
+  desiredState?: DeploymentDesired;
+}): Promise<{ deployment: DeploymentBinding; runtime: DeploymentStatus }> {
+  return apiFetch("/api/deployments", { method: "POST", body: JSON.stringify(body) });
+}
+
+/** Remove only the deployment binding — never the recipe/model/weights. */
+export function deleteDeployment(id: string): Promise<{ deleted: boolean; id: string }> {
+  return apiFetch(`/api/deployments/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
 export function deploymentAction(
-  recipeId: string,
+  deploymentId: string,
   action: "start" | "stop" | "restart"
 ): Promise<{ deployment: DeploymentStatus; dryRun: boolean }> {
-  return apiFetch(`/api/deployments/${encodeURIComponent(recipeId)}/${action}`, { method: "POST" });
+  return apiFetch(`/api/deployments/${encodeURIComponent(deploymentId)}/${action}`, { method: "POST" });
 }
 
 // ─── Control plane: Activity + audit ──────────────────────

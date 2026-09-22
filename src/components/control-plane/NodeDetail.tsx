@@ -7,7 +7,7 @@ import { StatusPill, StatusDot, Chip, EmptyState } from "../ui/Status";
 import { TabStrip } from "../ui/DataTable";
 import { TimeSeriesChart, RangePicker, type Series } from "../ui/TimeSeriesChart";
 import { useTimedMetricsHistory } from "../../hooks/metricsStore";
-import { recipesOnNode, relativeAge, externalConnectView } from "./fleetModel";
+import { recipesOnNode, relativeAge, externalConnectView, runtimeLabel } from "./fleetModel";
 import { LiveConsole } from "./LiveConsole";
 import { ExternalConnectPanel } from "./ModelDetail";
 
@@ -369,7 +369,7 @@ export function nodeConnectPanel(view: { deployment: DeploymentStatus; nodes: Sp
         endpoint: `http://${view.nodes[0]?.lanIp ?? view.deployment.nodeIds[0] ?? "localhost"}:${view.deployment.apiPort}/v1`,
         hasKey: !!recipe?.env.some((e) => e.secret && (e.hasValue ?? !!e.value)),
         nodeNames: view.nodes.map((n) => n.name),
-        note: "Launched outside SparkDash — manage via TabbyAPI",
+        note: `Launched outside SparkDash — manage via ${runtimeLabel(recipe?.runtime)}`,
       }}
       recipe={recipe}
     />

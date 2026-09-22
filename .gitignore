@@ -32,6 +32,8 @@ test/
 # Control-plane runtime state (local registry + logs)
 config/models.json
 config/recipes.json
+config/deployments.json
 config/deployments-active.json
 config/audit.jsonl
 config/activity.jsonl
+config/*.v1.bak

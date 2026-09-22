@@ -1,26 +1,27 @@
 /**
- * ModelRegistry — the logical Model layer of the control plane.
+ * ModelRegistry — the logical MODEL layer of the control plane (v2).
  *
- *   Model → Deployment Recipe → Runtime → Compute Nodes
+ *   Model (weights identity) → Recipe (how it CAN run) → Deployment (where it
+ *   SHOULD run) → Runtime (observed) → Compute.
  *
- * A Model is the family/identity ("Qwen 3.8 Flash Next"); the ways to run it
- * live in RecipeRegistry. Persistence mirrors SparkRegistry: atomic JSON at
- * config/models.json, no secrets in this file, `toPublic` redaction boundary.
+ * Weights identity lives HERE (weightPaths map with variant ids), not in
+ * recipes. A model may carry several weight variants (e.g. default EXL3 vs
+ * 2.9bpw) selected by a recipe via modelRef.weightId.
  *
- * Archiving a model NEVER deletes weights — it only hides the entry from the
- * active list while preserving recipes, notes and benchmark history.
+ * Persistence mirrors SparkRegistry: atomic JSON at config/models.json, no
+ * secrets in this file. Archiving NEVER deletes weights (flag only); hard
+ * delete is blocked while any recipe or deployment references the model.
  */
 import fs from "fs";
 import { atomicWrite } from "../util/atomicWrite.js";
 import { MODELS_JSON_PATH } from "../config.js";
-import { validateModelWrite, isValidSlug } from "../validate.js";
+import { normalizeModel, validateModel } from "../domain/schema.js";
+import { migrateModelsFile } from "../domain/migrate.js";
 
 const MAX_MODELS = 512;
 
 export class ModelRegistry {
-  /**
-   * @param {{ path?: string }} [opts]
-   */
+  /** @param {{ path?: string }} [opts] */
   constructor(opts = {}) {
     this.path = opts.path || MODELS_JSON_PATH;
     /** @type {Map<string, object>} */
@@ -32,17 +33,27 @@ export class ModelRegistry {
     try {
       if (!fs.existsSync(this.path)) return;
       const raw = JSON.parse(fs.readFileSync(this.path, "utf8"));
-      const list = Array.isArray(raw?.models) ? raw.models : [];
-      for (const m of list) {
-        if (m && isValidSlug(m.id)) this._models.set(m.id, m);
+      for (const m of Array.isArray(raw?.models) ? raw.models : []) {
+        if (m && m.id) this._models.set(m.id, normalizeModel(m));
       }
     } catch (err) {
       console.error("[ModelRegistry] load failed:", err.message);
     }
   }
 
+  /** Re-read from disk (used after a v1→v2 migration rewrote the file). */
+  reload() {
+    this._models.clear();
+    this._load();
+  }
+
+  /** Migrate an on-disk v1 file to v2 in place (idempotent, writes a .v1.bak). */
+  migrate() {
+    return migrateModelsFile(this.path);
+  }
+
   _save() {
-    atomicWrite(this.path, JSON.stringify({ models: [...this._models.values()] }, null, 2), 0o600);
+    atomicWrite(this.path, JSON.stringify({ schemaVersion: 2, models: [...this._models.values()] }, null, 2), 0o600);
   }
 
   /** All models including archived. */
@@ -60,50 +71,53 @@ export class ModelRegistry {
   }
 
   /**
-   * Create or replace a model. Validation is strict (validateModelWrite).
+   * Create or replace a model. `body` may be v1-flat or v2 structured; legacy
+   * `modelPath` lands on weightPaths.default.
    * @throws {Error & {status: number}}
    */
   upsert(body) {
-    const { ok, errors } = validateModelWrite(body);
+    const model = normalizeModel(body, this._models.get(body?.id) || null);
+    const { ok, errors } = validateModel(model);
     if (!ok) {
       const err = new Error(errors.join("; "));
       err.status = 400;
       throw err;
     }
-    const prev = this._models.get(body.id);
+    const prev = this._models.get(model.id);
     if (!prev && this._models.size >= MAX_MODELS) {
       const err = new Error(`Model registry is full (${MAX_MODELS})`);
       err.status = 409;
       throw err;
     }
-    const now = Date.now();
-    const model = {
-      id: body.id,
-      name: String(body.name).trim(),
-      family: body.family != null ? String(body.family).trim() : null,
-      notes: body.notes != null ? String(body.notes) : "",
-      archived: Boolean(body.archived ?? prev?.archived ?? false),
-      createdAt: prev?.createdAt ?? now,
-      updatedAt: now,
-    };
     this._models.set(model.id, model);
     this._save();
     return model;
   }
 
+  /** Set/overwrite one weight variant path (used by the recipe editor flow). */
+  setWeightPath(id, variant, absPath) {
+    const model = this._models.get(id);
+    if (!model) return null;
+    model.weightPaths = model.weightPaths || {};
+    model.weightPaths[variant || "default"] = absPath;
+    model.updatedAt = Date.now();
+    this._models.set(id, model);
+    this._save();
+    return model;
+  }
+
   /**
-   * Archive semantics: mark archived (preserves everything). Hard delete is
-   * only allowed for entries with no recipes — recipes own the weights-adjacent
-   * config, so the caller must pass `hasRecipes` from RecipeRegistry.
+   * Archive semantics: flag archived + archivedAt (weights preserved). Hard
+   * delete only when nothing references the model.
    * @param {string} id
-   * @param {{ archive?: boolean, hasRecipes?: boolean }} [opts]
+   * @param {{ archive?: boolean, hasRecipes?: boolean, hasDeployments?: boolean }} [opts]
    */
   remove(id, opts = {}) {
     const model = this._models.get(id);
     if (!model) return null;
     if (opts.archive === false) {
-      if (opts.hasRecipes) {
-        const err = new Error("Model still has recipes — archive it instead of deleting");
+      if (opts.hasRecipes || opts.hasDeployments) {
+        const err = new Error("Model is still referenced by recipes/deployments — archive it instead of deleting");
         err.status = 409;
         throw err;
       }
@@ -112,6 +126,7 @@ export class ModelRegistry {
       return { deleted: true, id };
     }
     model.archived = true;
+    model.archivedAt = Date.now();
     model.updatedAt = Date.now();
     this._models.set(id, model);
     this._save();
@@ -122,6 +137,7 @@ export class ModelRegistry {
     const model = this._models.get(id);
     if (!model) return null;
     model.archived = false;
+    model.archivedAt = null;
     model.updatedAt = Date.now();
     this._models.set(id, model);
     this._save();

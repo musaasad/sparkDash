@@ -15,6 +15,7 @@ import {
   modelGlyph,
   externalConnectView,
   fmtAgeFromISO,
+  runtimeLabel,
   type DeploymentView,
 } from "./fleetModel";
 import { ExternalConnectPanel } from "./ModelDetail";
@@ -31,16 +32,8 @@ interface ModelsProps {
   activity?: ActivityEvent[];
 }
 
-const RUNTIME_LABELS: Record<string, string> = {
-  "tabbyapi-exl3": "TabbyAPI",
-  vllm: "vLLM",
-  sglang: "SGLang",
-  "llama.cpp": "llama.cpp",
-  custom: "custom",
-};
-
 function provenanceOf(v: DeploymentView): string {
-  return v.deployment.managedBy === "external" ? "external" : `managed · ${RUNTIME_LABELS[v.runtime] ?? v.runtime}`;
+  return v.deployment.managedBy === "external" ? "external" : `managed · ${runtimeLabel(v.runtime)}`;
 }
 
 export function ModelsSection({ models, recipes, deployments, navigate, onSaved, sparks = [], activity }: ModelsProps) {
@@ -106,7 +99,7 @@ export function ModelsSection({ models, recipes, deployments, navigate, onSaved,
             <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
               <span style={{ fontWeight: 500 }}>{m.name}</span>
               <span className="mono muted" style={{ fontSize: 10 }}>
-                {recipes.find((r) => r.modelId === m.id && !r.archived)?.modelPath ?? m.id}
+                {m.weightPaths?.default ?? recipes.find((r) => r.modelId === m.id && !r.archived)?.modelPath ?? m.id}
               </span>
             </div>
           </div>
@@ -202,7 +195,7 @@ export function ModelsSection({ models, recipes, deployments, navigate, onSaved,
             <option value="all">All runtimes</option>
             {runtimes.map((r) => (
               <option key={r} value={r}>
-                {RUNTIME_LABELS[r] ?? r}
+                {runtimeLabel(r)}
               </option>
             ))}
           </select>
@@ -268,7 +261,7 @@ export function ModelsSection({ models, recipes, deployments, navigate, onSaved,
         ) : (
           <div id="models-deployments" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {filtered.map((v) => {
-              const key = v.deployment.recipeId;
+              const key = v.key;
               const expandable = isErrorRow(v.deployment);
               const expanded = open.has(key);
               const connect = externalConnectView(v.deployment, v.recipe, sparks);
@@ -295,6 +288,10 @@ export function ModelsSection({ models, recipes, deployments, navigate, onSaved,
                         {v.recipe?.id ?? v.deployment.recipeId}
                       </span>
                     </div>
+
+                    {v.lifecycleState && v.lifecycleState !== "draft" ? (
+                      <Chip tone="mono" className="cp-lifecycle">{v.lifecycleState}</Chip>
+                    ) : null}
 
                     <div className="cp-deploy-meta">
                       <span className="muted" style={{ fontSize: 10 }} title={v.deployment.managedBy === "external" ? "Launched outside SparkDash" : undefined}>

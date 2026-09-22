@@ -3,8 +3,15 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DeploymentService } from "../DeploymentService.js";
-import { RecipeRegistry } from "../../recipes/RecipeRegistry.js";
+
+// Never write the live config/*.json (or live secrets) during tests.
+const SD_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "sd-dep-root-"));
+process.env.SPARKDASH_CONFIG_DIR = SD_ROOT;
+process.env.SPARKS_SECRETS_PATH = path.join(SD_ROOT, "secrets.json");
+process.env.SECRETS_KEY_PATH = path.join(SD_ROOT, ".secrets-key");
+
+const { DeploymentService } = await import("../DeploymentService.js");
+const { RecipeRegistry } = await import("../../recipes/RecipeRegistry.js");
 
 function tmpStore(name) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `sd-dep-${name}-`));
@@ -94,4 +101,46 @@ test("DeploymentService source contains no exec/ssh capability", () => {
   const s = svc.begin("qwen38-tabbyapi-dgx3", "start");
   assert.equal(s.dryRun, true);
   svc.cancelAll();
+});
+test("_loadActive collapses legacy recipe-keyed checkpoints onto deployment-entity id (no duplicate views)", () => {
+  const t = tmpStore("dedup");
+  const recipes = new RecipeRegistry({ path: t.recipes, getKnownNodeIds: () => ["dgx-3"] });
+  recipes.upsert({
+    id: "qwen38-tabbyapi-dgx3", modelId: "qwen38", name: "Qwen TabbyAPI",
+    runtime: "tabbyapi-exl3", topology: "single", nodeIds: ["dgx-3"],
+    modelPath: "/home/m/models/Qwen", workdir: "/home/m/tabbyAPI", apiPort: 8889,
+    metadata: { managedBy: "external" },
+  });
+  // Legacy active checkpoint keyed by RECIPE id (pre-deployment-entity format).
+  fs.writeFileSync(
+    t.active,
+    JSON.stringify({
+      deployments: [
+        { deploymentId: "qwen38-tabbyapi-dgx3", recipeId: "qwen38-tabbyapi-dgx3", desired: "unknown", observed: "auth-gated", state: "running" },
+      ],
+    })
+  );
+  const dep = { id: "dep-qwen38-tabbyapi-dgx3", recipeId: "qwen38-tabbyapi-dgx3", modelId: "qwen38", nodeIds: ["dgx-3"], desiredState: "unknown" };
+  const deploymentRegistry = {
+    get: (id) => (id === dep.id ? dep : null),
+    listForRecipe: (rid) => (rid === dep.recipeId ? [dep] : []),
+    list: () => [dep],
+  };
+  const svc = new DeploymentService({ recipeRegistry: recipes, deploymentRegistry, auditPath: t.audit, activePath: t.active });
+  const states = svc.listStates();
+  assert.equal(states.length, 1, "exactly one runtime view, not recipe + deployment duplicates");
+  assert.equal(states[0].deploymentId, dep.id);
+  assert.equal(states[0].recipeId, dep.recipeId);
+});
+
+test("_loadActive drops stale checkpoints whose recipe lost its deployment binding", () => {
+  const t = tmpStore("stale");
+  const recipes = new RecipeRegistry({ path: t.recipes, getKnownNodeIds: () => ["dgx-3"] });
+  fs.writeFileSync(
+    t.active,
+    JSON.stringify({ deployments: [{ deploymentId: "gone-recipe", recipeId: "gone-recipe", desired: "running", observed: "running", state: "running" }] })
+  );
+  const deploymentRegistry = { get: () => null, listForRecipe: () => [], list: () => [] };
+  const svc = new DeploymentService({ recipeRegistry: recipes, deploymentRegistry, auditPath: t.audit, activePath: t.active });
+  assert.equal(svc.listStates().length, 0);
 });

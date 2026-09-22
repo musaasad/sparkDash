@@ -1,4 +1,4 @@
-import type { SparkSnapshot, DeploymentStatus, DeploymentDisplay, RecipePublic, ModelEntry, ActivityEvent } from "../../api/types";
+import type { SparkSnapshot, DeploymentStatus, DeploymentDisplay, RecipePublic, RecipeTopology, RecipeLifecycleState, ModelEntry, ActivityEvent } from "../../api/types";
 import { isWorkerSpark } from "../../api/sparkRole";
 
 export interface FleetHealth {
@@ -35,12 +35,16 @@ export interface AttentionItem {
 /** One deployment joined with its recipe + friendly model name + member nodes. */
 export interface DeploymentView {
   deployment: DeploymentStatus;
+  /** Stable row key: deployment binding id, recipe id fallback. */
+  key: string;
   recipe: RecipePublic | null;
   modelName: string;
   rawModelId: string;
   nodes: SparkSnapshot[];
   runtime: string;
-  topology: "single" | "tp2" | "tp3";
+  topology: RecipeTopology;
+  /** Recipe lifecycle badge (Draft/Validated/Proven/Deprecated/Archived). */
+  lifecycleState: RecipeLifecycleState | null;
   contextLength: number | null;
   port: number;
   decodeTps: number | null;
@@ -246,13 +250,15 @@ export function deploymentViews(
     const recipe = recipes.find((r) => r.id === deployment.recipeId) ?? null;
     return {
       deployment,
+      key: deployment.deploymentId ?? deployment.recipeId,
       recipe,
       modelName: friendlyName(deployment.modelId, models),
       rawModelId: deployment.modelId,
       nodes: deployment.nodeIds.map((id) => sparks.find((s) => s.id === id)).filter((s): s is SparkSnapshot => !!s),
       runtime: recipe?.runtime ?? "—",
       topology: recipe?.topology ?? (deployment.nodeIds.length > 1 ? "tp2" : "single"),
-      contextLength: recipe?.contextLength ?? null,
+      lifecycleState: recipe?.lifecycleState ?? null,
+      contextLength: recipe?.serving?.contextLength ?? recipe?.contextLength ?? null,
       port: deployment.apiPort,
       decodeTps: deploymentDecodeTps(sparks, deployment),
     };

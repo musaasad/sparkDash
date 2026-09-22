@@ -400,11 +400,13 @@ export interface ConsoleSource {
   nodeIds: string[];
 }
 
-/** Group node ids into an enclosure label (TP2 spans spark-1+spark-2). */
+/**
+ * Enclosure label for a console tab — derived purely from entity data:
+ * a distributed deployment groups by its node span, a single node by model id.
+ */
 export function sourceLabel(nodeIds: readonly string[], modelId: string): string {
-  if (nodeIds.some((n) => n === "dgx-1" || n === "dgx-2")) return "TP2";
-  if (nodeIds.some((n) => n === "dgx-3")) return "Qwen";
-  return modelId;
+  if (nodeIds.length > 1) return `TP${nodeIds.length}`;
+  return modelId || nodeIds[0] || "console";
 }
 
 /** Build source tabs: one per deployment enclosure, plus a trailing "All". */

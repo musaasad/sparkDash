@@ -210,7 +210,8 @@ export class LiveConsoleManager {
   subscribe(recipeId, subscriber) {
     const recipe = this.recipeRegistry.get(recipeId);
     if (!recipe) return { ok: false, reason: "recipe not found", buffered: [], telemetry: [] };
-    if (!recipe.logDir)
+    const logDir = recipe.logSource?.path ?? recipe.logDir;
+    if (!logDir)
       return { ok: false, reason: "no logDir configured on this recipe", buffered: [], telemetry: [] };
     const spark = this.sparkResolver(recipe.nodeIds?.[0]);
     if (!spark?.ssh?.host || !spark?.ssh?.user)
@@ -222,7 +223,7 @@ export class LiveConsoleManager {
     if (!s.proc) {
       let cmd;
       try {
-        cmd = LiveConsoleManager.buildTailCommand(recipe.logDir);
+        cmd = LiveConsoleManager.buildTailCommand(logDir);
       } catch (err) {
         s.error = err.message;
         return { ok: false, reason: err.message, buffered: s.lines.slice(), telemetry: s.telemetry.listNewestFirst() };

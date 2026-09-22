@@ -1,15 +1,25 @@
 /**
- * Control-plane wiring: Model Registry, Recipe Registry, Deployment lifecycle
- * (DRY-RUN), Live Console streaming, Activity feed, and their API surface.
+ * Control-plane wiring: MODEL registry, RECIPE registry, DEPLOYMENT bindings,
+ * DRY-RUN lifecycle, Live Console streaming, Activity feed, and their API.
  *
- * Kept out of index.js so the existing monitoring server stays readable and
- * upstream-mergeable. index.js provides the fleet deps; this module owns the
- * new domain.
+ * Concept separation (config-first domain core):
+ *   MODEL      what it is / weights identity
+ *   RECIPE     how it CAN run (declarative, reusable, protected)
+ *   DEPLOYMENT where it SHOULD run (model + recipe + nodes + desired)
+ *   RUNTIME    what IS running (observed; DeploymentService)
+ *   COMPUTE    the fleet (SparkRegistry)
+ *
+ * All model/recipe-specific seed data lives in committed server/seeds/*.json.
+ * Kept out of index.js so the monitoring server stays readable.
  */
+import fs from "fs";
+import path from "path";
 import { isLoopbackBind } from "./auth.js";
 import { configuredToken, extractBearer, authenticate } from "./auth.js";
 import { modelRegistry } from "./models/ModelRegistry.js";
 import { recipeRegistry } from "./recipes/RecipeRegistry.js";
+import { deploymentRegistry } from "./domain/deploymentRegistry.js";
+import { runMigrations } from "./domain/migrate.js";
 import { DeploymentService } from "./deployments/DeploymentService.js";
 import { LiveConsoleManager } from "./collectors/LiveConsole.js";
 import { ActivityLog } from "./activity/ActivityLog.js";
@@ -17,136 +27,99 @@ import { createRateLimiter } from "./validate.js";
 import { classifyProbe, probeEndpoint, probeUrl } from "./deployments/deploymentStatus.js";
 import { sshExec } from "./collectors/ssh.js";
 import { llmProbeHost } from "./collectors/llmHost.js";
+import {
+  MODELS_JSON_PATH,
+  RECIPES_JSON_PATH,
+  DEPLOYMENTS_JSON_PATH,
+  SEEDS_DIR,
+} from "./config.js";
 
-/**
- * Seed the first real deployment as generic architecture metadata (not logic).
- * Qwen 3.8 on dgx-3 via TabbyAPI+EXL3 — the known-good values from the lab.
- * Observe-only (managedBy: external): SparkDash reads its state from the LLM
- * probe and never starts/stops it. Skips silently if a model already exists.
- */
-function seedQwenExample(modelRegistry, recipeRegistry) {
+function readJson(file) {
   try {
-    if (modelRegistry.list().length > 0 || recipeRegistry.list().length > 0) return;
-    modelRegistry.upsert({
-      id: "qwen38-flash-next",
-      name: "Qwen 3.8 Flash Next",
-      family: "Qwen",
-      notes: "EXL3 quantized MoE with MTP speculative decoding.",
-    });
-    recipeRegistry.upsert(
-      {
-        id: "qwen38-tabbyapi-dgx3",
-        modelId: "qwen38-flash-next",
-        name: "TabbyAPI EXL3 (dgx-3)",
-        runtime: "tabbyapi-exl3",
-        topology: "single",
-        nodeIds: ["dgx-3"],
-        modelPath: "/home/musaasad/models/Qwen3.8-Flash-Next-EXL3",
-        workdir: "/home/musaasad/tabbyAPI",
-        logDir: "/home/musaasad/tabbyAPI/logs",
-        apiPort: 8889,
-        healthPath: "/v1/models",
-        contextLength: 262144,
-        cpuAffinity: "5-9,15-19",
-        launcher: "taskset -c 5-9,15-19 python main.py",
-        metadata: { managedBy: "external", venv: "/home/musaasad/exllamav3/.venv" },
-        notes: "Known-good single-node deployment. Started outside SparkDash — observe-only.",
-        env: [
-          { name: "EXL3_INT8_GEMV", value: "0", secret: false },
-          { name: "EXL3_MOE_COOP_WIDE", value: "1", secret: false },
-          { name: "EXL3_GR_INT8", value: "1", secret: false },
-          { name: "EXL3_MTP_HEAD_N", value: "65536", secret: false },
-          { name: "EXL3_NGRAM_STREAM", value: "0", secret: false },
-          { name: "TORCH_CUDA_ARCH_LIST", value: "12.1", secret: false },
-        ],
-      },
-      { skipNodeCheck: true }
-    );
-    console.log("[control-plane] seeded Qwen 3.8 example deployment (observe-only)");
-  } catch (err) {
-    console.warn("[control-plane] Qwen seed skipped:", err.message);
+    if (!fs.existsSync(file)) return null;
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    return null;
   }
 }
 
-/**
- * Seed the distributed TP2 deployment: DeepSeek V4.1 Flash served by vLLM with
- * --tensor-parallel-size 2 --nnodes 2 across dgx-1 (rank 0) + dgx-2 (rank 1).
- * Facts verified live from /v1/models + the process table (read-only).
- * Observe-only; idempotent by recipe id.
- */
-function seedTp2Example(modelRegistry, recipeRegistry) {
+function copyFile(src, dest) {
+  const dir = path.dirname(dest);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.copyFileSync(src, dest);
+}
+
+/** First-run seed loader: copy committed v2 seed files when config is empty. */
+function seedFromFiles() {
+  const emptyModels = !readJson(MODELS_JSON_PATH)?.models?.length;
+  const emptyRecipes = !readJson(RECIPES_JSON_PATH)?.recipes?.length;
+  const emptyDeps = !readJson(DEPLOYMENTS_JSON_PATH)?.deployments?.length;
+  if (!emptyModels && !emptyRecipes && !emptyDeps) return false;
   try {
-    if (recipeRegistry.get("v41-tp2-vllm-dgx12")) return;
-    modelRegistry.upsert({
-      id: "deepseek-v41-flash",
-      name: "DeepSeek V4.1 Flash",
-      family: "DeepSeek",
-      notes: "EXL3-quantized MoE served tensor-parallel across two DGX Sparks.",
-    });
-    recipeRegistry.upsert(
-      {
-        id: "v41-tp2-vllm-dgx12",
-        modelId: "deepseek-v41-flash",
-        name: "vLLM TP2 (dgx-1 + dgx-2)",
-        runtime: "vllm",
-        topology: "tp2",
-        nodeIds: ["dgx-1", "dgx-2"],
-        modelPath: "/model",
-        workdir: "/model",
-        logDir: null,
-        apiPort: 8888,
-        healthPath: "/v1/models",
-        contextLength: 600000,
-        cpuAffinity: null,
-        launcher:
-          "vllm serve /model --served-model-name DeepSeek-V4.1-Flash-UNCENSORED-EXL3 --tensor-parallel-size 2 --nnodes 2 (containerized)",
-        metadata: {
-          managedBy: "external",
-          // Operator intent: TP2 is expected up (unknown-default external recipe).
-          desired: "running",
-          servedModelId: "DeepSeek-V4.1-Flash-UNCENSORED-EXL3",
-          masterAddr: "10.100.124.2",
-          speculative: "dspark x3",
-        },
-        notes:
-          "Distributed deployment: dgx-1 rank 0 (API) + dgx-2 rank 1 (worker). Started outside SparkDash — observe-only.",
-        env: [],
-      },
-      { skipNodeCheck: true }
-    );
-    console.log("[control-plane] seeded DeepSeek V4.1 TP2 deployment (observe-only)");
+    if (emptyModels) copyFile(path.join(SEEDS_DIR, "models.json"), MODELS_JSON_PATH);
+    if (emptyRecipes) copyFile(path.join(SEEDS_DIR, "recipes.json"), RECIPES_JSON_PATH);
+    if (emptyDeps) copyFile(path.join(SEEDS_DIR, "deployments.json"), DEPLOYMENTS_JSON_PATH);
+    console.log("[control-plane] seeded v2 registries from server/seeds");
+    return true;
   } catch (err) {
-    console.warn("[control-plane] TP2 seed skipped:", err.message);
+    console.warn("[control-plane] seed skipped:", err.message);
+    return false;
   }
 }
 
-/**
- * @param {{
- *   app: import("express").Express,
- *   wss: import("ws").WebSocketServer,
- *   sparkRegistry: {sparkIds: string[], getSpark: (id:string)=>object|null},
- *   monitors: Map<string, {snapshot: () => object}>,
- *   decodeBenchManager: object,
- *   prefillBenchManager: object,
- *   broadcastLifecycle: (payload: object) => void,
- * }} deps
- */
+/** Ensure a deployment binding mirrors a recipe's legacy nodeIds. */
+function syncDeploymentBinding(recipe) {
+  if (!recipe?.nodeIds?.length) return null;
+  const existing = deploymentRegistry.listForRecipe(recipe.id)[0] || null;
+  if (existing) {
+    if (existing.nodeIds.join(",") !== recipe.nodeIds.join(",")) {
+      existing.nodeIds = [...recipe.nodeIds];
+      existing.updatedAt = Date.now();
+      // persist via create-like replacement
+      deploymentRegistry.remove(existing.id);
+      return deploymentRegistry.create(existing);
+    }
+    return existing;
+  }
+  return deploymentRegistry.ensureForRecipe(recipe);
+}
+
 export function createControlPlane(deps) {
   const { app, sparkRegistry, monitors, decodeBenchManager, prefillBenchManager, showcaseManager } =
     deps;
 
+  // ─── Migration + seeds (before registries diverge from disk) ──
+  try {
+    runMigrations({
+      modelsPath: MODELS_JSON_PATH,
+      recipesPath: RECIPES_JSON_PATH,
+      deploymentsPath: DEPLOYMENTS_JSON_PATH,
+    });
+  } catch (err) {
+    console.warn("[control-plane] migration skipped:", err.message);
+  }
+  if (seedFromFiles()) {
+    modelRegistry.reload();
+    recipeRegistry.reload();
+    deploymentRegistry.reload();
+  }
+
   // ─── Registries ────────────────────────────────────────
   recipeRegistry.getKnownNodeIds = () => sparkRegistry.sparkIds;
-
-  // Seed the first real deployment (Qwen 3.8 on dgx-3) as OBSERVE-ONLY metadata
-  // when the registry is empty. Idempotent; never controls the live process.
-  seedQwenExample(modelRegistry, recipeRegistry);
-  seedTp2Example(modelRegistry, recipeRegistry);
+  recipeRegistry.modelRegistry = modelRegistry;
+  recipeRegistry.deploymentRegistry = deploymentRegistry;
+  recipeRegistry.getModelWeightPath = (recipe) => {
+    if (!recipe?.modelRef?.modelId) return null;
+    const model = modelRegistry.get(recipe.modelRef.modelId);
+    return model?.weightPaths?.[recipe.modelRef.weightId || "default"] ?? null;
+  };
 
   const activity = new ActivityLog();
 
+  // ─── Deployment runtime / observed layer ───────────────
   const deployments = new DeploymentService({
     recipeRegistry,
+    deploymentRegistry,
     onStateChange: (state) => {
       deps.broadcastLifecycle({ type: "lifecycle", state });
       if (state.lastOp) {
@@ -155,7 +128,7 @@ export function createControlPlane(deps) {
           subject: state.recipeId,
           summary: `${state.lastOp} → ${state.state} (dry-run)`,
           attribution: null,
-          meta: { managedBy: state.managedBy, dryRun: true },
+          meta: { managedBy: state.managedBy, dryRun: true, deploymentId: state.deploymentId },
         });
       }
     },
@@ -257,7 +230,6 @@ export function createControlPlane(deps) {
         clients.delete(ws);
         const s = liveConsole.status(recipeId);
         if (clients.size === 0) {
-          // Let the manager stop the tail once all subscribers are gone.
           liveConsole.unsubscribe(recipeId, () => {});
           void s;
         }
@@ -271,7 +243,7 @@ export function createControlPlane(deps) {
     return (
       recipeRegistry
         .list()
-        .find((r) => Number(r.apiPort) === p && (r.nodeIds || []).includes(nodeId)) || null
+        .find((r) => Number(r.endpoint?.port) === p && (r.nodeIds || []).includes(nodeId)) || null
     );
   }
 
@@ -287,15 +259,9 @@ export function createControlPlane(deps) {
       if (!result.ok) return res.status(result.status).json({ error: result.error });
       return next();
     }
-    // No token configured: lifecycle mutations stay closed unless the
-    // operator explicitly opted into loopback dry-runs for development.
     const remote = !isLoopbackBind(process.env.BIND_HOST || "127.0.0.1");
     const socketLoopback = /^(127\.|::1)/.test(req.socket?.remoteAddress || "");
-    if (
-      !remote &&
-      socketLoopback &&
-      process.env.SPARKDASH_ALLOW_DRYRUN_LOOPBACK === "1"
-    ) {
+    if (!remote && socketLoopback && process.env.SPARKDASH_ALLOW_DRYRUN_LOOPBACK === "1") {
       return next();
     }
     return res.status(403).json({
@@ -312,9 +278,7 @@ export function createControlPlane(deps) {
   // ─── Routes: models ────────────────────────────────────
   app.get("/api/models", (req, res) => {
     const includeArchived = req.query.includeArchived === "1";
-    res.json({
-      models: includeArchived ? modelRegistry.list() : modelRegistry.listActive(),
-    });
+    res.json({ models: includeArchived ? modelRegistry.list() : modelRegistry.listActive() });
   });
 
   app.post("/api/models", (req, res) => {
@@ -336,11 +300,10 @@ export function createControlPlane(deps) {
     const model = modelRegistry.get(req.params.id);
     if (!model) return res.status(404).json({ error: "model not found" });
     const recipes = recipeRegistry.listForModel(model.id, { includeArchived: true });
-    const states = new Map(deployments.listStates().map((s) => [s.recipeId, s]));
     res.json({
       model,
       recipes: recipes.map((r) => recipeRegistry.toPublic(r)),
-      deployments: recipes.map((r) => states.get(r.id) || deployments.getState(r.id)),
+      deployments: deployments.listStates().filter((s) => s.modelId === model.id),
     });
   });
 
@@ -350,6 +313,7 @@ export function createControlPlane(deps) {
       const result = modelRegistry.remove(req.params.id, {
         archive: !hard,
         hasRecipes: recipeRegistry.hasRecipesForModel(req.params.id),
+        hasDeployments: deploymentRegistry.hasForModel(req.params.id),
       });
       if (!result) return res.status(404).json({ error: "model not found" });
       res.json(result);
@@ -372,14 +336,23 @@ export function createControlPlane(deps) {
 
   app.post("/api/recipes", (req, res) => {
     try {
-      const recipe = recipeRegistry.upsert(req.body || {});
+      const body = req.body || {};
+      // Legacy convenience: a supplied modelPath updates the model's weight variant.
+      if (body.modelPath && body.id) {
+        const modelId = body.modelRef?.modelId || body.modelId;
+        if (modelRegistry.get(modelId) && !modelRegistry.get(modelId).weightPaths?.[body.weightId || "default"]) {
+          modelRegistry.setWeightPath(modelId, body.weightId, body.modelPath);
+        }
+      }
+      const recipe = recipeRegistry.upsert(body);
+      const dep = syncDeploymentBinding(recipe);
       activity.push({
         kind: "lifecycle",
         subject: recipe.id,
         summary: `recipe saved: ${recipe.name}`,
-        meta: { modelId: recipe.modelId, nodes: recipe.nodeIds },
+        meta: { modelId: recipe.modelRef?.modelId, nodes: recipe.nodeIds, deploymentId: dep?.id ?? null },
       });
-      res.json({ recipe: recipeRegistry.toPublic(recipe) });
+      res.json({ recipe: recipeRegistry.toPublic(recipe), deployment: dep });
     } catch (err) {
       res.status(err.status || 400).json({ error: err.message });
     }
@@ -389,6 +362,50 @@ export function createControlPlane(deps) {
     const recipe = recipeRegistry.get(req.params.id);
     if (!recipe) return res.status(404).json({ error: "recipe not found" });
     res.json({ recipe: recipeRegistry.toPublic(recipe) });
+  });
+
+  app.post("/api/recipes/:id/validate", (req, res) => {
+    const result = recipeRegistry.validate(req.params.id, { nodeIds: req.body?.nodeIds });
+    if (!result) return res.status(404).json({ error: "recipe not found" });
+    res.json({ ok: result.ok, errors: result.errors, warnings: result.warnings });
+  });
+
+  app.post("/api/recipes/:id/duplicate", (req, res) => {
+    try {
+      const newId = req.body?.id || `${req.params.id}-copy`;
+      const recipe = recipeRegistry.duplicate(req.params.id, newId, req.body?.overrides || {});
+      if (!recipe) return res.status(404).json({ error: "source recipe not found" });
+      res.json({ recipe: recipeRegistry.toPublic(recipe) });
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/recipes/:id/clone", (req, res) => {
+    try {
+      const newId = req.body?.id;
+      const recipe = recipeRegistry.clone(req.params.id, newId, req.body?.overrides || {});
+      if (!recipe) return res.status(404).json({ error: "source recipe not found" });
+      res.json({ recipe: recipeRegistry.toPublic(recipe) });
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/recipes/:id/lifecycle", (req, res) => {
+    try {
+      const to = req.body?.to;
+      const recipe = recipeRegistry.transition(req.params.id, to, { note: req.body?.note });
+      activity.push({
+        kind: "lifecycle",
+        subject: recipe.id,
+        summary: `recipe lifecycle: ${recipe.lifecycleState}`,
+        meta: { to },
+      });
+      res.json({ recipe: recipeRegistry.toPublic(recipe) });
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message });
+    }
   });
 
   app.delete("/api/recipes/:id", (req, res) => {
@@ -403,26 +420,53 @@ export function createControlPlane(deps) {
     res.json({ recipe: recipeRegistry.toPublic(recipe) });
   });
 
-  app.post("/api/recipes/:id/clone", (req, res) => {
+  // ─── Routes: deployments (bindings + DRY-RUN lifecycle) ─
+  app.get("/api/deployments", (_req, res) => {
+    res.json({ deployments: deployments.listStates(), dryRun: true });
+  });
+
+  app.post("/api/deployments", (req, res) => {
     try {
-      const newId = req.body?.id;
-      const recipe = recipeRegistry.clone(req.params.id, newId, req.body?.overrides || {});
-      if (!recipe) return res.status(404).json({ error: "source recipe not found" });
-      res.json({ recipe: recipeRegistry.toPublic(recipe) });
+      const { modelId, recipeId, nodeIds, desiredState } = req.body || {};
+      const recipe = recipeRegistry.get(recipeId);
+      if (!recipe) return res.status(404).json({ error: "recipe not found" });
+      if (recipe.lifecycleState === "archived" || recipe.archived)
+        return res.status(409).json({ error: "recipe is archived — cannot back a new deployment" });
+      const model = modelRegistry.get(modelId);
+      if (!model) return res.status(404).json({ error: "model not found" });
+      if (model.archived) return res.status(409).json({ error: "model is archived" });
+      if (recipe.modelRef?.modelId !== modelId)
+        return res.status(400).json({ error: "recipe does not reference this model" });
+      const nodes = Array.isArray(nodeIds) ? nodeIds : [];
+      if (nodes.length < recipe.topology.minNodes || nodes.length > recipe.topology.maxNodes)
+        return res.status(400).json({
+          error: `topology ${recipe.topology.mode}${recipe.topology.parallelism} requires ${recipe.topology.minNodes}–${recipe.topology.maxNodes} node(s)`,
+        });
+      const known = new Set(sparkRegistry.sparkIds);
+      for (const n of nodes) if (!known.has(n)) return res.status(400).json({ error: `unknown node id: ${n}` });
+      const dep = deploymentRegistry.create({ modelId, recipeId, nodeIds: nodes, desiredState });
+      activity.push({
+        kind: "lifecycle",
+        subject: dep.id,
+        summary: `deployment bound: ${recipe.name} on ${nodes.join(", ")}`,
+        meta: { modelId, recipeId },
+      });
+      res.json({ deployment: dep, runtime: deployments.getState(dep.id) });
     } catch (err) {
       res.status(err.status || 400).json({ error: err.message });
     }
   });
 
-  // ─── Routes: deployments (DRY-RUN lifecycle) ───────────
-  app.get("/api/deployments", (_req, res) => {
-    res.json({ deployments: deployments.listStates(), dryRun: true });
+  app.delete("/api/deployments/:id", (req, res) => {
+    const result = deploymentRegistry.remove(req.params.id);
+    if (!result) return res.status(404).json({ error: "deployment not found" });
+    res.json(result);
   });
 
   for (const action of ["start", "stop", "restart"]) {
-    app.post(`/api/deployments/:recipeId/${action}`, requireLifecycleAuth, (req, res) => {
+    app.post(`/api/deployments/:id/${action}`, requireLifecycleAuth, (req, res) => {
       try {
-        const state = deployments.begin(req.params.recipeId, action, { actor: actorOf(req) });
+        const state = deployments.begin(req.params.id, action, { actor: actorOf(req) });
         res.status(202).json({ deployment: state, dryRun: true });
       } catch (err) {
         res.status(err.status || 400).json({ error: err.message });
@@ -449,7 +493,7 @@ export function createControlPlane(deps) {
     if (!recipe) return res.status(404).json({ error: "recipe not found" });
     res.json({
       recipeId: recipe.id,
-      logDir: recipe.logDir,
+      logDir: recipe.logSource?.path ?? null,
       ...liveConsole.status(recipe.id),
     });
   });
@@ -458,65 +502,60 @@ export function createControlPlane(deps) {
   const prevOnline = new Map();
   const seenBench = new Set();
 
-  // Desired-vs-observed probe cache. An unauthenticated 401/403 CLASSIFIES as
-  // auth-gated (the process is up and serving), never as stopped. The SSH
-  // pgrep corroboration is strictly read-only; nothing is signalled here.
   const PROBE_TTL_MS = 6000;
   const DISCOVERY_TTL_MS = 60_000;
-  /** recipeId -> { at: number, observed: string|null } */
+  /** deploymentId -> { at: number, observed: string|null } */
   const probeCache = new Map();
-  /** recipeId -> { at: number, value: boolean } */
+  /** deploymentId -> { at: number, value: boolean } */
   const discoveredCache = new Map();
   const discoveryInFlight = new Set();
 
-  /** Declared probe host for a recipe's primary node (same host rule as LlmProbe). */
-  function recipeHost(recipe) {
-    const spark = sparkRegistry.getSpark(recipe.nodeIds?.[0]);
+  /** Declared probe host for a deployment's primary node (same host rule as LlmProbe). */
+  function deploymentHost(dep) {
+    const spark = sparkRegistry.getSpark(dep.nodeIds?.[0]);
     return spark ? llmProbeHost(spark) : null;
   }
 
-  /** Fallback classification from the monitor snapshot (first tick / mid-refresh). */
+  function recipeForDeployment(dep) {
+    return recipeRegistry.get(dep.recipeId);
+  }
+
   function classifyFromSnapshot(recipe, snap) {
     const list = snap?.metrics?.llm || [];
-    const llm = list.find((l) => l.port === recipe.apiPort) || list[0];
+    const llm = list.find((l) => l.port === recipe?.endpoint?.port) || list[0];
     if (!llm) return "not-detected";
     if (llm.available === true) return "running";
-    // 401/403 posture from the existing probe: the endpoint answered but is gated.
     if (llm.posture?.auth === "protected") return "auth-gated";
     return classifyProbe({ status: null, errorCode: llm.errorCode, errorName: llm.errorName });
   }
 
-  /** Fire-and-forget refresh of the read-only probe + pgrep corroboration. */
   function refreshProbes() {
     const now = Date.now();
-    for (const recipe of recipeRegistry.list()) {
-      if (recipe.metadata?.managedBy !== "external") continue;
+    for (const dep of deploymentRegistry.list()) {
+      const recipe = recipeForDeployment(dep);
+      if (!recipe || recipe.metadata?.managedBy !== "external") continue;
 
-      const cached = probeCache.get(recipe.id);
+      const cached = probeCache.get(dep.id);
       if (!cached || now - cached.at >= PROBE_TTL_MS) {
-        const url = probeUrl(recipeHost(recipe), recipe.apiPort, recipe.healthPath);
-        probeCache.set(recipe.id, { at: now, observed: null });
+        const url = probeUrl(deploymentHost(dep), recipe.endpoint?.port, recipe.healthProbe?.path);
+        probeCache.set(dep.id, { at: now, observed: null });
         void probeEndpoint(url)
-          .then((outcome) => {
-            probeCache.set(recipe.id, { at: Date.now(), observed: classifyProbe(outcome) });
-          })
-          .catch(() => {
-            probeCache.set(recipe.id, { at: Date.now(), observed: "not-detected" });
-          });
+          .then((outcome) => probeCache.set(dep.id, { at: Date.now(), observed: classifyProbe(outcome) }))
+          .catch(() => probeCache.set(dep.id, { at: Date.now(), observed: "not-detected" }));
       }
 
-      const disc = discoveredCache.get(recipe.id);
-      if (discoveryInFlight.has(recipe.id)) continue;
+      const disc = discoveredCache.get(dep.id);
+      if (discoveryInFlight.has(dep.id)) continue;
       if (disc && now - disc.at < DISCOVERY_TTL_MS) continue;
-      const spark = sparkRegistry.getSpark(recipe.nodeIds?.[0]);
+      const spark = sparkRegistry.getSpark(dep.nodeIds?.[0]);
       if (!spark) continue;
-      discoveryInFlight.add(recipe.id);
-      sshExec(spark, "pgrep -f 'tabbyapi|vllm' >/dev/null 2>&1 && echo up || echo down", {
+      discoveryInFlight.add(dep.id);
+      sshExec(spark, "pgrep -f 'tabbyapi|vllm|sglang|llama' >/dev/null 2>&1 && echo up || echo down", {
         timeoutMs: 6000,
       })
-        .then((out) => discoveredCache.set(recipe.id, { at: Date.now(), value: /\bup\b/.test(out) }))
-        .catch(() => discoveredCache.set(recipe.id, { at: Date.now(), value: false }))
-        .finally(() => discoveryInFlight.delete(recipe.id));
+        .then((out) => discoveredCache.set(dep.id, { at: Date.now(), value: /\bup\b/.test(out) }))
+        .catch(() => discoveredCache.set(dep.id, { at: Date.now(), value: false }))
+        .finally(() => discoveryInFlight.delete(dep.id));
     }
   }
 
@@ -524,8 +563,10 @@ export function createControlPlane(deps) {
     refreshProbes();
 
     // 1) Externally-managed deployments: derive observed state from the probe.
-    for (const recipe of recipeRegistry.list()) {
-      const primary = monitors.get(recipe.nodeIds?.[0]);
+    for (const dep of deploymentRegistry.list()) {
+      const recipe = recipeForDeployment(dep);
+      if (!recipe) continue;
+      const primary = monitors.get(dep.nodeIds?.[0]);
       let observed = "not-detected";
       if (primary) {
         let snap = null;
@@ -536,13 +577,12 @@ export function createControlPlane(deps) {
         } catch {
           online = false;
         }
-        if (online) {
-          observed = probeCache.get(recipe.id)?.observed || classifyFromSnapshot(recipe, snap);
-        }
+        if (online) observed = probeCache.get(dep.id)?.observed || classifyFromSnapshot(recipe, snap);
       }
-      deployments.observe(recipe.id, {
+      dep.servedModelId = recipe.metadata?.servedModelId ?? null;
+      deployments.observe(dep.id, {
         observed,
-        discovered: discoveredCache.get(recipe.id)?.value === true,
+        discovered: discoveredCache.get(dep.id)?.value === true,
       });
     }
 
@@ -566,7 +606,7 @@ export function createControlPlane(deps) {
       prevOnline.set(id, online);
     }
 
-    // 3) Benchmark completions → activity events (real history entries only).
+    // 3) Benchmark completions → activity events.
     for (const [manager, label] of [
       [decodeBenchManager, "decode"],
       [prefillBenchManager, "prefill"],
@@ -589,7 +629,7 @@ export function createControlPlane(deps) {
       }
     }
 
-    // 4) Showcase sessions (real inference demos) → activity events.
+    // 4) Showcase sessions → activity events.
     if (showcaseManager?.historyBySpark) {
       for (const [sparkId, list] of showcaseManager.historyBySpark) {
         for (const rec of list) {
@@ -618,6 +658,7 @@ export function createControlPlane(deps) {
   return {
     modelRegistry,
     recipeRegistry,
+    deploymentRegistry,
     deployments,
     liveConsole,
     activity,
