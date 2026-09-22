@@ -332,6 +332,7 @@ function DashboardApp() {
                     navigate={navigate}
                     onEdit={() => setEditId(activeNode.id)}
                     onAddNode={() => setShowAdd(true)}
+                    onSaved={() => void cp.reload()}
                   />
                 ) : (
                   <div className="cp-panel">

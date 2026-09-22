@@ -43,6 +43,9 @@ const AUDIT_LOG_PATH = process.env.AUDIT_LOG_PATH || path.join(CONFIG_DIR, "audi
 /** Aggregated activity feed (bounded). */
 const ACTIVITY_LOG_PATH =
   process.env.ACTIVITY_LOG_PATH || path.join(CONFIG_DIR, "activity.jsonl");
+/** Discovered externally-launched runtimes (gitignored runtime state; never auto-adopted). */
+const DISCOVERED_JSON_PATH =
+  process.env.DISCOVERED_JSON_PATH || path.join(CONFIG_DIR, "discovered.json");
 /** Committed v2 seed files copied into config on first load with empty config. */
 const SEEDS_DIR = process.env.SPARKDASH_SEEDS_DIR || path.join(ROOT, "server", "seeds");
 
@@ -141,6 +144,7 @@ export {
   DEPLOYMENTS_ACTIVE_PATH,
   AUDIT_LOG_PATH,
   ACTIVITY_LOG_PATH,
+  DISCOVERED_JSON_PATH,
   SEEDS_DIR,
   LLM_PROBE_TIMEOUT_MS,
   COMFY_PROBE_TIMEOUT_MS,

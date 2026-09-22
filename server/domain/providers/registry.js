@@ -1,0 +1,84 @@
+/**
+ * Provider registry — the single place call sites ask instead of switching on
+ * a runtime string.
+ *
+ *   providerFor(runtime)              → RuntimeProvider (never null; external fallback)
+ *   detectRuntime(signals)            → runtime key | "custom"
+ *   healthClassify(runtime, outcome)  → observed vocabulary
+ *   servedModelIds(runtime, body)     → served model ids
+ *   renderLaunchCommand(recipe)       → DRY-RUN command string | null
+ *   parseLogLine / parseTelemetryLine → runtime-shaped log handling
+ *
+ * RUNTIME_TYPES is the canonical runtime enum (validate.js derives from it), so
+ * adding a runtime is a provider module — not a scattered edit.
+ */
+import { VllmProvider } from "./vllm.js";
+import { SglangProvider } from "./sglang.js";
+import { TabbyApiProvider } from "./tabbyapi.js";
+import { ExternalProvider } from "./external.js";
+
+const vllm = new VllmProvider();
+const sglang = new SglangProvider();
+const tabby = new TabbyApiProvider();
+const external = new ExternalProvider();
+
+/** Detection order: specific runtimes first, catch-all last. */
+const DETECTORS = [tabby, sglang, vllm, external];
+const ALL = [tabby, sglang, vllm, external];
+
+const byRuntime = new Map();
+for (const p of ALL) for (const r of p.runtimes) byRuntime.set(r, p);
+
+/** Canonical runtime keys, in stable order (validate.js derives its enum). */
+export const RUNTIME_TYPES = Object.freeze([
+  "tabbyapi-exl3",
+  "vllm",
+  "sglang",
+  "llama.cpp",
+  "custom",
+]);
+
+/** Provider serving a runtime key. External is the unconditional fallback. */
+export function providerFor(runtime) {
+  return byRuntime.get(runtime) || external;
+}
+
+/**
+ * Classify a runtime from probe signals. Always returns a runtime key.
+ * @param {{backendType?:string|null, ownedBy?:string|null, serverIsOpenAI?:boolean|null, shape?:unknown, port?:number|null}} signals
+ */
+export function detectRuntime(signals) {
+  for (const p of DETECTORS) {
+    const hit = p.detect(signals || {});
+    if (hit) return hit;
+  }
+  return "custom";
+}
+
+export function healthClassify(runtime, outcome) {
+  return providerFor(runtime).healthClassify(outcome);
+}
+
+export function modelsPath(runtime, signals) {
+  return providerFor(runtime).modelsPath(signals);
+}
+
+export function servedModelIds(runtime, body) {
+  return providerFor(runtime).servedModelIds(body);
+}
+
+export function renderLaunchCommand(recipe) {
+  return providerFor(recipe?.engine?.runtime ?? recipe?.runtime).renderLaunchCommand(recipe);
+}
+
+export function parseLogLine(runtime, raw) {
+  return providerFor(runtime).parseLogLine(raw);
+}
+
+export function parseTelemetryLine(runtime, msg) {
+  return providerFor(runtime).parseTelemetryLine(msg);
+}
+
+export function providerLabel(runtime) {
+  return providerFor(runtime).label;
+}

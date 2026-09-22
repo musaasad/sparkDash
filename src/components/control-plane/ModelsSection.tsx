@@ -23,6 +23,7 @@ import {
   type DeploymentView,
 } from "./fleetModel";
 import { ExternalConnectPanel } from "./ModelDetail";
+import { DiscoveredRuntimes } from "./DiscoveredRuntimes";
 
 interface ModelsProps {
   models: ModelEntry[];
@@ -259,6 +260,9 @@ export function ModelsSection({ models, recipes, deployments, navigate, onSaved,
           </FormFooter>
         </div>
       ) : null}
+
+      {/* Discovered externally-launched runtimes — no band when nothing new */}
+      <DiscoveredRuntimes sparks={sparks} recipes={recipes} onSaved={onSaved} />
 
       {/* Deployments — counted tabs replace a repeated status column */}
       <div className="cp-section-block">

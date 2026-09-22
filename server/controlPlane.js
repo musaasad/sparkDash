@@ -24,7 +24,9 @@ import { DeploymentService } from "./deployments/DeploymentService.js";
 import { LiveConsoleManager } from "./collectors/LiveConsole.js";
 import { ActivityLog } from "./activity/ActivityLog.js";
 import { createRateLimiter } from "./validate.js";
-import { classifyProbe, probeEndpoint, probeUrl } from "./deployments/deploymentStatus.js";
+import { probeEndpoint, probeUrl } from "./deployments/deploymentStatus.js";
+import { detectRuntime, healthClassify } from "./domain/providers/registry.js";
+import { DiscoveryService } from "./domain/discovery.js";
 import { sshExec } from "./collectors/ssh.js";
 import { llmProbeHost } from "./collectors/llmHost.js";
 import {
@@ -132,6 +134,16 @@ export function createControlPlane(deps) {
         });
       }
     },
+  });
+
+  // ─── Discovery (read-only) + adoption (config-only) ────
+  const discovery = new DiscoveryService({
+    sparkRegistry,
+    recipeRegistry,
+    deploymentRegistry,
+    modelRegistry,
+    fetchImpl: deps.fetchImpl || fetch,
+    sshExecFn: sshExec,
   });
 
   // ─── Live Console ──────────────────────────────────────
@@ -463,6 +475,32 @@ export function createControlPlane(deps) {
     res.json(result);
   });
 
+  // ─── Routes: discovery + adoption (read-only scan, config-only adopt) ─
+  app.get("/api/discovery", (req, res) => {
+    const includeAdopted = req.query.includeAdopted !== "0";
+    res.json({ discovered: discovery.list({ includeAdopted }), readOnly: true });
+  });
+
+  app.post("/api/discovery/:id/adopt", (req, res) => {
+    try {
+      const result = discovery.adopt(req.params.id, req.body || {});
+      activity.push({
+        kind: "lifecycle",
+        subject: req.params.id,
+        summary: `discovered runtime adopted (${result.mode}) → ${result.recipe.id}`,
+        meta: {
+          nodeId: result.provenance.nodeId,
+          port: result.provenance.port,
+          deploymentId: result.deployment.id,
+          dryRun: true,
+        },
+      });
+      res.json(result);
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message });
+    }
+  });
+
   for (const action of ["start", "stop", "restart"]) {
     app.post(`/api/deployments/:id/${action}`, requireLifecycleAuth, (req, res) => {
       try {
@@ -526,7 +564,9 @@ export function createControlPlane(deps) {
     if (!llm) return "not-detected";
     if (llm.available === true) return "running";
     if (llm.posture?.auth === "protected") return "auth-gated";
-    return classifyProbe({ status: null, errorCode: llm.errorCode, errorName: llm.errorName });
+    // Runtime classification is PROVIDER-owned; WS-1 classify semantics stay.
+    const runtime = detectRuntime({ backendType: llm.backend, port: recipe?.endpoint?.port });
+    return healthClassify(runtime, { status: null, errorCode: llm.errorCode, errorName: llm.errorName });
   }
 
   function refreshProbes() {
@@ -539,8 +579,11 @@ export function createControlPlane(deps) {
       if (!cached || now - cached.at >= PROBE_TTL_MS) {
         const url = probeUrl(deploymentHost(dep), recipe.endpoint?.port, recipe.healthProbe?.path);
         probeCache.set(dep.id, { at: now, observed: null });
+        const runtime = recipe.engine?.runtime ?? recipe.runtime;
         void probeEndpoint(url)
-          .then((outcome) => probeCache.set(dep.id, { at: Date.now(), observed: classifyProbe(outcome) }))
+          .then((outcome) =>
+            probeCache.set(dep.id, { at: Date.now(), observed: healthClassify(runtime, outcome) })
+          )
           .catch(() => probeCache.set(dep.id, { at: Date.now(), observed: "not-detected" }));
       }
 
@@ -561,6 +604,8 @@ export function createControlPlane(deps) {
 
   function observeFleet() {
     refreshProbes();
+    // Read-only discovery scan (TTL-guarded internally): GET /v1/models + pgrep.
+    void discovery.scan();
 
     // 1) Externally-managed deployments: derive observed state from the probe.
     for (const dep of deploymentRegistry.list()) {
@@ -660,6 +705,7 @@ export function createControlPlane(deps) {
     recipeRegistry,
     deploymentRegistry,
     deployments,
+    discovery,
     liveConsole,
     activity,
     handleWsMessage,

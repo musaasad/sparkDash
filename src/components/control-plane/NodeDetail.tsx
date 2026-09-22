@@ -12,6 +12,7 @@ import { useTimedMetricsHistory } from "../../hooks/metricsStore";
 import { recipesOnNode, relativeAge, externalConnectView, runtimeLabel } from "./fleetModel";
 import { LiveConsole } from "./LiveConsole";
 import { ExternalConnectPanel } from "./ModelDetail";
+import { DiscoveredRuntimes } from "./DiscoveredRuntimes";
 
 interface NodeDetailProps {
   spark: SparkSnapshot;
@@ -23,6 +24,8 @@ interface NodeDetailProps {
   navigate: (route: Route) => void;
   onEdit: () => void;
   onAddNode: () => void;
+  /** Reload control-plane entities after a discovery adoption (config-only). */
+  onSaved?: () => void;
 }
 
 const TABS = ["Overview", "GPUs", "Models", "Logs", "Settings"] as const;
@@ -53,6 +56,7 @@ export function NodeDetail({
   navigate,
   onEdit,
   onAddNode,
+  onSaved = () => {},
 }: NodeDetailProps) {
   const [tab, setTab] = useState<Tab>("Overview");
   const [windowMs, setWindowMs] = useState(30 * 60_000);
@@ -134,6 +138,8 @@ export function NodeDetail({
 
       {tab === "Overview" ? (
         <div id="node-panel-Overview" role="tabpanel" aria-labelledby="node-panel-Overview-tab" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {/* Discovered externally-launched runtimes on this node */}
+          <DiscoveredRuntimes sparks={allSparks} nodeId={spark.id} recipes={recipes} onSaved={onSaved} />
           <div className="cp-panel">
             <div className="cp-panel-title">
               <span>Node health · last {windowMs / 60_000}m</span>

@@ -1,5 +1,6 @@
 import dns from "node:dns/promises";
 import net from "node:net";
+import { RUNTIME_TYPES } from "./domain/providers/registry.js";
 
 /**
  * Input validation for Spark targets (host / user / lanIp).
@@ -292,13 +293,9 @@ export function isValidNoteText(t) {
   return typeof t === "string" && t.length <= 4096 && !/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(t);
 }
 
-export const RECIPE_RUNTIMES = Object.freeze([
-  "tabbyapi-exl3",
-  "vllm",
-  "sglang",
-  "llama.cpp",
-  "custom",
-]);
+// Provider-derived runtime enum (server/domain/providers/registry.js): a new
+// runtime is a provider module, not an edit here or in a scattered switch.
+export const RECIPE_RUNTIMES = RUNTIME_TYPES;
 
 export const RECIPE_TOPOLOGIES = Object.freeze(["single", "tp2", "tp3"]);
 

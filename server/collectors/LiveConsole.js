@@ -20,65 +20,30 @@
 import { spawn } from "child_process";
 import { shlexQuote } from "../util/shlex.js";
 import { isValidPosixPath } from "../validate.js";
+import { providerFor } from "../domain/providers/registry.js";
+import { TabbyApiProvider } from "../domain/providers/tabbyapi.js";
 
 const MAX_BUFFERED_LINES = 2000;
 const MAX_TELEMETRY_ROWS = 500;
 const TAIL_INITIAL_LINES = 400;
 
-const num = (s) => Number(String(s).replace(/,/g, ""));
-
-/** Parse one loguru line: `2026-09-21 20:36:55.347 | INFO     | message` */
-export function parseLoguruLine(raw) {
-  const m = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})\.(\d{3})\s*\|\s*(\w+)\s*\|\s*(.*)$/.exec(raw);
-  if (!m) return { ts: null, level: "raw", msg: raw, raw };
-  return { ts: `${m[1]}T${m[2]}.${m[3]}`, level: m[4].toUpperCase(), msg: m[5], raw };
-}
-
-const RE_START = /^#(\d+)\s+[^:]+:\s+([\d,]+)\s+prompt tokens(?:.*?temperature:\s*([\d.]+))?/;
-const RE_TOOL = /^#(\d+)\s+[^:]+:\s+parsed\s+(\d+)\s+tool calls?\s*(?:\((\w+)\))?/;
-const RE_COMPLETE =
-  /^#(\d+)\s+[^:]+:\s+([\d,]+)\s+tokens generated at\s+([\d.]+)\s*T\/s\s*·\s*prompt\s+([\d,]+)\s+tokens,\s*(\d+)%\s+cached,\s*([\d,]+)\s+new in\s+([\d.]+)\s*s\s*\((\d+)\s*T\/s\)\s*·\s*first token\s+([\d.]+)\s*s,\s*total\s+([\d.]+)\s*s(?:\s*·\s*draft\s+(\d+)\/(\d+)\s+accepted\s+\((\d+)%\))?/;
-const RE_ERRORISH = /\b(error|exception|traceback|failed|abort)/i;
+/** Default (TabbyAPI-shaped) provider used by the exported parse helpers. */
+const tabby = new TabbyApiProvider();
 
 /**
- * Parse one message body into a telemetry event, or null when it is not a
- * request-lifecycle line. Pure function — unit-tested against real log lines.
+ * Parse one loguru line. Shaping now lives behind the provider; the collector
+ * stays generic. Kept exported (back-compat) for existing tests/consumers.
  */
-export function parseTelemetryLine(msg) {
-  let m = RE_COMPLETE.exec(msg);
-  if (m) {
-    return {
-      phase: "complete",
-      reqId: Number(m[1]),
-      generatedTokens: num(m[2]),
-      decodeTps: Number(m[3]),
-      promptTokens: num(m[4]),
-      cachedPct: Number(m[5]),
-      newPromptTokens: num(m[6]),
-      prefillSeconds: Number(m[7]),
-      prefillTps: Number(m[8]),
-      ttftSeconds: Number(m[9]),
-      totalSeconds: Number(m[10]),
-      draftAccepted: m[11] != null ? Number(m[11]) : null,
-      draftAttempted: m[12] != null ? Number(m[12]) : null,
-      draftPct: m[13] != null ? Number(m[13]) : null,
-    };
-  }
-  m = RE_START.exec(msg);
-  if (m) {
-    return {
-      phase: "start",
-      reqId: Number(m[1]),
-      promptTokens: num(m[2]),
-      temperature: m[3] != null ? Number(m[3]) : null,
-    };
-  }
-  m = RE_TOOL.exec(msg);
-  if (m) {
-    return { phase: "tool", reqId: Number(m[1]), toolCalls: Number(m[2]), toolFormat: m[3] || null };
-  }
-  return null;
+export function parseLoguruLine(raw) {
+  return tabby.parseLogLine(raw);
 }
+
+/** Parse one TabbyAPI telemetry payload. Kept exported for back-compat. */
+export function parseTelemetryLine(msg) {
+  return tabby.parseTelemetryLine(msg);
+}
+
+const RE_ERRORISH = /\b(error|exception|traceback|failed|abort)/i;
 
 /** Merge parsed events into per-request telemetry rows (newest first). */
 export class TelemetryAggregator {
@@ -290,14 +255,17 @@ export class LiveConsoleManager {
   _ingest(recipeId, rawLine) {
     if (rawLine === "") return;
     const s = this._stream(recipeId);
-    const line = parseLoguruLine(rawLine);
+    const recipe = this.recipeRegistry.get(recipeId);
+    // Log/telemetry shaping is provider-owned; the collector stays generic.
+    const provider = providerFor(recipe?.engine?.runtime ?? recipe?.runtime);
+    const line = provider.parseLogLine(rawLine);
     if (line.level === "RAW" || line.level === "raw") line.level = "info";
-    if (line.level === "info" && RE_ERRORISH.test(line.msg) && !parseTelemetryLine(line.msg)) {
+    if (line.level === "info" && RE_ERRORISH.test(line.msg) && !provider.parseTelemetryLine(line.msg)) {
       line.level = "warn";
     }
     s.lines.push(line);
     while (s.lines.length > MAX_BUFFERED_LINES) s.lines.shift();
-    const event = parseTelemetryLine(line.msg);
+    const event = provider.parseTelemetryLine(line.msg);
     const row = event ? s.telemetry.apply(event, line.ts) : null;
     for (const sub of s.subscribers) {
       try {

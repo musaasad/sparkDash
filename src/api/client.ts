@@ -454,6 +454,9 @@ import type {
   DeploymentDesired,
   ActivityEvent,
   AuditEntry,
+  DiscoveryResponse,
+  AdoptDiscoveryRequest,
+  AdoptDiscoveryResult,
 } from "./types";
 
 export function fetchModels(includeArchived = false): Promise<{ models: ModelEntry[] }> {
@@ -569,4 +572,18 @@ export function fetchConsoleStatus(recipeId: string): Promise<{
   startedAt: number | null;
 }> {
   return apiFetch(`/api/console/${encodeURIComponent(recipeId)}/status`);
+}
+
+// ─── Control plane: discovery + adoption (read-only scan, config-only adopt) ─
+/** Discovered externally-launched runtimes (alreadyAdopted included). */
+export function fetchDiscovery(includeAdopted = true): Promise<DiscoveryResponse> {
+  return apiFetch(`/api/discovery${includeAdopted ? "" : "?includeAdopted=0"}`);
+}
+
+/** Adopt a discovered runtime — writes config only; the process is untouched. */
+export function adoptDiscovered(id: string, body: AdoptDiscoveryRequest): Promise<AdoptDiscoveryResult> {
+  return apiFetch(`/api/discovery/${encodeURIComponent(id)}/adopt`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }

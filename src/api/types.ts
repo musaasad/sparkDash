@@ -1119,6 +1119,58 @@ export interface DeploymentStatus {
   updatedAt: number;
 }
 
+/**
+ * One externally-launched serving runtime found by the read-only discovery
+ * scan. `alreadyAdopted` is correlation against existing deployments — an
+ * uncovered endpoint is what surfaces as a Discovered runtime.
+ */
+export interface DiscoveredRuntime {
+  id: string;
+  nodeId: string;
+  port: number;
+  servedModelIds: string[];
+  runtime: RecipeRuntime;
+  health: DeploymentObserved;
+  /** Read-only pgrep corroboration; never process control. */
+  processEvidence: boolean | null;
+  endpoint: string;
+  detectedAt: number;
+  adoptedAt: number | null;
+  adoptionMode: "associate" | "create" | null;
+  alreadyAdopted: boolean;
+  matchedModelId: string | null;
+  matchedRecipeId: string | null;
+}
+
+export interface DiscoveryResponse {
+  discovered: DiscoveredRuntime[];
+  readOnly: boolean;
+}
+
+/** Adopt a discovered runtime — config-only, never starts/stops the process. */
+export interface AdoptDiscoveryRequest {
+  mode: "associate" | "create";
+  /** mode=associate */
+  modelId?: string;
+  recipeId?: string;
+  /** mode=create */
+  modelName?: string;
+  recipeDraft?: Record<string, unknown>;
+  /** Optional extra nodes to bind. */
+  nodeIds?: string[];
+}
+
+export interface AdoptDiscoveryResult {
+  mode: "associate" | "create";
+  ok: boolean;
+  dryRun: boolean;
+  model: ModelEntry;
+  recipe: RecipePublic;
+  deployment: DeploymentBinding;
+  provenance: Record<string, unknown>;
+  note: string;
+}
+
 export interface ActivityEvent {
   seq: number;
   ts: string;

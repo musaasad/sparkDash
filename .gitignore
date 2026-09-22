@@ -36,4 +36,5 @@ config/deployments.json
 config/deployments-active.json
 config/audit.jsonl
 config/activity.jsonl
+config/discovered.json
 config/*.v1.bak
