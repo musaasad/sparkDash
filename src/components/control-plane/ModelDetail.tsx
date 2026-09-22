@@ -1,14 +1,28 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ModelEntry, RecipePublic, DeploymentStatus, SparkSnapshot } from "../../api/types";
 import type { Route } from "../../hooks/router";
-import { fetchModel, archiveRecipe, cloneRecipe, fetchActivity } from "../../api/client";
+import {
+  fetchModel,
+  archiveModel,
+  archiveRecipe,
+  restoreModel,
+  restoreRecipe,
+  duplicateRecipe,
+  validateRecipe,
+  recipeLifecycle,
+  createDeployment,
+  deleteDeployment,
+  listDecodeBench,
+  fetchActivity,
+  fetchRuntimes,
+} from "../../api/client";
 import { useDeployments } from "../../hooks/domainStore";
-import { StatusPill, Chip, EmptyState, LifecycleBadge } from "../ui/Status";
+import { StatusPill, Chip, EmptyState, LifecycleBadge, StatusDot } from "../ui/Status";
 import { Modal } from "../ui/Modal";
 import { TabStrip, CopyId } from "../ui/DataTable";
 import { Breadcrumb } from "../ui/Breadcrumb";
 import { PageHeader } from "../ui/PageHeader";
-import { Field, TextInput, FormFooter } from "../ui/form";
+import { Field, TextInput, TextArea } from "../ui/form";
 import { RecipeEditor } from "./RecipeEditor";
 import { DeployControls } from "./DeployControls";
 import { LiveConsole } from "./LiveConsole";
@@ -16,7 +30,7 @@ import { TimeSeriesChart, RangePicker, type Series } from "../ui/TimeSeriesChart
 import { useTimedMetricsHistory } from "../../hooks/metricsStore";
 import { externalConnectView, runtimeLabel, type ExternalConnect } from "./fleetModel";
 
-const TABS = ["Overview", "Performance", "Live Console", "Recipes", "Configuration", "History"] as const;
+const TABS = ["Overview", "Recipes", "Deployments", "Live Console", "Benchmarks", "Performance", "Configuration", "History"] as const;
 type Tab = (typeof TABS)[number];
 
 function copyText(text: string) {
@@ -98,8 +112,17 @@ export function ModelDetail({ modelId, initialTab, initialReqId, sparks, navigat
   const [recipes, setRecipes] = useState<RecipePublic[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>(normalizeTab(initialTab));
-  const [editing, setEditing] = useState<RecipePublic | "new" | null>(null);
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [archiveBusy, setArchiveBusy] = useState(false);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
+  const [runtimes, setRuntimes] = useState<{ id: RecipePublic["runtime"]; label: string }[]>([]);
   const deployments = useDeployments();
+
+  useEffect(() => {
+    fetchRuntimes()
+      .then((r) => setRuntimes(r.runtimes))
+      .catch(() => {});
+  }, []);
 
   const load = async () => {
     try {
@@ -114,18 +137,26 @@ export function ModelDetail({ modelId, initialTab, initialReqId, sparks, navigat
 
   useEffect(() => {
     void load();
-    setEditing(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modelId]);
 
   const deps = useMemo(() => deployments.filter((d) => d.modelId === modelId), [deployments, modelId]);
   const primaryRecipe = recipes.find((r) => !r.archived) ?? null;
   const primaryDep = deps.find((d) => d.recipeId === primaryRecipe?.id) ?? deps[0];
+  const liveRecipes = useMemo(() => recipes.filter((r) => !r.archived), [recipes]);
 
   if (error && !model) {
     return (
       <div className="cp-panel">
-        <EmptyState title="Model not found" subtitle={error} action={<button type="button" className="cp-btn" onClick={() => navigate({ section: "models" })}>← All models</button>} />
+        <EmptyState
+          title="Model not found"
+          subtitle={error}
+          action={
+            <button type="button" className="cp-btn" onClick={() => navigate({ section: "models" })}>
+              ← All models
+            </button>
+          }
+        />
       </div>
     );
   }
@@ -140,21 +171,75 @@ export function ModelDetail({ modelId, initialTab, initialReqId, sparks, navigat
       <PageHeader
         title={model?.name ?? "…"}
         subtitle={model?.family ? `${model.family} · ${modelId}` : modelId}
-        actions={primaryDep ? <StatusPill status={primaryDep.display} /> : <Chip>not deployed</Chip>}
+        actions={
+          <>
+            {model?.archived ? <Chip>archived · weights kept</Chip> : null}
+            {primaryDep ? <StatusPill status={primaryDep.display} /> : <Chip>not deployed</Chip>}
+          </>
+        }
+        overflow={
+          <>
+            {model?.archived ? (
+              <button
+                type="button"
+                className="cp-btn ghost"
+                onClick={async () => {
+                  try {
+                    await restoreModel(modelId);
+                    await load();
+                    onDataChanged();
+                  } catch (err) {
+                    setArchiveError(err instanceof Error ? err.message : String(err));
+                  }
+                }}
+              >
+                Restore model
+              </button>
+            ) : (
+              <button type="button" className="cp-btn ghost danger" onClick={() => setArchiveOpen(true)}>
+                Archive model
+              </button>
+            )}
+            <button type="button" className="cp-btn ghost" disabled title="Destructive storage deletion is a separate future action">
+              Delete weights
+            </button>
+          </>
+        }
       />
 
       <TabStrip tabs={TABS} active={tab} onSelect={setTab} ariaLabel="Model sections" panelId="model-panel" />
 
+      {/* Overview: deployment summary for the primary recipe, external connect, read-only notes */}
       {tab === "Overview" ? (
         <div id="model-panel-Overview" role="tabpanel" aria-labelledby="model-panel-Overview-tab">
           <OverviewTab model={model} recipes={recipes} deps={deps} sparks={sparks} onDeployChanged={() => { void load(); onDataChanged(); }} />
         </div>
       ) : null}
-      {tab === "Performance" ? (
-        <div id="model-panel-Performance" role="tabpanel" aria-labelledby="model-panel-Performance-tab">
-          <PerformanceTab sparks={sparks} recipe={primaryRecipe} />
+
+      {/* Recipes — first-class reusable protected assets */}
+      {tab === "Recipes" ? (
+        <div id="model-panel-Recipes" role="tabpanel" aria-labelledby="model-panel-Recipes-tab">
+          <RecipesTab
+            recipes={recipes}
+            sparks={sparks}
+            runtimes={runtimes}
+            modelId={modelId}
+            navigate={navigate}
+            onChanged={() => {
+              void load();
+              onDataChanged();
+            }}
+          />
         </div>
       ) : null}
+
+      {/* Deployments — WS-1 bindings for this model's recipes */}
+      {tab === "Deployments" ? (
+        <div id="model-panel-Deployments" role="tabpanel" aria-labelledby="model-panel-Deployments-tab">
+          <DeploymentsTab deps={deps} recipes={recipes} sparks={sparks} navigate={navigate} onChanged={() => { void load(); onDataChanged(); }} />
+        </div>
+      ) : null}
+
       {tab === "Live Console" ? (
         <div id="model-panel-Live Console" role="tabpanel" aria-labelledby="model-panel-Live Console-tab">
           {primaryRecipe ? (
@@ -166,32 +251,75 @@ export function ModelDetail({ modelId, initialTab, initialReqId, sparks, navigat
           )}
         </div>
       ) : null}
-      {tab === "Recipes" ? (
-        <div id="model-panel-Recipes" role="tabpanel" aria-labelledby="model-panel-Recipes-tab">
-          <RecipesTab
-            recipes={recipes}
-            deps={deps}
-            editing={editing}
-            setEditing={setEditing}
-            sparks={sparks}
-            modelId={modelId}
-            onChanged={() => {
-              void load();
-              onDataChanged();
-            }}
-          />
+
+      {tab === "Benchmarks" ? (
+        <div id="model-panel-Benchmarks" role="tabpanel" aria-labelledby="model-panel-Benchmarks-tab">
+          <BenchmarksTab recipes={liveRecipes} sparks={sparks} navigate={navigate} />
         </div>
       ) : null}
+
+      {tab === "Performance" ? (
+        <div id="model-panel-Performance" role="tabpanel" aria-labelledby="model-panel-Performance-tab">
+          <PerformanceTab sparks={sparks} recipe={primaryRecipe} />
+        </div>
+      ) : null}
+
       {tab === "Configuration" ? (
         <div id="model-panel-Configuration" role="tabpanel" aria-labelledby="model-panel-Configuration-tab">
           <ConfigTab model={model} recipe={primaryRecipe} />
         </div>
       ) : null}
+
       {tab === "History" ? (
         <div id="model-panel-History" role="tabpanel" aria-labelledby="model-panel-History-tab">
           <HistoryTab modelId={modelId} />
         </div>
       ) : null}
+
+      <Modal
+        open={archiveOpen}
+        title={`Archive model "${model?.name ?? modelId}"?`}
+        consequence="Sets the archived flag so the model leaves active lists. WEIGHTS ARE NEVER DELETED — files stay exactly where they are."
+        info="Archived models cannot back new deployments. Restore clears the flag."
+        confirmLabel="Archive model"
+        tone="danger"
+        busy={archiveBusy}
+        onClose={() => setArchiveOpen(false)}
+        onConfirm={async () => {
+          setArchiveBusy(true);
+          setArchiveError(null);
+          try {
+            await archiveModel(modelId);
+            setArchiveOpen(false);
+            await load();
+            onDataChanged();
+          } catch (err) {
+            setArchiveError(err instanceof Error ? err.message : String(err));
+          } finally {
+            setArchiveBusy(false);
+          }
+        }}
+      >
+        <div className="cp-kv">
+          <dt>recipes kept</dt>
+          <dd>{recipes.length}</dd>
+          <dt>deployments kept</dt>
+          <dd>{deps.length}</dd>
+          <dt>weight files</dt>
+          <dd className="mono">untouched</dd>
+          {recipes.length || deps.length ? (
+            <>
+              <dt>hard delete</dt>
+              <dd>blocked while referenced — archive instead (WS-1 rule)</dd>
+            </>
+          ) : null}
+        </div>
+        {archiveError ? (
+          <div className="cp-field-error" role="alert">
+            {archiveError}
+          </div>
+        ) : null}
+      </Modal>
     </div>
   );
 }
@@ -231,15 +359,18 @@ function OverviewTab({
               <dt>Recipe</dt>
               <dd>{primary.name}</dd>
               <dt>Runtime</dt>
-              <dd>{primary.runtime}</dd>
+              <dd>{runtimeLabel(primary.engine?.runtime ?? primary.runtime)}</dd>
               <dt>Topology</dt>
-              <dd>{primary.topology}</dd>
+              <dd>
+                {primary.topologyBlock?.mode ?? primary.topology}
+                {primary.topologyBlock?.mode && primary.topologyBlock.mode !== "single" ? `×${primary.topologyBlock.parallelism}` : ""}
+              </dd>
               <dt>Nodes</dt>
               <dd>{nodeNames.join(", ") || "—"}</dd>
               <dt>API port</dt>
-              <dd>{primary.apiPort}</dd>
+              <dd>{primary.endpoint?.port ?? primary.apiPort}</dd>
               <dt>Context</dt>
-              <dd>{primary.contextLength != null ? primary.contextLength.toLocaleString() : "—"}</dd>
+              <dd>{primary.serving?.contextLength != null ? primary.serving.contextLength.toLocaleString() : "—"}</dd>
             </dl>
             {connect ? <ExternalConnectPanel connect={connect} recipe={primary} /> : null}
             <div style={{ marginTop: 14 }}>
@@ -247,7 +378,7 @@ function OverviewTab({
             </div>
           </>
         ) : (
-          <EmptyState title="No deployment recipe" subtitle="Create a recipe to describe how this model runs." />
+          <EmptyState title="No deployment recipe" subtitle="Open the Recipes tab to create one for this model." />
         )}
       </div>
       <div className="cp-panel">
@@ -282,7 +413,7 @@ function PerformanceTab({ sparks, recipe }: { sparks: SparkSnapshot[]; recipe: R
   const [windowMs, setWindowMs] = useState(30 * 60_000);
   const nodeId = recipe?.nodeIds[0];
   const node = sparks.find((s) => s.id === nodeId);
-  const port = recipe?.apiPort;
+  const port = recipe?.endpoint?.port ?? recipe?.apiPort;
   // LLM metrics are index-aligned with snapshot.llmPorts (LlmMetrics has no port field).
   const portIdx = node?.llmPorts?.indexOf(port ?? -1) ?? -1;
   const llm = node?.metrics?.llm?.[portIdx >= 0 ? portIdx : 0];
@@ -325,24 +456,59 @@ function Metric({ label, value }: { label: string; value: string }) {
 }
 
 // ─── Recipes tab ──────────────────────────────────────────
+
+/** Legal onward lifecycle steps per current state (WS-1 state machine). */
+function onwardSteps(state: RecipePublic["lifecycleState"]): { to: "validated" | "proven" | "deprecated" | "archived"; label: string }[] {
+  switch (state) {
+    case "draft":
+      return [
+        { to: "validated", label: "Validate → Validated" },
+        { to: "deprecated", label: "Deprecate" },
+      ];
+    case "validated":
+      return [
+        { to: "proven", label: "Mark Proven" },
+        { to: "deprecated", label: "Deprecate" },
+      ];
+    case "proven":
+    case undefined:
+      return [{ to: "deprecated", label: "Deprecate" }];
+    case "deprecated":
+      return [{ to: "archived", label: "Archive" }];
+    default:
+      return [];
+  }
+}
+
 function RecipesTab({
   recipes,
-  deps,
-  editing,
-  setEditing,
   sparks,
+  runtimes,
   modelId,
+  navigate,
   onChanged,
 }: {
   recipes: RecipePublic[];
-  deps: DeploymentStatus[];
-  editing: RecipePublic | "new" | null;
-  setEditing: (r: RecipePublic | "new" | null) => void;
   sparks: SparkSnapshot[];
+  runtimes: { id: RecipePublic["runtime"]; label: string }[];
   modelId: string;
+  navigate: (route: Route) => void;
   onChanged: () => void;
 }) {
-  const [archiveTarget, setArchiveTarget] = useState<RecipePublic | null>(null);
+  const [editing, setEditing] = useState<RecipePublic | "new" | null>(null);
+  const [dupeTarget, setDupeTarget] = useState<RecipePublic | null>(null);
+  const [dupeId, setDupeId] = useState("");
+  const [dupeBusy, setDupeBusy] = useState(false);
+  const [deployTarget, setDeployTarget] = useState<RecipePublic | null>(null);
+  const [deployNodes, setDeployNodes] = useState<string[]>([]);
+  const [deployBusy, setDeployBusy] = useState(false);
+  const [lifeTarget, setLifeTarget] = useState<{ recipe: RecipePublic; to: "validated" | "proven" | "deprecated" | "archived" } | null>(null);
+  const [lifeNote, setLifeNote] = useState("");
+  const [lifeBusy, setLifeBusy] = useState(false);
+  const [errors, setErrors] = useState<string[]>([]);
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [openKebab, setOpenKebab] = useState<string | null>(null);
+
   if (editing) {
     return (
       <div className="cp-panel">
@@ -350,6 +516,7 @@ function RecipesTab({
           modelId={modelId}
           existing={editing === "new" ? null : editing}
           sparks={sparks}
+          runtimes={runtimes}
           onSaved={() => {
             setEditing(null);
             onChanged();
@@ -360,94 +527,520 @@ function RecipesTab({
     );
   }
 
+  const bounds = (r: RecipePublic) => {
+    const b = r.topologyBlock;
+    if (!b || b.mode === "single") return { min: 1, max: 1 };
+    const min = b.minNodes ?? b.parallelism ?? 1;
+    return { min, max: Math.max(min, b.maxNodes ?? min) };
+  };
+
+  function openDeploy(r: RecipePublic) {
+    if (r.lifecycleState === "archived" || r.archived) return;
+    const b = bounds(r);
+    setDeployTarget(r);
+    setDeployNodes(r.nodeIds.slice(0, b.max));
+    setErrors([]);
+  }
+
+  const deployBounds = deployTarget ? bounds(deployTarget) : { min: 1, max: 1 };
+
+  async function runValidate(r: RecipePublic) {
+    setOpenKebab(null);
+    setErrors([]);
+    setWarnings([]);
+    try {
+      const res = await validateRecipe(r.id, r.nodeIds);
+      setErrors(res.errors.map((e) => `${r.name}: ${e}`));
+      setWarnings(res.warnings.map((w) => `${r.name}: ${w}`));
+    } catch (err) {
+      setErrors([err instanceof Error ? err.message : String(err)]);
+    }
+  }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span className="muted" style={{ fontSize: 12 }}>
+          Recipes are protected reusable assets — duplicating never touches the proven original.
+        </span>
         <button type="button" className="cp-btn primary" onClick={() => setEditing("new")}>
           + New recipe
         </button>
       </div>
+
+      {errors.length > 0 ? (
+        <div className="cp-panel" style={{ borderColor: "var(--color-danger)" }} role="alert">
+          {errors.map((e, i) => (
+            <div key={i} className="cp-field-error">
+              {e}
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {warnings.length > 0 ? (
+        <div className="cp-panel" style={{ borderColor: "var(--color-warning)" }}>
+          {warnings.map((w, i) => (
+            <div key={i} style={{ fontSize: 11, color: "var(--color-warning)" }}>
+              {w}
+            </div>
+          ))}
+        </div>
+      ) : null}
+
       {recipes.length === 0 ? (
         <div className="cp-panel">
           <EmptyState title="No recipes" subtitle="A recipe describes runtime, paths, topology, ports, env and launcher metadata." />
         </div>
       ) : (
         recipes.map((r) => {
-          const dep = deps.find((d) => d.recipeId === r.id);
+          const b = bounds(r);
+          const archived = r.archived || r.lifecycleState === "archived";
           return (
             <div key={r.id} className="cp-panel">
               <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                 <span style={{ fontWeight: 600, fontSize: 13 }}>{r.name}</span>
-                <Chip>{r.runtime}</Chip>
-                <Chip>{r.topology}</Chip>
-                <Chip tone="mono">{r.nodeIds.join(", ")}</Chip>
-                <Chip tone="mono">:{r.apiPort}</Chip>
-                {r.archived ? <Chip>archived</Chip> : null}
-                {dep ? <StatusPill status={dep.display} /> : null}
-                <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-                  <button type="button" className="cp-btn ghost" onClick={() => setEditing(r)}>
-                    Edit
+                {r.lifecycleState ? <LifecycleBadge state={r.lifecycleState} /> : r.archived ? <Chip>archived</Chip> : null}
+                <Chip tone="accent">{runtimeLabel(r.engine?.runtime ?? r.runtime)}</Chip>
+                <Chip tone="mono">
+                  {b.min === b.max ? b.min : `${b.min}–${b.max}`} node{b.max === 1 ? "" : "s"}
+                </Chip>
+                <Chip tone="mono">{r.serving?.contextLength != null ? `${Math.round(r.serving.contextLength / 1000)}k ctx` : "ctx —"}</Chip>
+                {r.nodeIds.length ? <Chip tone="mono">{r.nodeIds.join(", ")}</Chip> : <Chip>unbound</Chip>}
+                <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>
+                  <button type="button" className="cp-btn ghost" disabled={archived} onClick={() => openDeploy(r)} title={archived ? "Archived — cannot back a new deployment" : "Create a binding"}>
+                    Deploy
                   </button>
                   <button
                     type="button"
                     className="cp-btn ghost"
-                    onClick={async () => {
-                      const newId = window.prompt("Clone as recipe id", `${r.id}-copy`);
-                      if (!newId) return;
-                      try {
-                        await cloneRecipe(r.id, newId.trim());
-                        onChanged();
-                      } catch (err) {
-                        window.alert(err instanceof Error ? err.message : String(err));
-                      }
+                    onClick={() => {
+                      setDupeTarget(r);
+                      setDupeId(`${r.id}-copy`);
                     }}
                   >
-                    Clone
+                    Duplicate
                   </button>
-                  {!r.archived ? (
+                  <button type="button" className="cp-btn ghost" onClick={() => setEditing(r)}>
+                    {archived ? "View" : "Edit"}
+                  </button>
+                  {onwardSteps(r.lifecycleState).length ? (
+                    <div className="cp-kebab-wrap">
+                      <button
+                        type="button"
+                        className="cp-kebab"
+                        aria-expanded={openKebab === r.id}
+                        aria-label={`More actions for ${r.name}`}
+                        onClick={() => setOpenKebab((k) => (k === r.id ? null : r.id))}
+                      >
+                        ⋯
+                      </button>
+                      {openKebab === r.id ? (
+                        <div className="cp-menu" role="menu">
+                          {r.lifecycleState === "draft" ? (
+                            <button type="button" role="menuitem" className="cp-menu-item" onClick={() => void runValidate(r)}>
+                              Validate
+                            </button>
+                          ) : null}
+                          {onwardSteps(r.lifecycleState).map((s) => (
+                            <button
+                              key={s.to}
+                              type="button"
+                              role="menuitem"
+                              className="cp-menu-item"
+                              onClick={() => {
+                                setOpenKebab(null);
+                                setLifeTarget({ recipe: r, to: s.to });
+                                setLifeNote("");
+                              }}
+                            >
+                              {s.label}
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : (
                     <button
                       type="button"
-                      className="cp-btn ghost danger"
-                      onClick={() => setArchiveTarget(r)}
+                      className="cp-btn ghost"
+                      onClick={async () => {
+                        try {
+                          await restoreRecipe(r.id);
+                          onChanged();
+                        } catch (err) {
+                          setErrors([err instanceof Error ? err.message : String(err)]);
+                        }
+                      }}
                     >
-                      Archive
+                      Restore
                     </button>
-                  ) : null}
+                  )}
                 </div>
               </div>
+
               <dl className="cp-kv" style={{ marginTop: 10 }}>
-                <dt>model path</dt>
-                <dd className="mono">{r.modelPath}</dd>
-                <dt>workdir</dt>
-                <dd className="mono">{r.workdir}</dd>
+                <dt>quantization</dt>
+                <dd className="mono">{r.engine?.quantization || "—"}</dd>
+                <dt>endpoint</dt>
+                <dd className="mono">
+                  {r.endpoint?.scheme ?? "http"}://{r.endpoint?.hostTemplate ?? "{nodeIp}"}:{r.endpoint?.port ?? r.apiPort}
+                  {r.endpoint?.path ?? "/v1"}
+                </dd>
                 <dt>env</dt>
-                <dd>{r.env.length ? r.env.map((e) => e.name + (e.secret ? " •••" : `=${e.value}`)).join(", ") : "—"}</dd>
+                <dd className="mono">{r.launch?.env?.length || r.env.length ? (r.launch?.env ?? r.env).map((e) => e.name + (e.secret ?? e.secretRef ? "→secretRef" : "")).join(", ") : "—"}</dd>
                 <dt>log dir</dt>
-                <dd className="mono">{r.logDir || "—"}</dd>
+                <dd className="mono">{r.logSource?.path ?? r.logDir ?? "—"}</dd>
               </dl>
             </div>
           );
         })
       )}
+
+      {/* Duplicate — headline feature: deep-copy, proven original untouched */}
       <Modal
-        open={archiveTarget != null}
-        title={`Archive recipe "${archiveTarget?.name ?? ""}"?`}
-        consequence="The recipe stops counting as active. Model weights are never deleted."
-        confirmLabel="Archive"
-        tone="danger"
-        onClose={() => setArchiveTarget(null)}
+        open={dupeTarget != null}
+        title={`Duplicate "${dupeTarget?.name ?? ""}"?`}
+        consequence="Deep-copies the recipe as a NEW draft. The original is untouched, so you can change quantization, context, flags, env or topology safely."
+        info="Secret refs re-point at the new id; provenance records the source recipe."
+        confirmLabel="Duplicate recipe"
+        busy={dupeBusy}
+        onClose={() => setDupeTarget(null)}
         onConfirm={async () => {
-          const target = archiveTarget;
-          setArchiveTarget(null);
-          if (!target) return;
+          if (!dupeTarget) return;
+          if (!/^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$/.test(dupeId.trim())) {
+            setErrors(["New recipe id must be a lowercase slug."]);
+            return;
+          }
+          setDupeBusy(true);
           try {
-            await archiveRecipe(target.id);
+            const res = await duplicateRecipe(dupeTarget.id, dupeId.trim());
+            setDupeTarget(null);
+            setEditing(res.recipe);
             onChanged();
           } catch (err) {
-            window.alert(err instanceof Error ? err.message : String(err));
+            setErrors([err instanceof Error ? err.message : String(err)]);
+          } finally {
+            setDupeBusy(false);
           }
         }}
-      />
+      >
+        <Field label="New recipe id" htmlFor="dupe-id" hint="Unique lowercase slug">
+          <TextInput id="dupe-id" mono value={dupeId} onChange={(e) => setDupeId(e.target.value)} />
+        </Field>
+        <div className="cp-kv" style={{ marginTop: 8 }}>
+          <dt>source</dt>
+          <dd className="mono">{dupeTarget?.id}</dd>
+          <dt>new lifecycle</dt>
+          <dd>draft</dd>
+          <dt>proven original</dt>
+          <dd>untouched</dd>
+        </div>
+      </Modal>
+
+      {/* Deploy — binding only, honoring topology bounds */}
+      <Modal
+        open={deployTarget != null}
+        title={`Deploy "${deployTarget?.name ?? ""}"?`}
+        consequence="Creates a deployment BINDING (config only). No process is started; desiredState is recorded for a later dry-run start."
+        info="The recipe and its weights are never modified."
+        confirmLabel="Create binding"
+        busy={deployBusy}
+        onClose={() => setDeployTarget(null)}
+        onConfirm={async () => {
+          const t = deployTarget;
+          if (!t) return;
+          const b = bounds(t);
+          if (deployNodes.length < b.min || deployNodes.length > b.max) {
+            setErrors([`Topology ${t.topology} requires ${b.min}–${b.max} node(s).`]);
+            return;
+          }
+          setDeployBusy(true);
+          try {
+            await createDeployment({ modelId, recipeId: t.id, nodeIds: deployNodes, desiredState: t.launch?.mechanism === "external" ? "unknown" : "stopped" });
+            setDeployTarget(null);
+            onChanged();
+            navigate({ section: "model", modelId, tab: "deployments" });
+          } catch (err) {
+            setErrors([err instanceof Error ? err.message : String(err)]);
+          } finally {
+            setDeployBusy(false);
+          }
+        }}
+      >
+        <div className="cp-section-legend">
+          Nodes ({deployNodes.length}/{deployBounds.min === deployBounds.max ? deployBounds.min : `${deployBounds.min}–${deployBounds.max}`})
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {sparks.map((n) => {
+            const b = deployBounds;
+            return (
+              <button
+                key={n.id}
+                type="button"
+                className={`cp-btn ${deployNodes.includes(n.id) ? "primary" : ""}`}
+                aria-pressed={deployNodes.includes(n.id)}
+                onClick={() =>
+                  setDeployNodes((prev) => {
+                    if (prev.includes(n.id)) return prev.filter((x) => x !== n.id);
+                    if (prev.length >= b.max) return [...prev.slice(1), n.id];
+                    return [...prev, n.id];
+                  })
+                }
+              >
+                <StatusDot status={n.online ? "online" : "offline"} />
+                {n.name}
+              </button>
+            );
+          })}
+        </div>
+        <div className="cp-kv" style={{ marginTop: 8 }}>
+          <dt>desired state</dt>
+          <dd className="mono">{deployTarget?.launch?.mechanism === "external" ? "unknown (external)" : "stopped"}</dd>
+          <dt>weights</dt>
+          <dd>untouched</dd>
+        </div>
+      </Modal>
+
+      {/* Lifecycle transition with from → to */}
+      <Modal
+        open={lifeTarget != null}
+        title={
+          lifeTarget
+            ? `${lifeTarget.to === "validated" ? "Validate" : lifeTarget.to === "proven" ? "Mark proven" : lifeTarget.to === "deprecated" ? "Deprecate" : "Archive"} "${lifeTarget.recipe.name}"?`
+            : ""
+        }
+        consequence={
+          lifeTarget?.to === "validated"
+            ? "Runs the dry-run validate; on success the recipe flips to Validated."
+            : lifeTarget?.to === "proven"
+              ? "Marks the recipe Proven — a proven recipe is the safe thing to duplicate."
+              : lifeTarget?.to === "deprecated"
+                ? "Flags the recipe Deprecated. It can still serve, but should be replaced."
+                : "Flips to Archived. It can no longer back new deployments; weights stay untouched."
+        }
+        diagram={
+          lifeTarget ? (
+            <span className="cp-modal-diagram-row">
+              <LifecycleBadge state={lifeTarget.recipe.lifecycleState ?? "draft"} />
+              <span aria-hidden="true">→</span>
+              <LifecycleBadge state={lifeTarget.to} />
+            </span>
+          ) : null
+        }
+        info={lifeTarget?.to === "archived" ? "Archived recipes render read-only. Restore brings it back to Deprecated." : undefined}
+        confirmLabel={lifeTarget?.to === "archived" ? "Archive recipe" : "Confirm"}
+        tone={lifeTarget?.to === "archived" || lifeTarget?.to === "deprecated" ? "danger" : "primary"}
+        busy={lifeBusy}
+        onClose={() => setLifeTarget(null)}
+        onConfirm={async () => {
+          const t = lifeTarget;
+          if (!t) return;
+          setLifeBusy(true);
+          try {
+            await recipeLifecycle(t.recipe.id, t.to, t.to === "proven" ? lifeNote : undefined);
+            setLifeTarget(null);
+            onChanged();
+          } catch (err) {
+            setErrors([err instanceof Error ? err.message : String(err)]);
+          } finally {
+            setLifeBusy(false);
+          }
+        }}
+      >
+        <div className="cp-kv">
+          <dt>from</dt>
+          <dd>{lifeTarget?.recipe.lifecycleState ?? "draft"}</dd>
+          <dt>to</dt>
+          <dd>{lifeTarget?.to}</dd>
+          <dt>weights</dt>
+          <dd>untouched</dd>
+        </div>
+        {lifeTarget?.to === "proven" ? (
+          <Field label="Proven note" htmlFor="life-note" hint="Required for validated → proven" error={lifeNote.trim() ? null : "A note is required."}>
+            <TextArea id="life-note" rows={2} value={lifeNote} onChange={(e) => setLifeNote(e.target.value)} />
+          </Field>
+        ) : null}
+      </Modal>
+    </div>
+  );
+}
+
+// ─── Deployments tab (bindings for this model's recipes) ──
+function DeploymentsTab({
+  deps,
+  recipes,
+  sparks,
+  navigate,
+  onChanged,
+}: {
+  deps: DeploymentStatus[];
+  recipes: RecipePublic[];
+  sparks: SparkSnapshot[];
+  navigate: (route: Route) => void;
+  onChanged: () => void;
+}) {
+  const [removeTarget, setRemoveTarget] = useState<DeploymentStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (deps.length === 0) {
+    return (
+      <div className="cp-panel">
+        <EmptyState title="No deployments" subtitle="Use Deploy on a recipe card to create a binding (config only)." />
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      {error ? (
+        <div className="cp-panel" style={{ borderColor: "var(--color-danger)" }} role="alert">
+          <div className="cp-field-error">{error}</div>
+        </div>
+      ) : null}
+      {deps.map((d) => {
+        const r = recipes.find((x) => x.id === d.recipeId);
+        return (
+          <div key={d.deploymentId ?? d.recipeId} className="cp-deploy-row">
+            <StatusPill status={d.display} className="cp-deploy-state" />
+            <div className="cp-deploy-model">
+              <span className="cp-deploy-name">{r?.name ?? d.recipeId}</span>
+              <CopyId value={d.recipeId} className="cp-deploy-id" />
+            </div>
+            <div className="cp-deploy-nodes">
+              <span className="cp-node-cluster">
+                {d.nodeIds.length > 1 ? (
+                  <span className="cp-node-cluster-label">
+                    {String(r?.topologyBlock?.mode ?? r?.topology ?? "").toUpperCase()} · {d.nodeIds.length} nodes
+                  </span>
+                ) : null}
+                <span className="cp-node-cluster-chips">
+                  {d.nodeIds.map((id) => (
+                    <span key={id} className="cp-node-chip">
+                      <StatusDot status={sparks.find((s) => s.id === id)?.online ? "online" : "offline"} />
+                      {sparks.find((s) => s.id === id)?.name ?? id}
+                    </span>
+                  ))}
+                </span>
+              </span>
+            </div>
+            <div className="cp-deploy-right">
+              <span className="cp-deploy-port mono">:{d.apiPort}</span>
+            </div>
+            <div className="cp-row-actions">
+              <button type="button" className="cp-btn ghost" onClick={() => navigate({ section: "model", modelId: d.modelId, tab: "live-console" })}>
+                View logs
+              </button>
+              <button type="button" className="cp-kebab" aria-label="Remove binding" onClick={() => setRemoveTarget(d)}>
+                ⋯
+              </button>
+            </div>
+          </div>
+        );
+      })}
+
+      <Modal
+        open={removeTarget != null}
+        title={`Remove deployment binding "${removeTarget?.recipeId ?? ""}"?`}
+        consequence="Deletes the deployment BINDING only. The model, recipe and weight files all stay exactly as they are."
+        info="The recipe returns to its prior lifecycle state; nothing is archived."
+        confirmLabel="Remove binding"
+        tone="danger"
+        busy={busy}
+        onClose={() => setRemoveTarget(null)}
+        onConfirm={async () => {
+          const t = removeTarget;
+          if (!t) return;
+          setBusy(true);
+          try {
+            await deleteDeployment(t.deploymentId ?? t.recipeId);
+            setRemoveTarget(null);
+            onChanged();
+          } catch (err) {
+            setError(err instanceof Error ? err.message : String(err));
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        <div className="cp-kv">
+          <dt>recipe</dt>
+          <dd className="mono">{removeTarget?.recipeId}</dd>
+          <dt>nodes</dt>
+          <dd className="mono">{removeTarget?.nodeIds.join(", ")}</dd>
+          <dt>weights</dt>
+          <dd>untouched</dd>
+          <dt>recipe/model</dt>
+          <dd>kept</dd>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+// ─── Benchmarks tab ───────────────────────────────────────
+function BenchmarksTab({ recipes, sparks, navigate }: { recipes: RecipePublic[]; sparks: SparkSnapshot[]; navigate: (route: Route) => void }) {
+  const [rows, setRows] = useState<{ id: string; recipeId: string; tps: number | null; status: string; node: string }[]>([]);
+
+  useEffect(() => {
+    const nodeId = recipes.find((r) => r.nodeIds.length)?.nodeIds[0];
+    const recipe = recipes.find((r) => r.nodeIds.includes(nodeId ?? ""));
+    const port = recipe?.endpoint?.port ?? recipe?.apiPort;
+    if (!nodeId || port == null) return;
+    let alive = true;
+    listDecodeBench(nodeId, port)
+      .then((r) => {
+        if (!alive) return;
+        const all = [r.active, r.last, ...r.history].filter(Boolean) as NonNullable<typeof r.active>[];
+        setRows(
+          all.slice(0, 8).map((j) => ({
+            id: j.benchId,
+            recipeId: j.config.recipeId ?? recipe?.id ?? "",
+            tps: j.results[0]?.meanDecodeTps ?? null,
+            status: j.status,
+            node: nodeId,
+          }))
+        );
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [recipes]);
+
+  if (recipes.length === 0) {
+    return (
+      <div className="cp-panel">
+        <EmptyState title="No recipes" subtitle="Benchmarks are attributed to recipes — create one first." />
+      </div>
+    );
+  }
+
+  return (
+    <div className="cp-panel">
+      <div className="cp-panel-title">
+        <span>Recent decode benchmarks</span>
+        <button type="button" className="cp-btn ghost" onClick={() => navigate({ section: "benchmarks" })}>
+          Open Benchmarks
+        </button>
+      </div>
+      {rows.length === 0 ? (
+        <EmptyState title="No benchmark runs" subtitle="Start a decode bench from the Benchmarks surface." />
+      ) : (
+        rows.map((j) => {
+          const r = recipes.find((x) => x.id === j.recipeId);
+          return (
+            <div key={j.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "7px 0", borderBottom: "1px solid var(--color-border)", fontSize: 12 }}>
+              <StatusPill status={j.status === "completed" ? "running" : j.status === "failed" ? "error" : "loading"} />
+              <span>{r?.name ?? j.recipeId}</span>
+              <Chip tone="mono">{sparks.find((s) => s.id === j.node)?.name ?? j.node}</Chip>
+              <span className="mono" style={{ marginLeft: "auto" }}>
+                {j.tps != null ? `${Math.round(j.tps)} tok/s` : "—"}
+              </span>
+            </div>
+          );
+        })
+      )}
     </div>
   );
 }
@@ -461,6 +1054,7 @@ function ConfigTab({ model, recipe }: { model: ModelEntry | null; recipe: Recipe
       </div>
     );
   }
+  const env = recipe.launch?.env ?? recipe.env;
   return (
     <div className="cp-panel">
       <div className="cp-panel-title">Effective configuration (read-only)</div>
@@ -470,38 +1064,36 @@ function ConfigTab({ model, recipe }: { model: ModelEntry | null; recipe: Recipe
         <dt>recipe.id</dt>
         <dd className="mono">{recipe.id}</dd>
         <dt>runtime</dt>
-        <dd className="mono">{recipe.runtime}</dd>
+        <dd className="mono">{recipe.engine?.runtime ?? recipe.runtime}</dd>
         <dt>modelPath</dt>
         <dd className="mono">{recipe.modelPath}</dd>
-        <dt>workdir</dt>
-        <dd className="mono">{recipe.workdir}</dd>
+        <dt>executable</dt>
+        <dd className="mono">{recipe.launch?.executable ?? "—"}</dd>
         <dt>apiPort</dt>
-        <dd>{recipe.apiPort}</dd>
+        <dd>{recipe.endpoint?.port ?? recipe.apiPort}</dd>
         <dt>healthPath</dt>
-        <dd className="mono">{recipe.healthPath}</dd>
+        <dd className="mono">{recipe.healthProbe?.path ?? recipe.healthPath}</dd>
         <dt>contextLength</dt>
-        <dd>{recipe.contextLength ?? "—"}</dd>
-        <dt>cpuAffinity</dt>
-        <dd className="mono">{recipe.cpuAffinity ?? "—"}</dd>
-        <dt>launcher</dt>
-        <dd className="mono">{recipe.launcher ?? "—"}</dd>
-        <dt>logDir</dt>
-        <dd className="mono">{recipe.logDir ?? "—"}</dd>
-        <dt>metadata</dt>
-        <dd className="mono">{JSON.stringify(recipe.metadata)}</dd>
+        <dd>{recipe.serving?.contextLength ?? "—"}</dd>
+        <dt>affinity</dt>
+        <dd className="mono">{recipe.launch?.affinity ?? "—"}</dd>
+        <dt>logSource</dt>
+        <dd className="mono">{recipe.logSource?.path ?? recipe.logDir ?? "—"}</dd>
+        <dt>tags</dt>
+        <dd className="mono">{(recipe.tags ?? []).join(", ") || "—"}</dd>
       </dl>
       <div className="cp-panel-title" style={{ marginTop: 16 }}>
-        Environment
+        Environment (secret values never sent to the browser)
       </div>
       <table className="cp-table">
         <tbody>
-          {recipe.env.map((e) => (
+          {env.map((e) => (
             <tr key={e.name}>
               <td className="mono">{e.name}</td>
-              <td className="mono">{e.secret ? "••• (stored, never sent to browser)" : e.value}</td>
+              <td className="mono">{e.secret || e.secretRef ? "••• secretRef" : e.value ?? "—"}</td>
             </tr>
           ))}
-          {recipe.env.length === 0 ? (
+          {env.length === 0 ? (
             <tr>
               <td className="muted">No environment variables</td>
             </tr>

@@ -73,3 +73,12 @@ test("provider-owned log shaping: loguru + tabby telemetry, external generic", (
   assert.equal(ext.msg, "plain line");
   assert.equal(parseTelemetryLine("custom", "#7 whatever"), null);
 });
+
+test("provider catalog exposes a non-empty label per runtime (GET /api/runtimes source)", () => {
+  for (const r of RUNTIME_TYPES) {
+    const p = providerFor(r);
+    assert.equal(typeof p.label, "string");
+    assert.ok(p.label.length > 0, `empty label for ${r}`);
+    assert.equal(typeof p.launchable, "boolean");
+  }
+});

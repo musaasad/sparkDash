@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import type { ModelEntry, RecipePublic, DeploymentStatus, SparkSnapshot, ActivityEvent } from "../../api/types";
+import type { ModelEntry, RecipePublic, RecipeRuntime, DeploymentStatus, SparkSnapshot, ActivityEvent } from "../../api/types";
 import type { Route } from "../../hooks/router";
 import { DataTable, sortRows, CountedTabs, CopyId, type Column } from "../ui/DataTable";
 import { StatusPill, StatusDot, Chip, EmptyState, LifecycleBadge, SkeletonRows } from "../ui/Status";
-import { Field, TextInput, FormFooter } from "../ui/form";
 import { SectionBand } from "../ui/SectionBand";
 import { Toolbar, DensityToggle } from "../ui/Toolbar";
 import { ColumnsPopover } from "../ui/ColumnsPopover";
 import { BotIcon, PanelIcon } from "../ui/icons";
-import { upsertModel, fetchActivity } from "../../api/client";
+import { fetchActivity, fetchRuntimes } from "../../api/client";
+import { ModelWizard } from "./ModelWizard";
 import {
   deploymentViews,
   deploymentTabCounts,
@@ -42,12 +42,8 @@ function provenanceOf(v: DeploymentView): string {
 }
 
 export function ModelsSection({ models, recipes, deployments, navigate, onSaved, sparks = [], activity }: ModelsProps) {
-  const [adding, setAdding] = useState(false);
-  const [name, setName] = useState("");
-  const [id, setId] = useState("");
-  const [family, setFamily] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  const [wizard, setWizard] = useState(false);
+  const [providerRuntimes, setProviderRuntimes] = useState<{ id: RecipeRuntime; label: string }[]>([]);
   const [sortKey, setSortKey] = useState<string | null>("name");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [tab, setTab] = useState("all");
@@ -150,22 +146,11 @@ export function ModelsSection({ models, recipes, deployments, navigate, onSaved,
   const groups = useMemo(() => familyGroups(active, deployments), [active, deployments]);
   const shownColumns = useMemo(() => catalogColumns.filter((c) => visibleCols.has(c.key)), [catalogColumns, visibleCols]);
 
-  async function save() {
-    setSaving(true);
-    setError(null);
-    try {
-      await upsertModel({ id: id || slug(name), name, family: family || null });
-      setAdding(false);
-      setName("");
-      setId("");
-      setFamily("");
-      onSaved();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSaving(false);
-    }
-  }
+  useEffect(() => {
+    fetchRuntimes()
+      .then((r) => setProviderRuntimes(r.runtimes))
+      .catch(() => {});
+  }, []);
 
   function toggleOpen(key: string) {
     setOpen((prev) => {
@@ -231,34 +216,24 @@ export function ModelsSection({ models, recipes, deployments, navigate, onSaved,
         primary={
           <button
             type="button"
-            className={`cp-btn ${adding ? "ghost" : "primary"}`}
-            onClick={() => setAdding((a) => !a)}
+            className={`cp-btn ${wizard ? "ghost" : "primary"}`}
+            onClick={() => setWizard((a) => !a)}
           >
-            {adding ? "Cancel" : "+ Add model"}
+            {wizard ? "Cancel" : "+ Add model"}
           </button>
         }
       />
 
-      {adding ? (
-        <div className="cp-panel">
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-            <Field label="Model name" htmlFor="m-name">
-              <TextInput id="m-name" value={name} placeholder="Qwen 3.8 Flash Next" onChange={(e) => setName(e.target.value)} />
-            </Field>
-            <Field label="id" htmlFor="m-id" hint="Auto-slug if blank">
-              <TextInput id="m-id" mono value={id} onChange={(e) => setId(e.target.value)} />
-            </Field>
-            <Field label="Family" htmlFor="m-fam" hint="Optional">
-              <TextInput id="m-fam" value={family} placeholder="Qwen" onChange={(e) => setFamily(e.target.value)} />
-            </Field>
-          </div>
-          {error ? <div className="cp-field-error" role="alert">{error}</div> : null}
-          <FormFooter onCancel={() => setAdding(false)}>
-            <button type="button" className="cp-btn primary" onClick={save} disabled={saving || !name.trim()}>
-              {saving ? "Saving…" : "Add model"}
-            </button>
-          </FormFooter>
-        </div>
+      {wizard ? (
+        <ModelWizard
+          models={models}
+          recipes={recipes}
+          sparks={sparks}
+          runtimes={providerRuntimes}
+          navigate={navigate}
+          onSaved={onSaved}
+          onCancel={() => setWizard(false)}
+        />
       ) : null}
 
       {/* Discovered externally-launched runtimes — no band when nothing new */}
@@ -436,7 +411,7 @@ export function ModelsSection({ models, recipes, deployments, navigate, onSaved,
             title="No models found"
             subtitle="Register a model, then add deployment recipes describing how it runs on your nodes."
             action={
-              <button type="button" className="cp-btn primary" onClick={() => setAdding(true)}>
+              <button type="button" className="cp-btn primary" onClick={() => setWizard(true)}>
                 + Add model
               </button>
             }

@@ -1039,11 +1039,20 @@ export interface RecipeValidateResponse {
   warnings: string[];
 }
 
+/** One runtime type offered by the WS-3 provider registry (chip-picker source). */
+export interface RuntimeProviderInfo {
+  id: RecipeRuntime;
+  label: string;
+  launchable: boolean;
+}
+
 /** Env entry as returned by the API — secret values are stripped. */
 export interface RecipeEnvPublic {
   name: string;
   value?: string;
   secret: boolean;
+  /** Stable pointer into the encrypted secrets store (present for secret entries). */
+  secretRef?: string | null;
   hasValue?: boolean;
 }
 

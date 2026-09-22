@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { DeploymentStatus, RecipePublic } from "../../api/types";
-import { deploymentAction } from "../../api/client";
+import { deleteDeployment, deploymentAction } from "../../api/client";
 import { StatusPill } from "../ui/Status";
 import { Modal } from "../ui/Modal";
 
@@ -11,14 +11,21 @@ interface DeployControlsProps {
 }
 
 /**
- * Lifecycle controls. This phase is DRY-RUN: managed recipes simulate; the
- * externally-managed deployment renders controls DISABLED with an explicit reason —
- * showing live controls on a never-touch process is a trust violation.
+ * Lifecycle controls, kept deliberately SEPARATE:
+ *
+ *  START / STOP / RESTART — change desiredState + simulate a dry-run transition.
+ *    They never touch the recipe or the weight files.
+ *  REMOVE BINDING — deletes the deployment binding only; model, recipe and
+ *    weights all survive.
+ *
+ * This phase is DRY-RUN: managed recipes simulate; an externally-managed
+ * deployment renders controls DISABLED with an explicit reason — showing live
+ * controls on a never-touch process is a trust violation.
  */
 export function DeployControls({ recipe, deployment, onUpdated }: DeployControlsProps) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [confirm, setConfirm] = useState<"stop" | "restart" | null>(null);
+  const [confirm, setConfirm] = useState<"stop" | "restart" | "remove" | null>(null);
 
   const targetId = deployment?.deploymentId ?? recipe.id;
   const external = deployment?.managedBy === "external";
@@ -41,6 +48,20 @@ export function DeployControls({ recipe, deployment, onUpdated }: DeployControls
     }
   }
 
+  async function remove() {
+    setBusy("remove");
+    setError(null);
+    try {
+      await deleteDeployment(targetId);
+      onUpdated?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+      setConfirm(null);
+    }
+  }
+
   const canStart = state === "stopped" || state === "available";
   const canStop = state === "running" || state === "loading" || state === "starting";
 
@@ -52,29 +73,38 @@ export function DeployControls({ recipe, deployment, onUpdated }: DeployControls
           <button
             type="button"
             className="cp-btn primary"
-            disabled={external || busy != null || !canStart}
+            disabled={external || busy != null || !canStart || !deployment}
             onClick={() => run("start")}
-            title={external ? reason : "Start (dry-run)"}
+            title={external ? reason : deployment ? "Start (dry-run)" : "Create a binding first"}
           >
             {busy === "start" ? "Starting…" : "Start"}
           </button>
           <button
             type="button"
             className="cp-btn"
-            disabled={external || busy != null || !canStop}
+            disabled={external || busy != null || !canStop || !deployment}
             onClick={() => setConfirm("stop")}
-            title={external ? reason : "Stop (dry-run)"}
+            title={external ? reason : deployment ? "Stop (dry-run)" : "Create a binding first"}
           >
             Stop
           </button>
           <button
             type="button"
             className="cp-btn"
-            disabled={external || busy != null || state !== "running"}
+            disabled={external || busy != null || state !== "running" || !deployment}
             onClick={() => setConfirm("restart")}
-            title={external ? reason : "Restart (dry-run)"}
+            title={external ? reason : deployment ? "Restart (dry-run)" : "Create a binding first"}
           >
             Restart
+          </button>
+          <button
+            type="button"
+            className="cp-btn ghost"
+            disabled={external || busy != null || !deployment}
+            onClick={() => setConfirm("remove")}
+            title={external ? "Removes the binding record; the external process is untouched" : "Remove the binding only — recipe, model and weights stay"}
+          >
+            Remove binding
           </button>
         </div>
       </div>
@@ -82,28 +112,40 @@ export function DeployControls({ recipe, deployment, onUpdated }: DeployControls
         {external ? "⦿ " : "◐ "}
         {reason}
       </div>
-      {error ? <div className="cp-field-error" role="alert">{error}</div> : null}
+      {error ? (
+        <div className="cp-field-error" role="alert">
+          {error}
+        </div>
+      ) : null}
 
       <Modal
         open={confirm != null}
-        title={`${confirm === "stop" ? "Stop" : "Restart"} ${recipe.id}?`}
+        title={`${confirm === "stop" ? "Stop" : confirm === "restart" ? "Restart" : "Remove binding for"} ${recipe.id}?`}
         consequence={
-          confirm === "restart"
-            ? "Active requests will be interrupted while the process cycles."
-            : "The runtime stops serving until started again. State is simulated (dry-run)."
+          confirm === "remove"
+            ? "Deletes the DEPLOYMENT BINDING only. The recipe, the model and every weight file stay exactly where they are."
+            : confirm === "restart"
+              ? "Active requests are interrupted while the process cycles. The recipe is untouched."
+              : "The runtime stops serving until started again. State is simulated (dry-run); the recipe is untouched."
         }
         diagram={
-          <span className="cp-modal-diagram-row">
-            <StatusPill status={(state as never)} />
-            <span aria-hidden="true">→</span>
-            <StatusPill status={confirm === "stop" ? "stopping" : "starting"} />
-          </span>
+          confirm === "remove" ? undefined : (
+            <span className="cp-modal-diagram-row">
+              <StatusPill status={state as never} />
+              <span aria-hidden="true">→</span>
+              <StatusPill status={confirm === "stop" ? "stopping" : "starting"} />
+            </span>
+          )
         }
-        confirmLabel={confirm === "stop" ? "Stop" : "Restart"}
+        info={confirm === "remove" ? "Re-create the binding any time; nothing is archived." : undefined}
+        confirmLabel={confirm === "stop" ? "Stop" : confirm === "restart" ? "Restart" : "Remove binding"}
         tone="danger"
         busy={busy != null}
         onClose={() => setConfirm(null)}
-        onConfirm={() => confirm && run(confirm)}
+        onConfirm={() => {
+          if (confirm === "remove") void remove();
+          else if (confirm) void run(confirm);
+        }}
       />
     </div>
   );

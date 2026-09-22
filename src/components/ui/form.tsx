@@ -121,7 +121,7 @@ export function FormSection({
 }: {
   legend: string;
   children: ReactNode;
-  columns?: 1 | 2;
+  columns?: 1 | 2 | 3;
 }) {
   return (
     <fieldset style={{ border: "none", padding: 0, margin: "0 0 18px" }}>

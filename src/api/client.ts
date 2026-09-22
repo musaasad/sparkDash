@@ -443,6 +443,11 @@ export function updateSettings(patch: Partial<Settings>): Promise<Settings> {
   });
 }
 
+// ─── Control plane: runtime provider catalog (read-only, WS-3) ─
+export function fetchRuntimes(): Promise<{ runtimes: RuntimeProviderInfo[] }> {
+  return apiFetch("/api/runtimes");
+}
+
 // ─── Control plane: Model Registry ────────────────────────
 import type {
   ModelEntry,
@@ -457,6 +462,7 @@ import type {
   DiscoveryResponse,
   AdoptDiscoveryRequest,
   AdoptDiscoveryResult,
+  RuntimeProviderInfo,
 } from "./types";
 
 export function fetchModels(includeArchived = false): Promise<{ models: ModelEntry[] }> {
@@ -494,6 +500,10 @@ export function upsertRecipe(body: unknown): Promise<{ recipe: RecipePublic }> {
 
 export function archiveRecipe(id: string, hard = false): Promise<{ archived?: boolean; deleted?: boolean }> {
   return apiFetch(`/api/recipes/${encodeURIComponent(id)}${hard ? "?hard=1" : ""}`, { method: "DELETE" });
+}
+
+export function restoreRecipe(id: string): Promise<{ recipe: RecipePublic }> {
+  return apiFetch(`/api/recipes/${encodeURIComponent(id)}/restore`, { method: "POST" });
 }
 
 export function cloneRecipe(id: string, newId: string, overrides?: Record<string, unknown>): Promise<{ recipe: RecipePublic }> {

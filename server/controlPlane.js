@@ -25,7 +25,7 @@ import { LiveConsoleManager } from "./collectors/LiveConsole.js";
 import { ActivityLog } from "./activity/ActivityLog.js";
 import { createRateLimiter } from "./validate.js";
 import { probeEndpoint, probeUrl } from "./deployments/deploymentStatus.js";
-import { detectRuntime, healthClassify } from "./domain/providers/registry.js";
+import { detectRuntime, healthClassify, providerFor, RUNTIME_TYPES } from "./domain/providers/registry.js";
 import { DiscoveryService } from "./domain/discovery.js";
 import { sshExec } from "./collectors/ssh.js";
 import { llmProbeHost } from "./collectors/llmHost.js";
@@ -286,6 +286,18 @@ export function createControlPlane(deps) {
     const bearer = extractBearer(req);
     return bearer ? "token-client" : req.socket?.remoteAddress || "unknown";
   }
+
+  // ─── Routes: runtime provider catalog (read-only, WS-3) ─
+  // Describes the runtime types the provider registry knows so the client
+  // chip-picker is driven by the registry, never a duplicated literal.
+  app.get("/api/runtimes", (_req, res) => {
+    res.json({
+      runtimes: RUNTIME_TYPES.map((id) => {
+        const p = providerFor(id);
+        return { id, label: p.label, launchable: Boolean(p.launchable) };
+      }),
+    });
+  });
 
   // ─── Routes: models ────────────────────────────────────
   app.get("/api/models", (req, res) => {
