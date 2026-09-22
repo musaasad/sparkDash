@@ -2,13 +2,16 @@ import { describe, expect, it } from "vitest";
 import type { DeploymentStatus, RecipePublic, SparkSnapshot } from "../../api/types";
 import type { DeploymentView } from "./fleetModel";
 import {
+  aggregationLegend,
   fabricHealthSummary,
   fabricStateLabel,
+  hottestThermal,
   isPrimary,
   labBriefing,
   labVerdict,
   lastRequestAgo,
   nodeInstruments,
+  nodeOomEvents,
   nodeTelemetryRow,
   primaryView,
   rankViews,
@@ -188,6 +191,7 @@ describe("secondary instruments", () => {
     kvCacheUsage: 0.5, prefixCacheHitRate: 0.9, mtpAcceptanceRate: 0.7, contextLength: 32000,
     gpuMemoryUtilization: 0.8, slotsActive: 2, slotsTotal: 4, totalOutputTokens: 10, backend: "" as never,
     modelId: "m", available: true, error: null,
+    aggregation: null, membersReporting: 1, membersMissingTelemetry: [],
   };
 
   it("only surfaces metrics the runtime actually declares", () => {
@@ -195,14 +199,24 @@ describe("secondary instruments", () => {
     expect(out.map((s) => s.key)).toEqual(["mtpAcceptanceRate", "ttftSeconds"]);
   });
 
-  it("omits null values and never fabricates", () => {
+  it("renders '—' for a declared-but-absent value, never 0", () => {
     const out = secondaryInstruments(["kvCacheUsage", "requestsWaiting"], { ...telemetry, kvCacheUsage: null });
-    expect(out.map((s) => s.key)).toEqual(["requestsWaiting"]);
+    expect(out.map((s) => s.key)).toEqual(["kvCacheUsage", "requestsWaiting"]);
+    expect(out.find((s) => s.key === "kvCacheUsage")?.value).toBe("—");
+    expect(out.find((s) => s.key === "kvCacheUsage")?.fraction).toBeUndefined();
   });
 
-  it("returns nothing when the runtime declares nothing or telemetry is absent", () => {
+  it("carries a micro-bar fraction for ratio metrics only", () => {
+    const out = secondaryInstruments(["kvCacheUsage", "requestsWaiting"], telemetry);
+    expect(out.find((s) => s.key === "kvCacheUsage")?.fraction).toBe(0.5);
+    expect(out.find((s) => s.key === "requestsWaiting")?.fraction).toBeUndefined();
+  });
+
+  it("returns nothing when the runtime declares nothing; '—' when telemetry is absent", () => {
     expect(secondaryInstruments([], telemetry)).toEqual([]);
-    expect(secondaryInstruments(["ttftSeconds"], null)).toEqual([]);
+    const absent = secondaryInstruments(["ttftSeconds"], null);
+    expect(absent.map((s) => s.key)).toEqual(["ttftSeconds"]);
+    expect(absent[0].value).toBe("—");
   });
 });
 
@@ -259,10 +273,20 @@ describe("node telemetry honesty", () => {
     expect(power.title).toBeUndefined();
   });
 
-  it("marks a reachable node warn ONLY from provider throttle, and offline unmistakably", () => {
+  it("marks a thermal-throttled node critical, a warm node warn, and offline unmistakably", () => {
     const throttled = spark({ metrics: { ...spark().metrics, gpu: { temperature: 91, usage: 10, power: { draw: 1, limit: 2 }, vram: { used: 1, total: 2, percentage: 1, available: 1 }, throttle: { thermal: true, hwSlowdown: true, powerCap: false, active: true, reason: "thermal", smClockMHz: null, smClockMaxMHz: null, smClockPct: null, detail: "" } } } });
-    expect(nodeTelemetryRow(throttled, []).tone).toBe("warn");
+    // provider thermal slowdown = real critical signal.
+    expect(nodeTelemetryRow(throttled, []).tone).toBe("alert");
+    expect(nodeTelemetryRow(throttled, []).thermal).toBe("critical");
     expect(nodeTelemetryRow(throttled, []).metrics.find((m) => m.key === "gpuTemp")?.value).toBe("91");
+    // a high-but-not-critical temp is warm (measured, no throttle flag).
+    const warm = spark({ metrics: { ...spark().metrics, gpu: { temperature: 88, usage: 10, power: { draw: 1, limit: 2 }, vram: { used: 1, total: 2, percentage: 1, available: 1 } } } as never });
+    expect(nodeTelemetryRow(warm, []).tone).toBe("warn");
+    expect(nodeTelemetryRow(warm, []).thermal).toBe("warm");
+    // a normal temp reads live, no alarm.
+    const cool = spark({ metrics: { ...spark().metrics, gpu: { temperature: 62, usage: 10, power: { draw: 1, limit: 2 }, vram: { used: 1, total: 2, percentage: 1, available: 1 } } } as never });
+    expect(nodeTelemetryRow(cool, []).tone).toBe("live");
+    expect(nodeTelemetryRow(cool, []).thermal).toBe("normal");
     const off = nodeTelemetryRow(spark({ online: false }), []);
     expect(off.tone).toBe("off");
     expect(off.online).toBe(false);
@@ -270,7 +294,7 @@ describe("node telemetry honesty", () => {
 
   it("uses unified terminology and falls back to RAM only when no unified pool", () => {
     const unified = spark({ metrics: { ...spark().metrics, unifiedMemory: { total: 130000, gpuUsed: 1, cpuUsed: 1, used: 65000, available: 65000, percentage: 50, oomRisk: "low", bandwidth: { current: 0, peak: 0 } } } });
-    expect(nodeTelemetryRow(unified, []).metrics.find((m) => m.key === "mem")?.label).toBe("UNIFIED");
+    expect(nodeTelemetryRow(unified, []).metrics.find((m) => m.key === "mem")?.label).toBe("UNIFIED MEM");
     const ramOnly = spark({ metrics: { ...spark().metrics, ram: { used: 10, total: 100, percentage: 10 } } });
     expect(nodeTelemetryRow(ramOnly, []).metrics.find((m) => m.key === "mem")?.label).toBe("RAM");
   });
@@ -278,5 +302,38 @@ describe("node telemetry honesty", () => {
   it("omits node instruments entirely when the node has no metrics", () => {
     expect(nodeInstruments(spark())).toEqual([]);
     expect(nodeInstruments(null)).toEqual([]);
+  });
+
+  it("aggregates thermal as MAX across members, labelled with the hottest node", () => {
+    const mk = (id: string, name: string, temp: number | null) =>
+      spark({ id, name, metrics: { ...spark().metrics, gpu: temp == null ? null : { temperature: temp, usage: 10, power: { draw: 1, limit: 2 }, vram: { used: 1, total: 2, percentage: 1, available: 1 } } } as never });
+    const r = hottestThermal([mk("a", "n-a", 61), mk("b", "n-b", 88)]);
+    expect(r.level).toBe("warm");
+    expect(r.value).toBe("88");
+    expect(r.nodeName).toBe("n-b");
+    expect(r.reporting).toBe(2);
+    expect(r.memberCount).toBe(2);
+    // missing temp contributes no reading — never a fabricated 0.
+    const partial = hottestThermal([mk("a", "n-a", null), mk("b", "n-b", 80)]);
+    expect(partial.reporting).toBe(1);
+    expect(partial.value).toBe("80");
+  });
+
+  it("labels the aggregation legend explicitly, null for a single member", () => {
+    expect(aggregationLegend(1, 1)).toBeNull();
+    const legend = aggregationLegend(1, 2)!;
+    expect(legend).toContain("SUM gen/queue");
+    expect(legend).toContain("MAX kv/vram");
+    expect(legend).toContain("1/2 ranks reporting");
+  });
+
+  it("reads a genuine oom EVENT from NV_ERR_NO_MEMORY, not from utilisation", () => {
+    const clean = spark({ metrics: { ...spark().metrics, gpu: { temperature: 50, nvErrNoMemory: 0 } as never } });
+    const ev = spark({ metrics: { ...spark().metrics, gpu: { temperature: 50, nvErrNoMemory: 14 } as never } });
+    expect(nodeOomEvents(ev)).toBe(14);
+    expect(nodeOomEvents(clean)).toBe(0);
+    // utilisation alone is not an oom; the event count is surfaced once present.
+    expect(nodeTelemetryRow(ev, []).metrics.find((m) => m.key === "nvmem")?.value).toBe("14");
+    expect(nodeTelemetryRow(clean, []).metrics.find((m) => m.key === "nvmem")).toBeUndefined();
   });
 });

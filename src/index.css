@@ -4503,6 +4503,7 @@ button.cp-link { background: none; border: none; padding: 0; cursor: pointer; fo
   border-radius: var(--radius-card);
   background: var(--color-surface);
   cursor: pointer;
+  height: 100%;
 }
 .cp-inst:hover { border-color: var(--color-border-strong); }
 .cp-inst:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
@@ -4533,11 +4534,30 @@ button.cp-link { background: none; border: none; padding: 0; cursor: pointer; fo
 .cp-inst-state.tone-off { color: var(--inst-tone-off); }
 .cp-inst-state-dot { width: 6px; height: 6px; border-radius: 999px; background: currentColor; }
 
-/* body fills the card so the secondary row sits tight under it (no dead middle) */
-.cp-inst-body { display: flex; gap: var(--space-4); flex: 1 1 auto; align-items: stretch; min-height: 0; }
+/* Balanced inner grid: gauge beside a dense readout grid, micro-instruments as a
+   full-width bottom row. Fills the card so a single-node card has no dead middle. */
+.cp-inst-body {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  gap: var(--space-3);
+  flex: 1 1 auto;
+  align-items: center;
+  min-height: 0;
+}
 .cp-inst-body .cp-gauge { align-self: center; }
-.cp-inst-side { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; justify-content: space-between; }
-.cp-inst-meta { display: flex; flex-direction: column; gap: 1px; }
+.cp-inst-side {
+  grid-column: 2;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2) var(--space-3);
+  align-content: center;
+  min-width: 0;
+}
+.cp-inst-meta { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.cp-inst-meta.is-wide,
+.cp-inst-recency.is-wide,
+.cp-inst-live.is-wide { grid-column: 1 / -1; }
 .cp-inst-meta-label { font-size: 10px; letter-spacing: 0.14em; color: var(--color-muted); }
 .cp-inst-nodes { font-size: 12px; color: var(--color-text); }
 .cp-inst-meta-value { font-size: 13px; }
@@ -4545,8 +4565,10 @@ button.cp-link { background: none; border: none; padding: 0; cursor: pointer; fo
 .cp-inst-live { font-size: 11px; font-weight: 600; color: var(--inst-tone-live); letter-spacing: 0.06em; }
 
 .cp-inst-secondary {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(66px, 1fr)); gap: var(--space-2);
+  grid-column: 1 / -1;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(58px, 1fr)); gap: var(--space-2);
   border-top: 1px solid var(--color-border); padding-top: var(--space-3);
+  align-content: end;
 }
 .cp-inst-cell { display: flex; flex-direction: column; gap: 2px; }
 .cp-inst-cell-label { font-size: 10px; letter-spacing: 0.1em; color: var(--color-muted); }
@@ -4660,10 +4682,11 @@ button.cp-link { background: none; border: none; padding: 0; cursor: pointer; fo
 .cp-labhead-count.is-warn { color: var(--inst-tone-warn); }
 .cp-labhead-count.is-ok { color: var(--inst-tone-calm); }
 
-/* ─── Per-deployment instrument weight: PRIMARY leads, others recede ── */
-.cp-inst.is-primary { grid-column: span 2; }
+/* ─── Per-deployment instrument weight: PRIMARY leads, others recede ──
+   EQUAL card width (no column span) — weight is geometry INSIDE the card, so a
+   single-node card and a multi-node card read at the same density. */
 .cp-inst.is-primary .cp-inst-name { font-size: 27px; letter-spacing: -0.01em; }
-.cp-inst.is-primary .cp-inst-body { gap: var(--space-5); }
+.cp-inst.is-primary .cp-inst-body { gap: var(--space-4); }
 .cp-inst.is-secondary .cp-inst-name { font-size: 18px; }
 .cp-inst.is-offline { opacity: 0.62; }
 
@@ -4721,7 +4744,6 @@ button.cp-link { background: none; border: none; padding: 0; cursor: pointer; fo
 /* ─── Reflow: never shrink text, stack majors on narrow ── */
 @media (max-width: 1180px) {
   .cp-cluster { grid-template-columns: 1fr; }
-  .cp-inst.is-primary { grid-column: auto; }
 }
 @media (max-width: 900px) {
   .cp-nodestrip-head { display: none; }
@@ -4753,3 +4775,88 @@ button.cp-link { background: none; border: none; padding: 0; cursor: pointer; fo
 .cp-issue-list { font-size: 12px; }
 .cp-issue-list li { margin-bottom: 2px; }
 .cp-fleet-compact-note { margin-bottom: 6px; }
+
+/* ─── Overview cockpit pass: annunciator, balanced instruments, micro-gauges ─── */
+
+/* (1) Compact status strip — one scannable line, never a wall of prose. */
+.cp-annunciator {
+  display: flex; align-items: center; gap: var(--space-3);
+  flex-wrap: wrap; padding: 10px var(--space-4);
+}
+.cp-annunciator .cp-verdict-overline { font-size: 12px; font-weight: 700; letter-spacing: 0.16em; white-space: nowrap; }
+.cp-annunciator .cp-verdict-text { font-size: 14px; white-space: nowrap; }
+.cp-annunciator .cp-verdict-summary { font-size: 11px; letter-spacing: 0.1em; margin-top: 0; flex: 1 1 240px; }
+.cp-annunciator .cp-verdict-overline { white-space: normal; }
+.cp-annunciator .cp-labhead-counts { flex-direction: row; align-items: center; gap: 6px; justify-content: flex-start; margin-left: auto; }
+.cp-annunciator .cp-verdict-right { margin-left: 0; }
+.cp-annunciator .cp-verdict-meta { font-size: 10px; color: var(--color-muted); white-space: nowrap; }
+
+/* (3) Model instruments — EQUAL-width, side-by-side, stretched to one height.
+   Columns stay equal at every width; cards stack on narrow. */
+.cp-cluster-instruments {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: var(--space-3);
+  align-items: stretch;
+}
+
+/* Aggregation legend — explicit MAX/SUM, named missing ranks. */
+.cp-inst-agg { font-size: 10px; letter-spacing: 0.08em; color: var(--color-muted); }
+.cp-inst-agg-missing { color: var(--color-warning); }
+
+/* Thermal readout — NORMAL by default, amber only when genuinely warranted. */
+.cp-inst-thermal { font-size: 12px; font-weight: 600; letter-spacing: 0.04em; }
+.cp-inst-thermal.tone-live { color: var(--color-text); }
+.cp-inst-thermal.tone-warn { color: var(--inst-tone-warn); }
+.cp-inst-thermal.tone-alert { color: var(--inst-tone-alert); }
+.cp-inst-thermal-node { font-weight: 400; color: var(--color-muted); }
+
+/* (4) Micro-gauges: thin aircraft-style bars, dense and aligned. */
+.cp-inst-bar { display: block; height: 3px; margin-top: 3px; border-radius: 999px; background: var(--inst-track); overflow: hidden; }
+.cp-inst-bar-fill { display: block; height: 100%; background: var(--inst-tone-live); border-radius: 999px; }
+.cp-inst-cell-value:has(+ .cp-inst-bar) { line-height: 1.1; }
+
+/* Folded lifecycle controls — compact, quiet until hovered. */
+.cp-inst-controls { border-top: 1px solid var(--color-border); padding-top: var(--space-2); }
+.cp-inst-controls .cp-btn { padding: 2px 8px; font-size: 11px; }
+.cp-inst-controls .cp-field-error { font-size: 11px; }
+
+/* (3b) Deployments — compact operational list, not instrument readouts. */
+.cp-deploy-list { display: flex; flex-direction: column; gap: 6px; }
+.cp-deploy-row {
+  display: flex; align-items: center; gap: var(--space-3);
+  padding: 6px var(--space-3); border: 1px solid var(--color-border);
+  border-radius: var(--radius-card); background: var(--color-surface);
+  flex-wrap: wrap; row-gap: 6px; min-width: 0;
+}
+.cp-deploy-role { font-size: 10px; font-weight: 700; letter-spacing: 0.14em; color: var(--color-muted); border: 1px solid var(--color-border-strong); border-radius: var(--radius-chip); padding: 2px 6px; flex: 0 0 auto; }
+.cp-deploy-role.is-primary { color: var(--color-accent-strong, var(--color-accent)); border-color: var(--color-accent); }
+.cp-deploy-model { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1 1 180px; background: none; border: none; text-align: left; cursor: pointer; padding: 0; }
+.cp-deploy-name { font-size: 12px; font-weight: 600; color: var(--color-text-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cp-deploy-id { font-size: 10px; color: var(--color-muted); font-family: "JetBrains Mono", ui-monospace, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cp-deploy-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; flex: 0 1 auto; }
+.cp-deploy-nodes, .cp-deploy-port, .cp-deploy-recipe { font-size: 10px; color: var(--color-muted); white-space: nowrap; }
+.cp-deploy-recipe {
+  border: 1px solid var(--color-border); border-radius: var(--radius-chip); padding: 1px 6px;
+  max-width: 140px; overflow: hidden; text-overflow: ellipsis;
+}
+.cp-deploy-controls { flex: 1 1 100%; min-width: 0; }
+.cp-deploy-controls .cp-btn { padding: 2px 8px; font-size: 11px; }
+
+/* Node strip micro-bars + thermal word. */
+.cp-nodestrip-bar { display: block; height: 3px; margin-top: 2px; width: 44px; border-radius: 999px; background: var(--inst-track); overflow: hidden; }
+.cp-nodestrip-bar-fill { display: block; height: 100%; background: var(--inst-tone-live); border-radius: 999px; }
+.cp-nodestrip-thermal { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; }
+.cp-nodestrip-thermal.is-warm { color: var(--inst-tone-warn); }
+.cp-nodestrip-thermal.is-critical { color: var(--inst-tone-alert); }
+.cp-nodestrip-row.tone-alert .cp-nodestrip-state { color: var(--inst-tone-alert); }
+
+/* Speedometer: current tok/s unambiguously dominant + honest UNKNOWN note. */
+.cp-gauge-value { font-size: 48px; }
+.cp-gauge-note { font-size: 9px; letter-spacing: 0.06em; color: var(--color-muted); margin-top: 2px; text-align: center; }
+
+@media (max-width: 720px) {
+  .cp-inst-body { grid-template-columns: 1fr; }
+  .cp-inst-side { grid-column: auto; }
+  .cp-annunciator .cp-labhead-counts { margin-left: 0; }
+}

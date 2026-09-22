@@ -193,18 +193,19 @@ describe("fabricLayout", () => {
 });
 
 describe("fabric link health + provenance label", () => {
-  it("link health follows PHYSICAL reachability, never node memory pressure", () => {
+  it("link health follows PHYSICAL reachability, never node memory utilisation", () => {
     const pressured = spark({
       id: "a",
-      metrics: { ...spark().metrics, unifiedMemory: { total: 130000, gpuUsed: 1, cpuUsed: 1, used: 90000, available: 40000, percentage: 69, oomRisk: "high", bandwidth: { current: 0, peak: 0 } } as never },
+      metrics: { ...spark().metrics, unifiedMemory: { total: 130000, gpuUsed: 1, cpuUsed: 1, used: 90000, available: 40000, percentage: 94, oomRisk: "high", bandwidth: { current: 0, peak: 0 } } as never },
     });
     const off = spark({ id: "b", online: false });
     off.fabricLinks = [{ to: "a", speedMbps: 200_000, medium: "cx7" }];
     const f = deriveFabric([pressured, off], []);
     expect(f.links[0].health).toBe("warn");
-    expect(f.nodes.find((n) => n.id === "a")?.health).toBe("warn");
+    // high unified-memory UTILISATION is not an alarm: the node stays "ok".
+    expect(f.nodes.find((n) => n.id === "a")?.health).toBe("ok");
 
-    // both online, only memory-warned => link stays healthy.
+    // both online, only memory-utilised => link stays healthy.
     const healthy = deriveFabric([pressured, spark({ id: "c" })], []);
     expect(healthy.links).toHaveLength(0); // no wiring between them
   });

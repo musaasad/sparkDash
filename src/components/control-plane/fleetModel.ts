@@ -2,6 +2,7 @@ import type { SparkSnapshot, DeploymentStatus, DeploymentDisplay, RecipePublic, 
 import { isWorkerSpark } from "../../api/sparkRole";
 import { fleetInventory, primaryAnchorNode, nodeById, workersOf as inventoryWorkersOf } from "../../shared/inventory.js";
 import { deriveRuntimeState as canonicalRuntimeState, telemetryQuality, probeOutcome, RUNTIME_STATE, type RuntimeState as CanonicalRuntimeState } from "../../shared/runtimeState.js";
+import { nodeThermalLevel, nodeOomEvents, aggregationLegend, thermalLabel } from "./cockpitModel";
 
 export interface FleetHealth {
   nodesOnline: number;
@@ -88,6 +89,15 @@ export interface DeploymentTelemetry {
   available: boolean;
   /** Probe error string when the backend reported one. */
   error: string | null;
+  /**
+   * Explicit multi-node aggregation legend (null for single-node). MAX/SUM per
+   * field so nothing is silently blended.
+   */
+  aggregation: string | null;
+  /** Member nodes whose probe answered (SUM/MAX coverage). */
+  membersReporting: number;
+  /** Member node names with NO readable probe — named honestly, never treated as 0. */
+  membersMissingTelemetry: string[];
 }
 
 /** Coarse operational state a deployment row can render (canonical vocabulary). */
@@ -147,15 +157,6 @@ export function computeFleetAlerts(
   models: readonly ModelEntry[] = []
 ): FleetAlert[] {
   const alerts: FleetAlert[] = [];
-  const byId = new Map(sparks.map((s) => [s.id, s]));
-
-  /** Route to the deployment serving any of these nodes, else the lone node. */
-  const routeFor = (nodeIds: string[]): FleetAlert["target"] => {
-    const dep = deployments.find((d) => d.nodeIds.some((id) => nodeIds.includes(id)));
-    if (dep) return { section: "model", modelId: dep.modelId };
-    if (nodeIds.length === 1) return { section: "node", nodeId: nodeIds[0] };
-    return undefined;
-  };
 
   for (const s of sparks) {
     if (!s.online) {
@@ -163,32 +164,47 @@ export function computeFleetAlerts(
       continue;
     }
     const gpu = s.metrics?.gpu;
-    if (gpu?.throttle?.active) {
-      alerts.push({ id: `${s.id}-throttle`, severity: "warn", condition: "throttle", resourceId: s.id, message: `${s.name}: GPU throttling (${gpu.throttle.reason})`, target: { section: "node", nodeId: s.id } });
-    }
-    if (gpu && isNum(gpu.temperature) && gpu.temperature >= 90) {
-      alerts.push({ id: `${s.id}-temp`, severity: "warn", condition: "temp", resourceId: s.id, message: `${s.name}: GPU ${Math.round(gpu.temperature)}°C`, target: { section: "node", nodeId: s.id } });
+    // Thermal is a REAL measured level (provider throttle / NV_ERR_NO_MEMORY /
+    // a genuinely high temp) — actionable, so it belongs in the annunciator.
+    // Unified-memory UTILISATION is deliberately NOT here (see below).
+    const thermal = nodeThermalLevel(s);
+    if (thermal !== "normal") {
+      const temp = gpu && isNum(gpu.temperature) ? ` ${Math.round(gpu.temperature)}°C` : "";
+      alerts.push({
+        id: `${s.id}-thermal`,
+        severity: "warn",
+        condition: "thermal",
+        resourceId: s.id,
+        message: `${s.name}: thermal ${thermalLabel(thermal).toLowerCase()}${temp}`,
+        target: { section: "node", nodeId: s.id },
+      });
     }
     for (const st of s.metrics?.storage || []) {
       if (!st.disabled && st.percentage >= 90) {
         alerts.push({ id: `${s.id}-disk-${st.device}`, severity: "warn", condition: "disk", resourceId: s.id, message: `${s.name}: ${st.label || st.device} at ${Math.round(st.percentage)}% full`, target: { section: "node", nodeId: s.id } });
       }
     }
+    // GENUINE oom events (kernel NV_ERR_NO_MEMORY) — a real pressure signal,
+    // unlike unified-memory utilisation. Reserve the "pressure" wording here.
+    const oomEvents = nodeOomEvents(s);
+    if (oomEvents > 0) {
+      alerts.push({
+        id: `${s.id}-oom`,
+        severity: "warn",
+        condition: "oom",
+        resourceId: s.id,
+        message: `${s.name}: GPU memory pressure — ${oomEvents} NV_ERR_NO_MEMORY event${oomEvents === 1 ? "" : "s"}`,
+        target: { section: "node", nodeId: s.id },
+      });
+    }
   }
 
-  // Aggregate unified-memory pressure across nodes into one condition.
-  const pressure = sparks.filter((s) => s.online && s.metrics?.unifiedMemory?.oomRisk === "high");
-  if (pressure.length > 0) {
-    const names = pressure.map((s) => byId.get(s.id)?.name ?? s.id).join(", ");
-    alerts.push({
-      id: "oom-pressure",
-      severity: "warn",
-      condition: "oom",
-      resourceId: "fleet",
-      message: `Unified memory pressure high — ${names}`,
-      target: routeFor(pressure.map((s) => s.id)),
-    });
-  }
+  // NOTE: unified-memory `oomRisk` is a high-water UTILISATION proxy (percentage
+  // > 85), not a measured pressure signal (no swap thrash / MemAvailable test).
+  // High utilisation on a node actively serving a big model is EXPECTED and NOT
+  // actionable — so it is NOT raised here. It stays a neutral informational
+  // readout on the node instrument ("UNIFIED MEM"). "Pressure" is reserved for
+  // the GENUINE oom signal the collector DOES emit (kernel NV_ERR_NO_MEMORY).
 
   for (const d of deployments) {
     const name = friendlyName(d.modelId, models);
@@ -312,9 +328,15 @@ function llmForNode(s: SparkSnapshot | null | undefined, apiPort: number): LlmMe
 const optNum = (v: unknown): number | null => (isNum(v) ? v : null);
 
 /**
- * Normalized telemetry for one deployment from its PRIMARY-node probe, with
- * `generationTps` summed across every member node (TP2 aware). Returns null
- * when no member node exposes an LLM probe series at all.
+ * Normalized telemetry for one deployment from its PRIMARY-node probe.
+ *
+ * MULTI-NODE AGGREGATION IS EXPLICIT — never a silent blend:
+ *   SUM  generationTps, requestsRunning, requestsWaiting (per-rank load totals)
+ *   MAX  kvCacheUsage, gpuMemoryUtilization (worst rank drives pressure)
+ *   PRIMARY-only coordinator fields: ttft, prefill, cache-hit rate, MTP,
+ *   context, slots, cumulative tokens, backend, modelId.
+ * A member node that exposes NO probe series is NAMED (`membersMissingTelemetry`)
+ * and excluded from the aggregation — never folded in as 0.
  */
 export function deploymentTelemetry(sparks: SparkSnapshot[], d: DeploymentStatus): DeploymentTelemetry | null {
   const primary = primaryNodeOf(sparks, d);
@@ -322,13 +344,37 @@ export function deploymentTelemetry(sparks: SparkSnapshot[], d: DeploymentStatus
 
   let genTotal = 0;
   let genSeen = false;
+  let runTotal = 0;
+  let runSeen = false;
+  let waitTotal = 0;
+  let waitSeen = false;
+  let kvMax: number | null = null;
+  let gpuMax: number | null = null;
+  const missing: string[] = [];
+  let reporting = 0;
+
   for (const id of d.nodeIds) {
     const node = sparks.find((s) => s.id === id);
     const series = llmForNode(node, d.apiPort);
-    if (series?.available && isNum(series.generationTps)) {
+    if (!series?.available) {
+      if (node) missing.push(node.name || node.id);
+      continue;
+    }
+    reporting++;
+    if (isNum(series.generationTps)) {
       genTotal += series.generationTps;
       genSeen = true;
     }
+    if (isNum(series.requestsRunning)) {
+      runTotal += series.requestsRunning;
+      runSeen = true;
+    }
+    if (isNum(series.requestsWaiting)) {
+      waitTotal += series.requestsWaiting;
+      waitSeen = true;
+    }
+    if (isNum(series.kvCacheUsage)) kvMax = kvMax == null ? series.kvCacheUsage : Math.max(kvMax, series.kvCacheUsage);
+    if (isNum(series.gpuMemoryUtilization)) gpuMax = gpuMax == null ? series.gpuMemoryUtilization : Math.max(gpuMax, series.gpuMemoryUtilization);
   }
 
   if (!llm && !genSeen) return null;
@@ -337,13 +383,13 @@ export function deploymentTelemetry(sparks: SparkSnapshot[], d: DeploymentStatus
     generationTps: genSeen ? Math.round(genTotal) : null,
     prefillTps: optNum(llm?.prefillTps),
     ttftSeconds: optNum(llm?.ttftSeconds),
-    requestsRunning: optNum(llm?.requestsRunning),
-    requestsWaiting: optNum(llm?.requestsWaiting),
-    kvCacheUsage: optNum(llm?.kvCacheUsage),
+    requestsRunning: runSeen ? runTotal : optNum(llm?.requestsRunning),
+    requestsWaiting: waitSeen ? waitTotal : optNum(llm?.requestsWaiting),
+    kvCacheUsage: kvMax ?? optNum(llm?.kvCacheUsage),
     prefixCacheHitRate: optNum(llm?.prefixCacheHitRate),
     mtpAcceptanceRate: optNum(llm?.mtpAcceptanceRate),
     contextLength: optNum(llm?.contextLength),
-    gpuMemoryUtilization: optNum(llm?.gpuMemoryUtilization),
+    gpuMemoryUtilization: gpuMax ?? optNum(llm?.gpuMemoryUtilization),
     slotsActive: optNum(llm?.slotsActive),
     slotsTotal: optNum(llm?.slotsTotal),
     totalOutputTokens: optNum(llm?.totalOutputTokens),
@@ -351,6 +397,9 @@ export function deploymentTelemetry(sparks: SparkSnapshot[], d: DeploymentStatus
     modelId: llm?.modelId ?? null,
     available: Boolean(llm?.available),
     error: llm?.error ?? null,
+    aggregation: aggregationLegend(reporting, d.nodeIds.length),
+    membersReporting: reporting,
+    membersMissingTelemetry: missing,
   };
 }
 
@@ -543,8 +592,7 @@ export function attentionNodeIds(
       out.add(s.id);
       continue;
     }
-    const gpu = s.metrics?.gpu;
-    if (gpu?.throttle?.active || (gpu && isNum(gpu.temperature) && gpu.temperature >= 90)) {
+    if (nodeThermalLevel(s) !== "normal" || nodeOomEvents(s) > 0) {
       out.add(s.id);
       continue;
     }

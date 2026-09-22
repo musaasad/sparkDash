@@ -20,6 +20,7 @@ function telem(over: Partial<DeploymentTelemetry> = {}): DeploymentTelemetry {
     kvCacheUsage: 0.5, prefixCacheHitRate: 0.9, mtpAcceptanceRate: 0.7, contextLength: 32000,
     gpuMemoryUtilization: 0.8, slotsActive: 2, slotsTotal: 4, totalOutputTokens: 500,
     backend: null, modelId: "m1", available: true, error: null,
+    aggregation: null, membersReporting: 1, membersMissingTelemetry: [],
     ...over,
   };
 }
@@ -148,6 +149,29 @@ describe("DeploymentInstrument", () => {
     expect(container.querySelector(".cp-inst")?.classList.contains("is-primary")).toBe(true);
   });
 
+  it("stays a PURE readout — no lifecycle controls even with a recipe bound", () => {
+    cleanupRenders();
+    const recipe = { id: "r1", name: "R", modelId: "m1" } as never;
+    const { container } = render(
+      <DeploymentInstrument view={view({ recipe })} role="PRIMARY" state="serving" history={[100, 120]} lastRequestAt={null}
+        now={1000} runtimeLabels={{}} runtimeMetrics={{}} onOpen={noop} />
+    );
+    expect(container.querySelector(".cp-inst-controls")).toBeNull();
+    // ...but the small state badge stays as context.
+    expect(container.querySelector(".cp-inst-state")?.textContent).toContain("SERVING");
+  });
+
+  it("puts the micro-instruments inside the filling body grid, not a pinned bottom row", () => {
+    cleanupRenders();
+    const { container } = render(
+      <DeploymentInstrument view={view()} role="PRIMARY" state="serving" history={[100, 120]} lastRequestAt={null}
+        now={1000} runtimeLabels={{}} runtimeMetrics={{ tabbyapi: ["kvCacheUsage"] }} onOpen={noop} />
+    );
+    const body = container.querySelector(".cp-inst-body")!;
+    expect(body.querySelector(".cp-inst-secondary")).not.toBeNull();
+    expect(body.querySelector(".cp-inst-side")).not.toBeNull();
+  });
+
   it("renders node-derived telemetry cells with '—' for genuinely absent values", () => {
     cleanupRenders();
     const node = {
@@ -175,5 +199,63 @@ describe("DeploymentInstrument", () => {
     );
     expect(container.querySelector(".cp-inst-state")?.textContent).toContain("OFFLINE");
     expect(container.querySelector(".cp-inst")?.classList.contains("is-offline")).toBe(true);
+  });
+
+  it("labels multi-node aggregation explicitly and NAMES a rank with no endpoint", () => {
+    cleanupRenders();
+    const nodes = [
+      { id: "n1", name: "dgx-1", online: true, role: "head", metrics: { gpu: null, cpu: null, ram: null, storage: [], network: null, unifiedMemory: null, llm: [], comfy: null, tailscale: null } },
+      { id: "n2", name: "dgx-2", online: true, role: "worker", metrics: { gpu: null, cpu: null, ram: null, storage: [], network: null, unifiedMemory: null, llm: [], comfy: null, tailscale: null } },
+    ] as never;
+    const t = telem({ aggregation: "SUM gen/queue · MAX kv/vram · 1/2 ranks reporting", membersReporting: 1, membersMissingTelemetry: ["dgx-2"] });
+    const { container } = render(
+      <DeploymentInstrument view={view({ nodes, topology: "tp2", telemetry: t })} role="PRIMARY" state="serving"
+        history={[100, 120]} lastRequestAt={null} now={1000} runtimeLabels={{}} runtimeMetrics={{}} onOpen={noop} />
+    );
+    const agg = container.querySelector(".cp-inst-agg")?.textContent ?? "";
+    expect(agg).toContain("SUM gen/queue");
+    expect(agg).toContain("MAX kv/vram");
+    expect(agg).toContain("no endpoint: dgx-2");
+    // not silently treated as 0 — the missing rank is named.
+    expect(agg).not.toContain("0 ranks");
+  });
+
+  it("surfaces the HOTTEST member node labelled, NORMAL by default", () => {
+    cleanupRenders();
+    const mk = (id: string, name: string, temp: number | null) =>
+      ({ id, name, online: true, role: "head", metrics: { gpu: temp == null ? null : { temperature: temp, usage: 10, power: { draw: 1, limit: 2 }, vram: { used: 1, total: 2, percentage: 1, available: 1 } }, cpu: null, ram: null, storage: [], network: null, unifiedMemory: null, llm: [], comfy: null, tailscale: null } }) as never;
+    const nodes = [mk("n1", "dgx-1", 60), mk("n2", "dgx-2", 88)];
+    const { container } = render(
+      <DeploymentInstrument view={view({ nodes })} role="PRIMARY" state="serving"
+        history={[100, 120]} lastRequestAt={null} now={1000} runtimeLabels={{}} runtimeMetrics={{}} onOpen={noop} />
+    );
+    const thermal = container.querySelector(".cp-inst-thermal")?.textContent ?? "";
+    expect(thermal).toContain("WARM");
+    expect(thermal).toContain("88");
+    expect(thermal).toContain("dgx-2");
+    expect(container.querySelector(".cp-inst-meta-label")?.textContent).toBe("PLACEMENT");
+  });
+
+  it("renders a thin micro-bar for ratio metrics only", () => {
+    cleanupRenders();
+    const { container } = render(
+      <DeploymentInstrument view={view()} role="PRIMARY" state="serving" history={[100, 120]} lastRequestAt={null}
+        now={1000} runtimeLabels={{}} runtimeMetrics={{ tabbyapi: ["kvCacheUsage", "slotsActive"] }} onOpen={noop} />
+    );
+    const kv = [...container.querySelectorAll(".cp-inst-cell")].find((c) => c.textContent?.includes("KV CACHE"))!;
+    expect(kv.querySelector(".cp-inst-bar")).not.toBeNull();
+    const slots = [...container.querySelectorAll(".cp-inst-cell")].find((c) => c.textContent?.includes("SLOTS"))!;
+    expect(slots.querySelector(".cp-inst-bar")).toBeNull();
+  });
+
+  it("shows the gauge as UNKNOWN with 'metrics require key' for unreadable telemetry", () => {
+    cleanupRenders();
+    const { container } = render(
+      <DeploymentInstrument view={view({ telemetry: telem({ available: false, error: "HTTP 401", generationTps: null }) })}
+        role="PRIMARY" state="ready" history={[]} lastRequestAt={null} now={1000}
+        runtimeLabels={{}} runtimeMetrics={{}} onOpen={noop} />
+    );
+    expect(container.querySelector(".cp-gauge-state")?.textContent).toBe("UNKNOWN");
+    expect(container.querySelector(".cp-gauge-note")?.textContent).toContain("metrics require key");
   });
 });

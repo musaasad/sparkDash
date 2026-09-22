@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import type { ModelEntry, SparkSnapshot, DeploymentStatus } from "../../api/types";
 import { Chip } from "../ui/Status";
-import { nodeTelemetryRow } from "./cockpitModel";
+import { nodeTelemetryRow, thermalLabel } from "./cockpitModel";
 import { deploymentsForNode, friendlyName } from "./fleetModel";
 
 export interface NodeTelemetryStripProps {
@@ -67,7 +67,10 @@ export function NodeTelemetryStrip({
             {r.roleNote ? <Chip>{r.roleNote}</Chip> : null}
           </span>
 
-          <span className="cp-nodestrip-state cell-state mono">{r.online ? "ONLINE" : "OFFLINE"}</span>
+          <span className="cp-nodestrip-state cell-state mono">
+            {r.online ? "ONLINE" : "OFFLINE"}
+            {r.online && r.thermal !== "normal" ? <span className={`cp-nodestrip-thermal is-${r.thermal}`}> · {thermalLabel(r.thermal)}</span> : null}
+          </span>
 
           <span className="cp-nodestrip-metrics cell-metrics">
             {r.metrics.length === 0 ? (
@@ -80,6 +83,11 @@ export function NodeTelemetryStrip({
                     {m.value}
                     {m.unit ? <span className="cp-nodestrip-cell-unit"> {m.unit}</span> : null}
                   </span>
+                  {m.fraction != null ? (
+                    <span className="cp-nodestrip-bar" aria-hidden="true">
+                      <span className="cp-nodestrip-bar-fill" style={{ width: `${Math.round(m.fraction * 100)}%` }} />
+                    </span>
+                  ) : null}
                 </span>
               ))
             )}

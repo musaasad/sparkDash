@@ -73,7 +73,7 @@ describe("fleetModel", () => {
     expect(h.activeAlerts).toBeGreaterThanOrEqual(2); // offline node + error deployment
   });
 
-  it("flags offline nodes, thermal throttle and full disks", () => {
+  it("flags offline nodes, a real thermal signal and full disks", () => {
     const sparks = [
       spark({ id: "off", online: false }),
       spark({
@@ -87,9 +87,10 @@ describe("fleetModel", () => {
     ];
     const ids = computeFleetAlerts(sparks, []).map((a) => a.id);
     expect(ids).toContain("off-offline");
-    expect(ids).toContain("hot-throttle");
-    expect(ids).toContain("hot-temp");
+    expect(ids).toContain("hot-thermal");
     expect(ids).toContain("hot-disk-/dev/nvme0");
+    // ONE thermal condition per node — the old duplicate throttle+temp pair is gone.
+    expect(ids.filter((id) => id.includes("thermal") || id.includes("throttle") || id.includes("temp"))).toEqual(["hot-thermal"]);
   });
 
   it("ignores disabled disks", () => {
@@ -158,14 +159,28 @@ describe("council-pass helpers", () => {
     expect(views[0].contextLength).toBe(600000);
   });
 
-  it("aggregates unified-memory pressure into one deployment-targeted alert", () => {
+  it("does NOT raise high unified-memory UTILISATION as an alert", () => {
     const mk = (id: string, name: string) =>
       spark({ id, name, metrics: { ...spark().metrics, unifiedMemory: { total: 128, used: 120, gpuUsed: 100, cpuUsed: 20, available: 8, percentage: 94, oomRisk: "high", bandwidth: { current: 0, peak: 0 } } } as never });
     const alerts = computeFleetAlerts([mk("a", "Spark A"), mk("b", "Spark B")], [{ ...dep("r1", "running"), nodeIds: ["a", "b"] }]);
-    const oom = alerts.filter((x) => x.id === "oom-pressure");
+    // oomRisk is a >85% utilisation proxy, not a measured pressure signal —
+    // normal on serving nodes, so it is informational only.
+    expect(alerts.filter((x) => x.id === "oom-pressure")).toHaveLength(0);
+    expect(alerts.filter((x) => x.condition === "oom")).toHaveLength(0);
+    // ...while a genuinely high temperature still alerts.
+    const hot = spark({ id: "hot", name: "Hot", metrics: { ...spark().metrics, gpu: { temperature: 96 } as never } });
+    expect(computeFleetAlerts([hot], []).map((a) => a.id)).toContain("hot-thermal");
+  });
+
+  it("DOES alert on a genuine oom event (kernel NV_ERR_NO_MEMORY), reserving 'pressure'", () => {
+    const ev = spark({ id: "ev", name: "Spark C", metrics: { ...spark().metrics, gpu: { temperature: 50, nvErrNoMemory: 14 } as never } });
+    const alerts = computeFleetAlerts([ev], []);
+    const oom = alerts.filter((a) => a.condition === "oom");
     expect(oom).toHaveLength(1);
-    expect(oom[0].message).toContain("Spark A, Spark B");
-    expect(oom[0].target).toEqual({ section: "model", modelId: "m" });
+    expect(oom[0].severity).toBe("warn");
+    expect(oom[0].message).toContain("memory pressure");
+    expect(oom[0].message).toContain("14 NV_ERR_NO_MEMORY");
+    expect(oom[0].target).toEqual({ section: "node", nodeId: "ev" });
   });
 
   it("surfaces stopped deployments with lastError context", () => {
@@ -338,6 +353,29 @@ describe("deploymentTelemetry", () => {
 
   it("returns null when no member node exposes a probe series", () => {
     expect(deploymentTelemetry([spark({ id: "a" })], { ...dep("r1", "running"), nodeIds: ["a"] })).toBeNull();
+  });
+
+  it("aggregates MAX/SUM explicitly and NAMES a member with no endpoint", () => {
+    const d = { ...dep("r1", "running"), nodeIds: ["head", "worker", "rank3"] };
+    const sparks = [
+      nodeWithLlm("head", { role: "head", name: "dgx-1" }, { generationTps: 40, requestsRunning: 1, kvCacheUsage: 0.3 }),
+      nodeWithLlm("worker", { role: "worker", name: "dgx-2" }, { generationTps: 60, requestsRunning: 2, kvCacheUsage: 0.8 }),
+      // rank3 exposes NO probe series at all.
+      spark({ id: "rank3", name: "dgx-3", llmPorts: [], metrics: { ...spark().metrics, llm: [] } }),
+    ];
+    const t = deploymentTelemetry(sparks, d)!;
+    // generationTps = SUM across reporting ranks.
+    expect(t.generationTps).toBe(100);
+    // kvCache = MAX (worst rank drives pressure).
+    expect(t.kvCacheUsage).toBe(0.8);
+    // requestsRunning = SUM.
+    expect(t.requestsRunning).toBe(3);
+    // the missing rank is NAMED, not treated as 0.
+    expect(t.membersMissingTelemetry).toEqual(["dgx-3"]);
+    expect(t.membersReporting).toBe(2);
+    expect(t.aggregation).toContain("2/3 ranks reporting");
+    expect(t.aggregation).toContain("SUM gen/queue");
+    expect(t.aggregation).toContain("MAX kv/vram");
   });
 });
 

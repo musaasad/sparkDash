@@ -30,6 +30,19 @@ describe("gauge arc scaling", () => {
     expect(niceCeil(0)).toBe(1);
   });
 
+  it("adapts the ceiling with hysteresis — rises at once, decays slowly", () => {
+    // A new peak lifts the ceiling immediately.
+    const up = gaugeFraction(1200, [400, 500], 500)!;
+    expect(up.ceiling).toBe(2000);
+    // A lower peak only decays to 90% of the prior ceiling, never snapping down.
+    const down = gaugeFraction(100, [90, 100], 1000)!;
+    expect(down.ceiling).toBe(900);
+    // Nor does it collapse below the current target in one step.
+    const small = gaugeFraction(100, [90, 100], 120)!;
+    expect(small.ceiling).toBeGreaterThan(100);
+    expect(small.ceiling).toBeLessThan(120);
+  });
+
   it("reads a trend from the last two samples only", () => {
     expect(gaugeTrend([1, 2, 3])).toBe(1);
     expect(gaugeTrend([3, 2, 1])).toBe(-1);
@@ -102,5 +115,18 @@ describe("gauge idle honesty", () => {
     cleanupRenders();
     const { container: c2 } = render(<ThroughputGauge value={412} history={[412]} state="serving" />);
     expect(c2.querySelectorAll(".cp-gauge-needle")).toHaveLength(0);
+  });
+});
+
+describe("gauge unreadable telemetry", () => {
+  it("reads UNKNOWN + the honest note, never a 0 needle", () => {
+    cleanupRenders();
+    const { container } = render(
+      <ThroughputGauge value={null} history={[]} state="ready" unavailable note="metrics require key" />
+    );
+    expect(container.querySelector(".cp-gauge-state")?.textContent).toBe("UNKNOWN");
+    expect(container.querySelector(".cp-gauge-note")?.textContent).toBe("metrics require key");
+    expect(container.querySelector(".cp-gauge-value")).toBeNull();
+    expect(container.querySelector(".cp-gauge")?.classList.contains("is-calm")).toBe(true);
   });
 });

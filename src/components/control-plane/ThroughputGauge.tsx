@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useRef } from "react";
 import type { RuntimeState } from "./fleetModel";
 import { observedRange } from "./useTelemetryHistory";
 import { stateLabel, stateTone } from "./cockpitModel";
@@ -13,6 +13,13 @@ export interface ThroughputGaugeProps {
   size?: number;
   ariaLabel?: string;
   className?: string;
+  /**
+   * True when telemetry is UNREADABLE (auth-gated, e.g. Qwen without a key).
+   * The gauge then reads UNKNOWN + `note`, never a fabricated 0.
+   */
+  unavailable?: boolean;
+  /** Honest note shown when unavailable ("metrics require key"). */
+  note?: string | null;
 }
 
 const START_DEG = 150;
@@ -31,13 +38,21 @@ export function niceCeil(v: number): number {
 
 /**
  * Arc scaling: the fraction is value / recent-observed-ceiling, NOT value/100.
- * `null` when the buffer has fewer than 2 samples — the caller renders a
- * minimal neutral arc instead of a forged range.
+ *
+ * ADAPTIVE with HYSTERESIS: the ceiling rises immediately to a new peak but
+ * decays only at 90% of the previous ceiling, so the needle never oscillates
+ * frame-to-frame. `null` when the buffer has fewer than 2 samples — the caller
+ * renders a minimal neutral arc instead of a forged range.
  */
-export function gaugeFraction(value: number | null, history: readonly number[]): { fraction: number; ceiling: number } | null {
+export function gaugeFraction(
+  value: number | null,
+  history: readonly number[],
+  prevCeiling: number | null = null
+): { fraction: number; ceiling: number } | null {
   const range = observedRange(history);
   if (!range) return null;
-  const ceiling = niceCeil(Math.max(range.peak, value ?? 0));
+  const target = niceCeil(Math.max(range.peak, value ?? 0));
+  const ceiling = prevCeiling != null && prevCeiling > target ? Math.max(target, prevCeiling * 0.9) : target;
   const fraction = Math.min(1, Math.max(0, (value ?? 0) / ceiling));
   return { fraction, ceiling };
 }
@@ -80,31 +95,43 @@ export const ThroughputGauge = memo(function ThroughputGauge({
   value,
   history,
   state,
-  size = 168,
+  size = 152,
   ariaLabel,
   className = "",
+  unavailable = false,
+  note = null,
 }: ThroughputGaugeProps) {
+  // Ceiling memory gives the adaptive scale its hysteresis (ref, not state —
+  // the value itself already drives re-renders via props).
+  const ceilingRef = useRef<number | null>(null);
   const tone = stateTone(state);
-  const scaled = gaugeFraction(value, history);
-  const fraction = scaled ? scaled.fraction : 0.26;
+  const scaled = gaugeFraction(value, history, ceilingRef.current);
+  ceilingRef.current = scaled ? scaled.ceiling : ceilingRef.current;
+
   const range = observedRange(history);
   const trend = gaugeTrend(history);
-  const showNumber = typeof value === "number" && value > 0;
-  // No active throughput (idle/ready/unknown) => calm instrument, never a blob.
+  const showNumber = !unavailable && typeof value === "number" && value > 0;
+  // No active throughput (idle/ready/unknown/unreadable) => calm, never a blob.
   const calm = !showNumber;
   const spark = history.slice(-24);
+  // Unreadable telemetry reads UNKNOWN — never the canonical pill's word alone.
+  const centerWord = unavailable ? "UNKNOWN" : stateLabel(state);
+  const centerNote = unavailable ? note ?? "metrics unavailable" : null;
 
   const cx = 20;
   const cy = 20;
   const r = 14.5;
-  const pct = fraction * 100;
+  const pct = (scaled ? scaled.fraction : 0.26) * 100;
 
   return (
     <div
       className={`cp-gauge tone-${tone}${scaled ? " is-scaled" : " is-neutral"}${calm ? " is-calm" : ""}${tone === "live" && !calm ? " is-active" : ""} ${className}`.trim()}
       style={{ width: size, height: size }}
       role="img"
-      aria-label={ariaLabel ?? `${stateLabel(state)}${showNumber ? `, ${Math.round(value!)} tok/s` : ""}`}
+      aria-label={
+        ariaLabel ??
+        `${centerWord}${showNumber ? `, ${Math.round(value!)} tok/s` : ""}${centerNote ? `, ${centerNote}` : ""}`
+      }
     >
       <svg viewBox="0 0 40 40" width={size} height={size} aria-hidden="true">
         {/* restrained track */}
@@ -137,7 +164,7 @@ export const ThroughputGauge = memo(function ThroughputGauge({
               );
             })
           : null}
-        {/* micro sparkline inside the arc foot */}
+        {/* micro sparkline of recent throughput inside the arc foot */}
         {scaled && !calm && spark.length >= 2 ? (
           <path className="cp-gauge-spark" d={sparkPath(spark, 28, 6, 1)} transform="translate(6, 31)" fill="none" />
         ) : null}
@@ -153,12 +180,13 @@ export const ThroughputGauge = memo(function ThroughputGauge({
       <div className="cp-gauge-center">
         {showNumber ? (
           <>
+            {/* current tok/s is the dominant number */}
             <span className="cp-gauge-value">{Math.round(value!)}</span>
             <span className="cp-gauge-unit">TOK/S</span>
           </>
         ) : null}
-        {/* state word always present — role/state stay visually distinct from load */}
-        <span className="cp-gauge-state">{stateLabel(state)}</span>
+        <span className="cp-gauge-state">{centerWord}</span>
+        {centerNote ? <span className="cp-gauge-note">{centerNote}</span> : null}
         {trend !== 0 && !calm ? (
           <span className={`cp-gauge-trend ${trend > 0 ? "is-up" : "is-down"}`} aria-hidden="true">
             {trend > 0 ? "▲" : "▼"}

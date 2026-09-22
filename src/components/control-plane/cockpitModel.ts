@@ -81,6 +81,105 @@ export function stateTone(state: RuntimeState): StateTone {
   return STATE_TONE[state];
 }
 
+/* ───────────────────────── thermal ───────────────────────── */
+
+/**
+ * Thermal level from REAL provider signals plus documented high-temperature
+ * bars. Provider throttle flags escalate immediately (hardware's own signal);
+ * the numeric bars only ever read warm/critical for a genuinely high temp — a
+ * missing temp is NORMAL, never an alarm.
+ */
+export type ThermalLevel = "normal" | "warm" | "critical";
+
+/** High-temperature bars (°C). A node at/above reads warm, then critical. */
+export const THERMAL_WARM_C = 85;
+export const THERMAL_CRITICAL_C = 95;
+
+const THERMAL_RANK: Record<ThermalLevel, number> = { normal: 0, warm: 1, critical: 2 };
+const isTemp = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+
+function nodeHottestC(node: SparkSnapshot): number | null {
+  const gpu = node.metrics?.gpu?.temperature;
+  const cpu = node.metrics?.cpu?.temperature;
+  const vals = [gpu, cpu].filter(isTemp);
+  return vals.length === 0 ? null : Math.max(...vals);
+}
+
+/** Measured thermal level. Provider throttle flags are critical; temp bars warm→critical. */
+export function nodeThermalLevel(node: SparkSnapshot): ThermalLevel {
+  const throttle = node.metrics?.gpu?.throttle ?? null;
+  if (throttle?.thermal || throttle?.hwSlowdown) return "critical";
+  const hottest = nodeHottestC(node);
+  if (hottest != null && hottest >= THERMAL_CRITICAL_C) return "critical";
+  if (throttle?.active || (hottest != null && hottest >= THERMAL_WARM_C)) return "warm";
+  return "normal";
+}
+
+/**
+ * GENUINE GPU allocation-failure events: the kernel NV_ERR_NO_MEMORY counter
+ * since boot. This is the real "oom event" signal — as opposed to unified-memory
+ * UTILISATION (a >85% high-water proxy) which is informational only.
+ */
+export function nodeOomEvents(node: SparkSnapshot): number {
+  const n = node.metrics?.gpu?.nvErrNoMemory;
+  return typeof n === "number" && Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+export function thermalLabel(level: ThermalLevel): string {
+  return level === "critical" ? "CRITICAL" : level === "warm" ? "WARM" : "NORMAL";
+}
+
+export function thermalTone(level: ThermalLevel): StateTone {
+  return level === "critical" ? "alert" : level === "warm" ? "warn" : "live";
+}
+
+export interface ThermalReading {
+  level: ThermalLevel;
+  /** Hottest GPU/CPU across member nodes, formatted with unit; null when unmeasured. */
+  value: string | null;
+  unit: string | null;
+  /** Node carrying the hottest reading — labelled, never anonymous. */
+  nodeName: string | null;
+  nodeId: string | null;
+  /** Honest MAX aggregation count. */
+  reporting: number;
+  memberCount: number;
+}
+
+/**
+ * HOTTEST GPU/CPU across member nodes (MAX aggregation, explicitly labelled).
+ * A member with no temp contributes no reading — never a fabricated 0.
+ */
+export function hottestThermal(
+  nodes: readonly SparkSnapshot[],
+  temperatureUnit: "celsius" | "fahrenheit" = "celsius"
+): ThermalReading {
+  let level: ThermalLevel = "normal";
+  let bestC: number | null = null;
+  let bestNode: SparkSnapshot | null = null;
+  let reporting = 0;
+  for (const n of nodes) {
+    const l = nodeThermalLevel(n);
+    if (THERMAL_RANK[l] > THERMAL_RANK[level]) level = l;
+    const t = nodeHottestC(n);
+    if (t == null) continue;
+    reporting++;
+    if (bestC == null || t > bestC) {
+      bestC = t;
+      bestNode = n;
+    }
+  }
+  return {
+    level,
+    value: bestC == null ? null : fmtTemp(bestC, temperatureUnit),
+    unit: bestC == null ? null : tempUnit(temperatureUnit),
+    nodeName: bestNode?.name ?? null,
+    nodeId: bestNode?.id ?? null,
+    reporting,
+    memberCount: nodes.length,
+  };
+}
+
 /** True when the deployment is a genuinely active (running-ish) placement. */
 export function isActiveView(v: DeploymentView): boolean {
   return v.deployment.display !== "stopped";
@@ -191,6 +290,8 @@ export interface SecondaryInstrument {
   label: string;
   value: string;
   unit?: string;
+  /** 0–1 fill for a thin micro-bar; omitted for non-ratio metrics. */
+  fraction?: number;
   /** Accessible full value when the rendered one is abbreviated. */
   title?: string;
 }
@@ -245,27 +346,41 @@ function formatMetric(key: string, v: number): { value: string; unit?: string } 
   }
 }
 
+/** Ratio metrics rendered as a thin micro-bar. */
+const RATIO_KEYS = new Set(["kvCacheUsage", "prefixCacheHitRate", "mtpAcceptanceRate", "gpuMemoryUtilization"]);
+
 /**
- * Secondary instruments chosen from the runtime's DECLARED metrics[] and only
- * where telemetry actually carries a value. Unavailable => omitted, never faked.
+ * Secondary instruments chosen from the runtime's DECLARED metrics[]. A declared
+ * metric with no value renders `—` (never 0); ratio metrics carry a fill
+ * fraction for a thin micro-bar.
  */
 export function secondaryInstruments(
   declared: readonly string[] | undefined,
   telemetry: DeploymentTelemetry | null,
   cap = 4
 ): SecondaryInstrument[] {
-  if (!declared || declared.length === 0 || !telemetry) return [];
+  if (!declared || declared.length === 0) return [];
   const set = new Set(declared);
   const out: SecondaryInstrument[] = [];
   for (const key of SECONDARY_ORDER) {
     if (!set.has(key)) continue;
-    const raw = (telemetry as unknown as Record<string, unknown>)[key];
-    if (typeof raw !== "number" || !Number.isFinite(raw)) continue;
     if (key === "slotsTotal" && set.has("slotsActive")) continue;
     const label = METRIC_LABEL[key];
     if (!label) continue;
-    const { value, unit } = formatMetric(key, raw);
-    out.push({ key, label, value, unit });
+    const raw = telemetry ? (telemetry as unknown as Record<string, unknown>)[key] : null;
+    const present = typeof raw === "number" && Number.isFinite(raw);
+    if (!present) {
+      out.push({ key, label, value: EMPTY });
+    } else {
+      const { value, unit } = formatMetric(key, raw as number);
+      out.push({
+        key,
+        label,
+        value,
+        unit,
+        fraction: RATIO_KEYS.has(key) ? Math.min(1, Math.max(0, raw as number)) : undefined,
+      });
+    }
     if (out.length >= cap) break;
   }
   return out;
@@ -341,6 +456,19 @@ export function labBriefing(b: LabBriefing): string {
   return [nodes, deps, primary, fabric, critical, warnings].join(" · ");
 }
 
+/**
+ * Compact counter line for the status strip — the same facts labBriefing
+ * carries MINUS critical/warning (those are their own chips). Never states a
+ * number the data does not carry; `—` for an absent primary.
+ */
+export function labCounters(b: Omit<LabBriefing, "critical" | "warning">): string {
+  const nodes = `${b.nodesOnline}/${b.nodesTotal} COMPUTE ONLINE`;
+  const deps = `${b.deploymentsActive} DEPLOYMENT${b.deploymentsActive === 1 ? "" : "S"} ACTIVE`;
+  const primary = `PRIMARY: ${b.primaryName ?? "—"}`;
+  const fabric = `FABRIC: ${fabricStateLabel(b.fabric)}`;
+  return [nodes, deps, primary, fabric].join(" · ");
+}
+
 /* ───────────────────────── node telemetry ───────────────────────── */
 
 export interface NodeMetric {
@@ -348,6 +476,8 @@ export interface NodeMetric {
   label: string;
   value: string;
   unit?: string;
+  /** 0–1 fill for a thin micro-bar (ratio metrics only). */
+  fraction?: number;
   title?: string;
 }
 
@@ -356,7 +486,9 @@ export interface NodeTelemetryRow {
   name: string;
   online: boolean;
   /** Measured classification: offline when unreachable, warn on provider throttle. */
-  tone: "live" | "warn" | "off";
+  tone: "live" | "warn" | "alert" | "off";
+  /** Measured thermal level (NORMAL by default, never an alarm from a missing temp). */
+  thermal: ThermalLevel;
   metrics: NodeMetric[];
   /** Deployment names this node belongs to (may be empty). */
   deployments: string[];
@@ -408,14 +540,15 @@ export function nodeTelemetryRow(
   if (mem) {
     metrics.push({
       key: "mem",
-      label: unified ? "UNIFIED" : "RAM",
+      label: unified ? "UNIFIED MEM" : "RAM",
       value: fmtNum(mem.percentage),
       unit: "%",
-      title: `${gb(mem.used)}/${gb(mem.total)} GB · ${memFree(mem)} GB free`,
+      fraction: isFiniteNum(mem.percentage) ? Math.min(1, Math.max(0, mem.percentage / 100)) : undefined,
+      title: `${gb(mem.used)}/${gb(mem.total)} GB · ${memFree(mem)} GB free — utilisation, not pressure`,
     });
   }
 
-  if (gpu) metrics.push({ key: "util", label: "GPU UTIL", value: fmtNum(gpu.usage), unit: "%" });
+  if (gpu) metrics.push({ key: "util", label: "GPU UTIL", value: fmtNum(gpu.usage), unit: "%", fraction: isFiniteNum(gpu.usage) ? Math.min(1, Math.max(0, gpu.usage / 100)) : undefined });
   if (gpu?.power) {
     const limit = isFiniteNum(gpu.power.limit) && gpu.power.limit > 0 ? `${Math.round(gpu.power.limit)} W` : null;
     metrics.push({
@@ -427,16 +560,29 @@ export function nodeTelemetryRow(
     });
   }
 
-  const throttle = !!gpu?.throttle?.active;
+  const oomEvents = nodeOomEvents(node);
+  if (oomEvents > 0) metrics.push({ key: "nvmem", label: "NV_ERR_NO_MEM", value: fmtNum(oomEvents), title: "GPU allocation-failure events since boot (kernel NV_ERR_NO_MEMORY)" });
+
+  const thermal = nodeThermalLevel(node);
   return {
     id: node.id,
     name: node.name,
     online: node.online,
-    tone: !node.online ? "off" : throttle ? "warn" : "live",
+    tone: !node.online ? "off" : thermal === "critical" ? "alert" : thermal === "warm" ? "warn" : "live",
+    thermal,
     metrics,
     deployments: [...deployments],
     roleNote: node.role === "head" ? "head" : node.role === "worker" ? "worker" : null,
   };
+}
+
+/**
+ * Explicit multi-node aggregation legend — MAX/AVG/SUM per field, never a silent
+ * blend. Null for a single-member deployment.
+ */
+export function aggregationLegend(membersReporting: number, memberTotal: number): string | null {
+  if (memberTotal <= 1) return null;
+  return `SUM gen/queue · MAX kv/vram · ${membersReporting}/${memberTotal} ranks reporting`;
 }
 
 /** Primary (coordinator) member node of a deployment for node-derived cells. */
@@ -466,17 +612,20 @@ export function nodeInstruments(
   if (pool) {
     out.push({
       key: "mem",
-      label: mem ? "UNIFIED" : "RAM",
+      label: mem ? "UNIFIED MEM" : "RAM",
       value: fmtNum(pool.percentage),
       unit: "%",
-      title: `${gb(pool.used)}/${gb(pool.total)} GB · ${memFree(pool)} GB free`,
+      fraction: isFiniteNum(pool.percentage) ? Math.min(1, Math.max(0, pool.percentage / 100)) : undefined,
+      title: `${gb(pool.used)}/${gb(pool.total)} GB · ${memFree(pool)} GB free — utilisation, not pressure`,
     });
   }
   if (gpu) out.push({ key: "gpuTemp", label: "GPU TEMP", value: fmtTemp(gpu.temperature, temperatureUnit), unit: tempUnit(temperatureUnit), title: gpu.throttle?.active ? `throttle: ${gpu.throttle.reason}` : undefined });
-  if (gpu) out.push({ key: "util", label: "GPU UTIL", value: fmtNum(gpu.usage), unit: "%" });
+  if (gpu) out.push({ key: "util", label: "GPU UTIL", value: fmtNum(gpu.usage), unit: "%", fraction: isFiniteNum(gpu.usage) ? Math.min(1, Math.max(0, gpu.usage / 100)) : undefined });
   if (gpu?.power) {
     const limit = isFiniteNum(gpu.power.limit) && gpu.power.limit > 0 ? `${Math.round(gpu.power.limit)} W` : null;
     out.push({ key: "power", label: "POWER", value: fmtNum(gpu.power.draw), unit: "W", title: limit ? `${Math.round(gpu.power.draw)}/${limit} W` : undefined });
   }
+  const oomEvents = nodeOomEvents(node);
+  if (oomEvents > 0) out.push({ key: "nvmem", label: "NV_ERR_NO_MEM", value: fmtNum(oomEvents), title: "GPU allocation failures since boot" });
   return out.slice(0, cap);
 }

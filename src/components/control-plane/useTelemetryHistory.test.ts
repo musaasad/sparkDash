@@ -8,6 +8,7 @@ function telem(over: Partial<DeploymentTelemetry> = {}): DeploymentTelemetry {
     kvCacheUsage: null, prefixCacheHitRate: null, mtpAcceptanceRate: null, contextLength: null,
     gpuMemoryUtilization: null, slotsActive: null, slotsTotal: null, totalOutputTokens: null,
     backend: null, modelId: null, available: true, error: null,
+    aggregation: null, membersReporting: 1, membersMissingTelemetry: [],
     ...over,
   };
 }

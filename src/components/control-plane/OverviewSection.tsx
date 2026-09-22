@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import type { SparkSnapshot, DeploymentStatus, RecipePublic, ModelEntry, ActivityEvent } from "../../api/types";
 import type { Route as AppRoute } from "../../hooks/router";
-import { StatusDot, Chip, EmptyState, Skeleton } from "../ui/Status";
+import { Chip, EmptyState, Skeleton } from "../ui/Status";
 import { SectionBand } from "../ui/SectionBand";
 import { ActivityIcon, BotIcon, CheckIcon, NetworkIcon, PanelIcon } from "../ui/icons";
-import { relativeTs, absoluteTs } from "./activityModel";
+import { absoluteTs, relativeTs } from "./activityModel";
 import {
   computeFleetHealth,
   attentionDigest,
@@ -14,17 +14,18 @@ import {
   deriveRuntimeState,
   friendlyName,
   relativeAge,
-  runtimeLabel,
 } from "./fleetModel";
 import { deriveFabric } from "./fabricModel";
+import { DeployControls } from "./DeployControls";
 import { useRuntimeLabels, useRuntimeMetrics } from "./runtimeLabels";
 import { FabricPanel } from "./FabricPanel";
 import { DeploymentInstrument } from "./DeploymentInstrument";
 import { NodeTelemetryStrip } from "./NodeTelemetryStrip";
 import {
   fabricHealthSummary,
+  fabricStateLabel,
   isPrimary,
-  labBriefing,
+  labCounters,
   labVerdict,
   primaryView,
   rankViews,
@@ -52,12 +53,6 @@ interface OverviewProps {
   onAddCompute?: () => void;
 }
 
-function fmtContext(ctx: number | null): string | null {
-  if (!ctx) return null;
-  if (ctx >= 1000) return `${Math.round(ctx / 1000)}k`;
-  return String(ctx);
-}
-
 const WINDOWS = [
   { key: 15 * 60_000, label: "Last 15m" },
   { key: 60 * 60_000, label: "Last 1h" },
@@ -82,6 +77,14 @@ function WindowPicker({ value, onChange, ariaLabel }: { value: number; onChange:
   );
 }
 
+/**
+ * OVERVIEW COCKPIT — six single-purpose sections, in scan order:
+ *   (1) compact status strip  (2) attention  (3) model instruments
+ *   (4) node telemetry        (5) lab fabric  (6) runtime activity
+ * Model identity is folded INTO the instruments, so Deployments stays a compact
+ * operational (lifecycle) list that never re-renders the instrument readouts.
+ * ONE authoritative home per fact.
+ */
 export function OverviewSection({ sparks, deployments, recipes, navigate, loaded, models = [], activity = [], temperatureUnit = "celsius", onAddCompute }: OverviewProps) {
   const runtimeLabels = useRuntimeLabels();
   const runtimeMetrics = useRuntimeMetrics();
@@ -112,36 +115,30 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
     () => labVerdict(health.nodesOnline, health.nodesTotal, attention.length, views, states),
     [health.nodesOnline, health.nodesTotal, attention.length, views, states]
   );
-  const headline = useMemo(() => verdictHeadline(verdict, attention.length), [verdict, attention.length]);
+  const headline = useMemo(() => verdictHeadline(verdict, attention.filter((a) => a.severity === "warn").length), [verdict, attention]);
 
   const fabric = useMemo(() => deriveFabric([...sparks], views), [sparks, views]);
-  // Fabric health is PHYSICAL LINK health, never node memory pressure.
+  // Fabric health is PHYSICAL LINK health, never node memory utilisation.
   const fabricHealth = useMemo(() => fabricHealthSummary(fabric.links), [fabric]);
 
   const critical = useMemo(() => attention.filter((a) => a.severity === "error").length, [attention]);
   const warning = useMemo(() => attention.filter((a) => a.severity === "warn").length, [attention]);
 
-  // CONFIG-driven PRIMARY emphasis, then other active deployments.
+  // CONFIG-driven PRIMARY emphasis first, then the rest by rank — ALL deployments
+  // appear (a stopped one keeps its instrument, reading OFFLINE).
   const pv = useMemo(() => primaryView(views), [views]);
-  const pvState = pv ? statesByKey.get(pv.key) ?? deriveRuntimeState(pv.deployment, pv.telemetry) : null;
-  const others = useMemo(
-    () => (pv ? rankViews(views.filter((v) => v.deployment.display !== "stopped" && v.key !== pv.key)).slice(0, 3) : []),
-    [views, pv]
-  );
-  const visibleInstruments = useMemo(() => (pv ? [pv, ...others] : []), [pv, others]);
+  const instruments = useMemo(() => (pv ? [pv, ...rankViews(views.filter((v) => v.key !== pv.key))] : rankViews(views)), [views, pv]);
 
-  const brief = useMemo(
+  const counters = useMemo(
     () =>
-      labBriefing({
+      labCounters({
         nodesOnline: health.nodesOnline,
         nodesTotal: health.nodesTotal,
         deploymentsActive: health.modelsRunning,
         primaryName: pv ? friendlyName(pv.rawModelId, models) : null,
         fabric: fabricHealth,
-        critical,
-        warning,
       }),
-    [health.nodesOnline, health.nodesTotal, health.modelsRunning, pv, models, fabricHealth, critical, warning]
+    [health.nodesOnline, health.nodesTotal, health.modelsRunning, pv, models, fabricHealth]
   );
 
   // Last-updated stamp + periodic relative refresh (no extra endpoint polling).
@@ -170,14 +167,12 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
   if (!loaded && sparks.length === 0) {
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        <Skeleton height={70} />
+        <Skeleton height={56} />
         <Skeleton height={120} />
         <Skeleton height={240} />
       </div>
     );
   }
-
-  const offline = health.nodesTotal - health.nodesOnline;
 
   // Spec §7/§8: getting-started checklist layer while the lab is fresh.
   const fresh = sparks.length === 0 && deployments.length === 0 && models.length === 0 && recipes.length === 0;
@@ -217,25 +212,19 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
         </div>
       ) : null}
 
-      {/* LEVEL 1 — glanceable lab identity header: identity, one word, one line */}
-      <div className={`cp-verdict cp-labhead is-${verdict}`} role="status">
-        <div className="cp-labhead-id">
-          <span className="cp-verdict-overline">ASAD&apos;S AI LAB</span>
-          <span className={`cp-verdict-pill tone-${verdict}`}>{verdictLabel(verdict)}</span>
-        </div>
-        <div className="cp-verdict-mid cp-labhead-mid">
-          <div className="cp-verdict-text cp-labhead-text">{headline}</div>
-          <div className="cp-verdict-summary cp-labhead-brief mono">{brief}</div>
-          <div className="cp-verdict-meta">
-            updated {relativeAge(lastUpdated, now)} · auto-refresh {autoRefresh ? "on" : "paused"}
-          </div>
-        </div>
-        <div className="cp-labhead-counts">
+      {/* (1) COMPACT STATUS STRIP / annunciator — verdict + key counters, one line. */}
+      <div className={`cp-verdict cp-labhead cp-annunciator is-${verdict}`} role="status">
+        <span className="cp-verdict-overline">ASAD&apos;S AI LAB</span>
+        <span className={`cp-verdict-pill tone-${verdict}`}>{verdictLabel(verdict)}</span>
+        <span className="cp-verdict-text cp-labhead-text">{headline}</span>
+        <span className="cp-verdict-summary cp-labhead-brief mono">{counters}</span>
+        <div className="cp-labhead-counts" aria-label="Alert counts">
           {critical > 0 ? <span className="cp-labhead-count is-critical mono">{critical} CRITICAL</span> : null}
           {warning > 0 ? <span className="cp-labhead-count is-warn mono">{warning} WARN</span> : null}
           {critical === 0 && warning === 0 ? <span className="cp-labhead-count is-ok mono">0 CRITICAL · 0 WARN</span> : null}
         </div>
         <div className="cp-verdict-right">
+          <span className="cp-verdict-meta mono">updated {relativeAge(lastUpdated, now)} · auto-refresh {autoRefresh ? "on" : "paused"}</span>
           <button
             type="button"
             className={`cp-btn ghost${autoRefresh ? " is-active" : ""}`}
@@ -247,7 +236,7 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
         </div>
       </div>
 
-      {/* Attention exceptions strip — deduped by condition+resource */}
+      {/* (2) ATTENTION — ACTIONABLE items only, deduped by condition+resource. */}
       {attention.length > 0 ? (
         <div className="cp-section-block">
           <SectionBand icon={<PanelIcon />} title="Attention" count={attention.length} />
@@ -268,56 +257,107 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
         </div>
       ) : (
         <div className="cp-strip">
-          <StatusDot status="running" />
-          <span className="cp-strip-text">No active alerts — lab is healthy.</span>
-          {offline > 0 ? <span className="cp-strip-text mono">{offline} node{offline === 1 ? "" : "s"} offline</span> : null}
+          <span className="cp-dot running" />
+          <span className="cp-strip-text">No actionable alerts — lab is healthy.</span>
         </div>
       )}
 
-      {/* LEVEL 2 — instrument cluster: PRIMARY first with greater weight, then
-          other actives, then the physical lab fabric panel. */}
+      {/* (3) MODEL INSTRUMENTS — the PRIMARY place models are shown. PURE
+          readouts: no lifecycle controls here (they live once, in Deployments). */}
       <div className="cp-section-block">
         <SectionBand
           icon={<BotIcon />}
-          title="Instrument cluster"
-          count={visibleInstruments.length}
+          title="Model instruments"
+          count={instruments.length}
           actions={
             <button type="button" className="cp-alert-link" onClick={() => navigate({ section: "models" })}>
               Models →
             </button>
           }
         />
-        {visibleInstruments.length === 0 ? (
+        {instruments.length === 0 ? (
           <div className="cp-table-empty">No deployments registered — cluster idle.</div>
         ) : (
-          <div className="cp-cluster">
-            <div className="cp-cluster-instruments">
-              {visibleInstruments.map((v) => {
-                const role = roleOf(v, views);
-                return (
-                  <DeploymentInstrument
-                    key={v.key}
-                    view={v}
-                    role={role}
-                    state={statesByKey.get(v.key) ?? deriveRuntimeState(v.deployment, v.telemetry)}
-                    history={history[v.key]?.samples ?? []}
-                    lastRequestAt={history[v.key]?.lastRequestAt ?? null}
-                    now={now}
-                    runtimeLabels={runtimeLabels}
-                    runtimeMetrics={runtimeMetrics}
-                    temperatureUnit={temperatureUnit}
-                    onOpen={() => navigate({ section: "model", modelId: v.deployment.modelId })}
-                  />
-                );
-              })}
-            </div>
-            <FabricPanel sparks={sparks} views={views} navigate={(nodeId) => navigate({ section: "node", nodeId })} onAddCompute={onAddCompute} />
+          <div className="cp-cluster-instruments">
+            {instruments.map((v) => (
+              <DeploymentInstrument
+                key={v.key}
+                view={v}
+                role={roleOf(v, views)}
+                state={statesByKey.get(v.key) ?? deriveRuntimeState(v.deployment, v.telemetry)}
+                history={history[v.key]?.samples ?? []}
+                lastRequestAt={history[v.key]?.lastRequestAt ?? null}
+                now={now}
+                runtimeLabels={runtimeLabels}
+                runtimeMetrics={runtimeMetrics}
+                temperatureUnit={temperatureUnit}
+                onOpen={() => navigate({ section: "model", modelId: v.deployment.modelId })}
+              />
+            ))}
           </div>
         )}
       </div>
 
-      {/* NODE TELEMETRY — compact, scalable strip; keeps per-machine telemetry
-          accessible without recreating three giant cards. */}
+      {/* (3b) DEPLOYMENTS — the SOLE operational/lifecycle home: status, role,
+          placement, endpoint, recipe and Start/Stop/Restart/Remove. The
+          instrument cluster above is purely the readout instrument. */}
+      <div className="cp-section-block">
+        <SectionBand
+          icon={<BotIcon />}
+          title="Deployments"
+          count={views.length}
+          actions={
+            <button type="button" className="cp-alert-link" onClick={() => navigate({ section: "models" })}>
+              Models →
+            </button>
+          }
+        />
+        {views.length === 0 ? (
+          <div className="cp-table-empty">No deployments registered.</div>
+        ) : (
+          <div className="cp-deploy-list">
+            {views.map((v) => {
+              const state = statesByKey.get(v.key)!;
+              return (
+                <div
+                  key={v.key}
+                  className={`cp-deploy-row${state === "offline" ? " is-offline" : ""}`}
+                >
+                  <span className={`cp-deploy-role mono${isPrimary(roleOf(v, views)) ? " is-primary" : ""}`}>
+                    {roleOf(v, views)}
+                  </span>
+                  <span className={`cp-inst-state tone-${stateTone(state)}`}>
+                    <span className="cp-inst-state-dot" aria-hidden="true" />
+                    {stateLabel(state)}
+                  </span>
+                  <button
+                    type="button"
+                    className="cp-deploy-model"
+                    onClick={() => navigate({ section: "model", modelId: v.deployment.modelId })}
+                  >
+                    <span className="cp-deploy-name" title={v.modelName}>{v.modelName}</span>
+                    <span className="cp-deploy-id" title={v.rawModelId}>{v.rawModelId}</span>
+                  </button>
+                  <span className="cp-deploy-meta">
+                    <span className="cp-deploy-nodes mono" title={v.nodes.map((n) => n.name).join(", ")}>
+                      {v.nodes.length} node{v.nodes.length === 1 ? "" : "s"}
+                    </span>
+                    <span className="cp-deploy-port mono">{v.port}</span>
+                    {v.recipe ? <span className="cp-deploy-recipe mono" title={v.recipe.id}>{v.recipe.id}</span> : null}
+                  </span>
+                  {v.recipe ? (
+                    <div className="cp-deploy-controls" onClick={(e) => e.stopPropagation()}>
+                      <DeployControls recipe={v.recipe} deployment={v.deployment} />
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* (4) NODE TELEMETRY — the PRIMARY place nodes are shown. */}
       <div className="cp-section-block">
         <SectionBand
           icon={<NetworkIcon />}
@@ -339,92 +379,12 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
         />
       </div>
 
-      {/* Compact deployments index — link into detail */}
+      {/* (5) LAB FABRIC — topology only (its own head band). */}
       <div className="cp-section-block">
-        <SectionBand
-          icon={<BotIcon />}
-          title="Deployments"
-          count={views.length}
-          actions={
-            <button type="button" className="cp-alert-link" onClick={() => navigate({ section: "models" })}>
-              Models →
-            </button>
-          }
-        />
-        {views.length === 0 ? (
-          <div className="cp-table-empty">No deployments registered.</div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {views.map((v) => {
-              const ctx = fmtContext(v.contextLength);
-              const multi = v.nodes.length > 1;
-              const state = statesByKey.get(v.key)!;
-              const role = roleOf(v, views);
-              return (
-                <div
-                  key={v.key}
-                  className={`cp-deploy-row${state === "offline" ? " is-offline" : ""}`}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => navigate({ section: "model", modelId: v.deployment.modelId })}
-                  onKeyDown={(e) => e.key === "Enter" && navigate({ section: "model", modelId: v.deployment.modelId })}
-                >
-                  <span className={`cp-deploy-role mono${isPrimary(role) ? " is-primary" : ""}`}>{role}</span>
-                  <span className={`cp-inst-state tone-${stateTone(state)}`}>
-                    <span className="cp-inst-state-dot" aria-hidden="true" />
-                    {stateLabel(state)}
-                  </span>
-
-                  <div className="cp-deploy-model">
-                    <span className="cp-deploy-name" title={v.modelName}>{v.modelName}</span>
-                    <span className="cp-deploy-id" title={v.rawModelId}>{v.rawModelId}</span>
-                    {v.deployment.lastError ? <span className="cp-deploy-err">{v.deployment.lastError}</span> : null}
-                  </div>
-
-                  <div className="cp-deploy-meta">
-                    <Chip>{runtimeLabel(v.runtime, runtimeLabels)}</Chip>
-                    {v.topology !== "single" ? <Chip>{v.topology.toUpperCase()}</Chip> : <Chip>single</Chip>}
-                    {ctx ? <Chip tone="mono">{ctx} ctx</Chip> : null}
-                    {v.deployment.managedBy === "external" ? <Chip>external</Chip> : null}
-                  </div>
-
-                  <div className="cp-deploy-nodes">
-                    {multi ? (
-                      <div className="cp-node-cluster">
-                        <span className="cp-node-cluster-label">{v.topology.toUpperCase()} · {v.nodes.length} nodes</span>
-                        <span className="cp-node-cluster-chips">
-                          {v.nodes.map((n) => (
-                            <span key={n.id} className="cp-node-chip">
-                              <StatusDot status={n.online ? "online" : "offline"} />
-                              {n.name}
-                              {n.role === "worker" ? <span className="cp-node-chip-role">worker</span> : null}
-                            </span>
-                          ))}
-                        </span>
-                      </div>
-                    ) : (
-                      <span className="cp-node-chip">
-                        <StatusDot status={v.nodes[0]?.online ? "online" : "offline"} />
-                        {v.nodes[0]?.name ?? v.deployment.nodeIds[0] ?? "—"}
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="cp-deploy-right">
-                    <span className={`cp-deploy-tps${v.decodeTps == null ? " is-idle" : ""}`}>
-                      {v.decodeTps == null ? "—" : v.decodeTps}
-                      {v.decodeTps != null ? <span className="cp-unit"> tok/s</span> : null}
-                    </span>
-                    <span className="cp-deploy-port mono">{v.port}</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
+        <FabricPanel sparks={sparks} views={views} navigate={(nodeId) => navigate({ section: "node", nodeId })} onAddCompute={onAddCompute} />
       </div>
 
-      {/* Layer 3 — runtime activity */}
+      {/* (6) RUNTIME ACTIVITY — recent events. */}
       <div className="cp-section-block">
         <SectionBand
           icon={<ActivityIcon />}

@@ -1,8 +1,11 @@
+import type { KeyboardEvent, MouseEvent } from "react";
 import type { DeploymentView, RuntimeState } from "./fleetModel";
 import { ThroughputGauge } from "./ThroughputGauge";
 import { TopologySummary } from "./TopologySummary";
 import {
+  aggregationLegend,
   declaredMetrics,
+  hottestThermal,
   isPrimary,
   lastRequestAgo,
   nodeInstruments,
@@ -11,6 +14,8 @@ import {
   secondaryInstruments,
   stateLabel,
   stateTone,
+  thermalLabel,
+  thermalTone,
   type InstrumentRole,
   type SecondaryInstrument,
 } from "./cockpitModel";
@@ -37,9 +42,18 @@ function fmtContext(ctx: number | null): string | null {
 }
 
 /**
- * One instrument per active deployment. PRIMARY gets greater weight (larger
- * gauge/typography) — geometry, not glow. Role, state and performance are three
- * SEPARATE channels: role label, state pill, and the tok/s gauge.
+ * One instrument per deployment — the PRIMARY place a model is shown, and a
+ * PURE READOUT: lifecycle actions live once in the Deployments list, never here.
+ * PRIMARY gets greater weight (larger gauge/typography) — geometry, not glow.
+ * Role, state and performance are three SEPARATE channels.
+ *
+ * The card is an EQUAL-width grid cell that fills itself: gauge beside a dense
+ * readout grid, then the secondary micro-instruments as a full-width row — so a
+ * single-node card has no hollow middle and no sparse vertical stack.
+ *
+ * MULTI-NODE: telemetry is aggregated with an explicit MAX/SUM legend and any
+ * member without a readable probe is NAMED (never treated as 0). Thermal is the
+ * HOTTEST GPU/CPU across member nodes, labelled with that node.
  */
 export function DeploymentInstrument({
   view,
@@ -64,20 +78,32 @@ export function DeploymentInstrument({
   const telemetryReadable = view.telemetry != null && view.telemetry.available;
   const needsKey = !telemetryReadable && !!view.telemetry?.error && /auth|401|403/i.test(view.telemetry.error);
 
-  // Latency/queue instruments first, then node temperature/memory/power — the
-  // subordinate physical read backs the throughput without competing with it.
+  const thermal = hottestThermal(view.nodes, temperatureUnit);
+  const agg = view.telemetry?.aggregation ?? aggregationLegend(view.telemetry?.membersReporting ?? 0, view.nodes.length);
+  const missing = view.telemetry?.membersMissingTelemetry ?? [];
+
+  // Latency/queue micro-gauges first, then the hottest node's physical read-outs
+  // — subordinate to the dominant throughput number, never competing with it.
   const secondary: SecondaryInstrument[] = [
     ...secondaryInstruments(declaredMetrics(view.runtime, runtimeMetrics), view.telemetry, 5),
     ...nodeInstruments(node, temperatureUnit, 6),
   ].slice(0, 8);
+
+  const rowActivate = (e: MouseEvent | KeyboardEvent) => {
+    if (e.type === "keydown") {
+      const k = (e as KeyboardEvent).key;
+      if (k !== "Enter" && k !== " ") return;
+    }
+    onOpen();
+  };
 
   return (
     <div
       className={`cp-inst tone-${tone}${primary ? " is-primary" : " is-secondary"}${state === "offline" ? " is-offline" : ""}`}
       role="button"
       tabIndex={0}
-      onClick={onOpen}
-      onKeyDown={(e) => e.key === "Enter" && onOpen()}
+      onClick={() => onOpen()}
+      onKeyDown={rowActivate}
     >
       <div className="cp-inst-head">
         <div className="cp-inst-id">
@@ -93,66 +119,91 @@ export function DeploymentInstrument({
         </span>
       </div>
 
+      {/* Aggregation is explicit and labelled — never a silent blend. */}
+      {agg ? (
+        <div className="cp-inst-agg mono">
+          AGGREGATE · {agg}
+          {missing.length > 0 ? <span className="cp-inst-agg-missing"> · no endpoint: {missing.join(", ")}</span> : null}
+        </div>
+      ) : null}
+
+      {/* Balanced inner grid: gauge beside a dense readout grid, then the
+          micro-instruments span the FULL card width — no dead middle region. */}
       <div className="cp-inst-body">
         <ThroughputGauge
           value={view.telemetry?.generationTps ?? null}
           history={history}
           state={state}
-          size={primary ? 208 : 168}
+          size={primary ? 176 : 148}
+          unavailable={!telemetryReadable}
+          note={needsKey ? "metrics require key" : telemetryReadable ? null : "throughput unknown"}
           ariaLabel={`${view.modelName} throughput, ${stateLabel(state)}`}
         />
+
         <div className="cp-inst-side">
           {/* Placement expressed ONCE by TopologySummary; node names not repeated. */}
-          <div className="cp-inst-meta">
+          <div className="cp-inst-meta is-wide">
             <span className="cp-inst-meta-label mono">PLACEMENT</span>
             <TopologySummary view={view} />
           </div>
-          {ctx ? (
-            <div className="cp-inst-meta">
-              <span className="cp-inst-meta-label mono">CONTEXT</span>
-              <span className="cp-inst-meta-value mono">{ctx}</span>
-            </div>
-          ) : (
-            <div className="cp-inst-meta">
-              <span className="cp-inst-meta-label mono">CONTEXT</span>
-              <span className="cp-inst-meta-value mono cp-nodata">—</span>
-            </div>
-          )}
+
+          {/* Thermal: HOTTEST across member nodes, labelled. NORMAL by default. */}
+          <div className="cp-inst-meta">
+            <span className="cp-inst-meta-label mono">HOTTEST {thermal.memberCount > 1 ? `(MAX ${thermal.reporting}/${thermal.memberCount})` : ""}</span>
+            <span className={`cp-inst-thermal mono tone-${thermalTone(thermal.level)}`}>
+              {thermalLabel(thermal.level)}
+              {thermal.value ? ` ${thermal.value}${thermal.unit}` : " —"}
+              {thermal.nodeName ? <span className="cp-inst-thermal-node"> · {thermal.nodeName}</span> : null}
+            </span>
+          </div>
+
+          <div className="cp-inst-meta">
+            <span className="cp-inst-meta-label mono">CONTEXT</span>
+            <span className="cp-inst-meta-value mono">{ctx ?? <span className="cp-nodata">—</span>}</span>
+          </div>
           {view.uptime != null ? (
             <div className="cp-inst-meta">
               <span className="cp-inst-meta-label mono">UPTIME</span>
               <span className="cp-inst-meta-value mono">{fmtUptime(view.uptime)}</span>
             </div>
           ) : null}
+
           {/* idle stays calm: state + recency, never an alarming 0.
               Unreadable telemetry never claims "no traffic yet". */}
-          {loaded && recency ? <span className="cp-inst-recency">last request {recency}</span> : null}
+          {loaded && recency ? <span className="cp-inst-recency is-wide">last request {recency}</span> : null}
           {loaded && !recency && !telemetryReadable ? (
-            <span className="cp-inst-recency">{needsKey ? "metrics require key" : "throughput unknown"}</span>
+            <span className="cp-inst-recency is-wide">{needsKey ? "metrics require key" : "throughput unknown"}</span>
           ) : null}
-          {loaded && !recency && telemetryReadable ? <span className="cp-inst-recency">no active traffic</span> : null}
+          {loaded && !recency && telemetryReadable ? <span className="cp-inst-recency is-wide">no active traffic</span> : null}
           {state === "serving" || state === "busy" ? (
-            <span className="cp-inst-live mono">
+            <span className="cp-inst-live mono is-wide">
               {view.telemetry?.requestsRunning ?? 0} RUNNING
               {view.telemetry?.requestsWaiting ? ` · ${view.telemetry.requestsWaiting} QUEUED` : ""}
             </span>
           ) : null}
         </div>
-      </div>
 
-      {secondary.length > 0 ? (
-        <div className="cp-inst-secondary">
-          {secondary.map((s) => (
-            <div key={s.key} className="cp-inst-cell">
-              <span className="cp-inst-cell-label mono">{s.label}</span>
-              <span className="cp-inst-cell-value mono" title={s.title}>
-                {s.value}
-                {s.unit ? <span className="cp-inst-cell-unit"> {s.unit}</span> : null}
-              </span>
-            </div>
-          ))}
-        </div>
-      ) : null}
+        {/* Compact aircraft-style micro-gauges: thin bars for ratios, mono for the
+            rest. A declared-but-absent metric renders '—', never 0. */}
+        {secondary.length > 0 ? (
+          <div className="cp-inst-secondary">
+            {secondary.map((s) => (
+              <div key={s.key} className="cp-inst-cell">
+                <span className="cp-inst-cell-label mono">{s.label}</span>
+                <span className="cp-inst-cell-value mono" title={s.title}>
+                  {s.value}
+                  {s.unit ? <span className="cp-inst-cell-unit"> {s.unit}</span> : null}
+                </span>
+                {s.fraction != null ? (
+                  <span className="cp-inst-bar" aria-hidden="true">
+                    <span className="cp-inst-bar-fill" style={{ width: `${Math.round(s.fraction * 100)}%` }} />
+                  </span>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }

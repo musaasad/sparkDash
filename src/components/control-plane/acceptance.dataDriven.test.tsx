@@ -76,7 +76,8 @@ function telemetry(over: Partial<DeploymentTelemetry> = {}): DeploymentTelemetry
     generationTps: null, prefillTps: null, ttftSeconds: null, requestsRunning: 0, requestsWaiting: 0,
     kvCacheUsage: null, prefixCacheHitRate: null, mtpAcceptanceRate: null, contextLength: 32000,
     gpuMemoryUtilization: null, slotsActive: null, slotsTotal: 8, totalOutputTokens: 0,
-    backend: "vllm", modelId: "m", available: true, error: null, ...over,
+    backend: "vllm", modelId: "m", available: true, error: null,
+    aggregation: null, membersReporting: 1, membersMissingTelemetry: [], ...over,
   } as DeploymentTelemetry;
 }
 

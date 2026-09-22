@@ -17,6 +17,7 @@
 import type { SparkSnapshot } from "../../api/types";
 import { resolveSparkRole } from "../../api/sparkRole";
 import type { DeploymentView } from "./fleetModel";
+import { nodeThermalLevel, nodeOomEvents } from "./cockpitModel";
 
 export type FabricHealth = "ok" | "warn" | "error" | "offline" | "unknown";
 export type FabricLinkKind = "cx7" | "fabric";
@@ -126,17 +127,16 @@ function subnet(ip: string | null | undefined): string | null {
 }
 
 /**
- * Coarse NODE health from live signals only. Thermal state comes ONLY from the
- * provider's own throttle flag — no invented 90 °C threshold. A measured temp
- * with no throttle stays "ok"; a MISSING temp renders `—` and never degrades.
+ * Coarse NODE health from live signals only. Thermal comes from the REAL
+ * measured thermal level — no invented alarm. Unified-memory utilisation is a
+ * high-water proxy, NOT pressure, so it does not warn; a GENUINE oom event
+ * (NV_ERR_NO_MEMORY) and disk pressure do. A missing temp stays ok.
  */
 function healthOf(s: SparkSnapshot, hasDegradedDeployment: boolean): FabricHealth {
   if (!s.online) return "offline";
   if (hasDegradedDeployment) return "error";
-  const gpu = s.metrics?.gpu;
   const diskPressure = (s.metrics?.storage || []).some((st) => !st.disabled && st.percentage >= 90);
-  if (gpu?.throttle?.active || diskPressure) return "warn";
-  if (s.metrics?.unifiedMemory?.oomRisk === "high") return "warn";
+  if (nodeThermalLevel(s) !== "normal" || nodeOomEvents(s) > 0 || diskPressure) return "warn";
   return s.metrics ? "ok" : "unknown";
 }
 
