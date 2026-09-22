@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import type { ModelEntry, RecipePublic, RecipeRuntime, SparkSnapshot } from "../../api/types";
+import type { DiscoveredSeed, ModelEntry, RecipePublic, RecipeRuntime, SeedProvenance, SparkSnapshot } from "../../api/types";
+import type { DeploymentView } from "./fleetModel";
 import type { Route } from "../../hooks/router";
 import { upsertModel, upsertRecipe, duplicateRecipe, validateRecipe, validateDraftRecipe, createDeployment, archiveModel } from "../../api/client";
 import { Field, TextInput, TextArea, Select, FormSection, AdvancedDisclosure, FormFooter } from "../ui/form";
@@ -15,11 +16,16 @@ import {
   recipeBodyFromDraft,
   validateRecipeDraft,
   topologyNodeRange,
+  topologyBlockFromDraft,
+  topologyUnknown,
   draftFromRecipe,
   slugify,
   type RecipeDraft,
 } from "./RecipeEditor";
 import { useRuntimeOptions } from "./runtimeLabels";
+import { DiscoveryForm, SUGGESTION_TO_TEMPLATE } from "./DiscoveryForm";
+import { ProvenanceBadge } from "./ProvenanceBadge";
+import { TopologySummary } from "./TopologySummary";
 
 const STEPS = [
   { id: "model", label: "Model" },
@@ -80,6 +86,40 @@ interface WizardModel {
   variants: { id: string; path: string }[];
 }
 
+/** Template presets — applied on pick AND on a discovery suggested template. */
+const TEMPLATE_PRESETS: Record<string, Partial<RecipeDraft>> = {
+  "vllm-openai": { runtime: "vllm", mechanism: "command", apiProtocol: "openai", contextLength: "32768" },
+  "tabbyapi-exl3": { runtime: "tabbyapi-exl3", quantization: "EXL3 4.0bpw", contextLength: "16384" },
+  sglang: { runtime: "sglang", mechanism: "command", contextLength: "32768" },
+  external: { runtime: "vllm", mechanism: "external", apiProtocol: "openai" },
+  "vllm-tp": { runtime: "vllm", topoMode: "tp", parallelism: "2", minNodes: "2", maxNodes: "2" },
+  "vllm-dp": { runtime: "vllm", topoMode: "dp", parallelism: "2", minNodes: "2", maxNodes: "4" },
+};
+
+/** Initial draft from a discovery seed — discovered values pre-filled, editable. */
+function seedDraft(seed?: DiscoveredSeed): RecipeDraft {
+  const d = emptyRecipeDraft("");
+  if (!seed) return d;
+  const preset = TEMPLATE_PRESETS[SUGGESTION_TO_TEMPLATE[seed.suggestedTemplate.templateId] ?? ""];
+  const merged = { ...d, ...preset };
+  merged.name = `${seed.modelId ?? seed.runtime} (${seed.runtime})`;
+  merged.id = slugify(merged.name);
+  merged.runtime = seed.runtime;
+  merged.mechanism = "external";
+  merged.apiProtocol = seed.apiProtocol === "native" ? "custom" : "openai";
+  merged.scheme = seed.scheme;
+  merged.apiPort = String(seed.port);
+  merged.contextLength = seed.contextLength != null ? String(seed.contextLength) : merged.contextLength;
+  merged.quantization = seed.quantization ?? merged.quantization;
+  return merged;
+}
+
+/** Initial model identity from a seed (slug id + derived weight path). */
+function seedModel(seed?: DiscoveredSeed): WizardModel {
+  const name = seed?.modelId ?? "";
+  return { id: name ? slugify(name) : "", name, family: "", weightPath: name ? `/${slugify(name)}` : "", variants: [] };
+}
+
 interface ModelWizardProps {
   models: ModelEntry[];
   recipes: RecipePublic[];
@@ -90,6 +130,10 @@ interface ModelWizardProps {
   onCancel: () => void;
   /** Pre-select an existing model (wizard launched from a model surface). */
   initialModelId?: string;
+  /** Discovery seed — pre-fills Model/Recipe/Runtime/Compute/Options + provenance. */
+  seed?: DiscoveredSeed;
+  /** Open directly on the discovery form instead of the template picker. */
+  initialPath?: "pick" | "discover";
 }
 
 /**
@@ -107,22 +151,39 @@ export function ModelWizard({
   onSaved,
   onCancel,
   initialModelId,
+  seed,
+  initialPath = "pick",
 }: ModelWizardProps) {
   const [step, setStep] = useState(0);
   const [busy, setBusy] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [cancelOpen, setCancelOpen] = useState(false);
-  const [onPicker, setOnPicker] = useState(!initialModelId);
+  const [path, setPath] = useState<"pick" | "discover" | "form">(
+    seed ? "form" : initialPath === "discover" ? "discover" : initialModelId ? "form" : "pick"
+  );
 
   const [modelMode, setModelMode] = useState<"existing" | "new">(initialModelId ? "existing" : "new");
   const [modelId, setModelId] = useState(initialModelId ?? "");
-  const [model, setModel] = useState<WizardModel>({ id: "", name: "", family: "", weightPath: "", variants: [] });
+  const [model, setModel] = useState<WizardModel>(() => seedModel(seed));
 
   const [recipeMode, setRecipeMode] = useState<"existing" | "duplicate" | "new">("new");
   const [srcRecipeId, setSrcRecipeId] = useState("");
   const [dupId, setDupId] = useState("");
-  const [draft, setDraft] = useState<RecipeDraft>(() => emptyRecipeDraft(initialModelId ?? ""));
+  const [draft, setDraft] = useState<RecipeDraft>(() => {
+    const d = seedDraft(seed);
+    if (seed) {
+      d.nodeIds = sparks.filter((s) => s.lanIp === seed.host).map((s) => s.id).slice(0, topologyNodeRange(d).max);
+    }
+    return d;
+  });
+
+  /** Provenance per discovered field (drives inline badges). */
+  const [prov, setProv] = useState<Record<string, SeedProvenance>>(() => seed?.provenance ?? {});
+  /** Fields the operator explicitly confirmed from UNKNOWN → user supplied. */
+  const [cleared, setCleared] = useState<ReadonlySet<string>>(new Set());
+  const [capabilities, setCapabilities] = useState(seed?.capabilities ?? null);
+  const [seedOrigin, setSeedOrigin] = useState<string | null>(seed?.endpoint ?? null);
 
   /** Entity ids materialised at validate time (config only). */
   const [savedModelId, setSavedModelId] = useState<string | null>(initialModelId ?? null);
@@ -158,6 +219,39 @@ export function ModelWizard({
 
   const set = <K extends keyof RecipeDraft>(k: K, v: RecipeDraft[K]) => setDraft((d) => ({ ...d, [k]: v }));
 
+  /** Provenance shown for a field: cleared UNKNOWNs read as user supplied. */
+  const provOf = (key: string): SeedProvenance | undefined =>
+    cleared.has(key) ? "user" : prov[key];
+  const confirm = (key: string) => setCleared((s) => new Set(s).add(key));
+
+  /** UNKNOWN discovered fields the operator has not confirmed yet. */
+  const unknownFields = Object.entries(prov)
+    .filter(([k, v]) => v === "unknown" && !cleared.has(k))
+    .map(([k]) => k);
+
+  /** Synthetic deployment view so the WS-4 TopologySummary renders in-wizard. */
+  const topoView = {
+    deployment: { nodeIds: draft.nodeIds },
+    nodes: sparks.filter((s) => draft.nodeIds.includes(s.id)),
+    recipe: { id: draft.id, topologyBlock: topologyBlockFromDraft(draft) },
+  } as unknown as DeploymentView;
+
+  /** Hand-off from the discovery form: pre-fill, then jump to step 1. */
+  function applySeed(s: DiscoveredSeed) {
+    setPath("form");
+    setStep(0);
+    setModelMode("new");
+    setModel(seedModel(s));
+    setDraft(() => {
+      const d = seedDraft(s);
+      d.nodeIds = sparks.filter((sp) => sp.lanIp === s.host).map((sp) => sp.id).slice(0, topologyNodeRange(d).max);
+      return d;
+    });
+    setProv(s.provenance);
+    setCapabilities(s.capabilities);
+    setSeedOrigin(s.endpoint);
+  }
+
   function toggleNode(id: string) {
     setDraft((d) => {
       const has = d.nodeIds.includes(id);
@@ -169,16 +263,13 @@ export function ModelWizard({
 
   /** Seed the draft from a picked template (still fully editable). */
   function applyTemplate(id: string) {
-    const preset = ({
-      "vllm-openai": { runtime: "vllm", mechanism: "command", apiProtocol: "openai", contextLength: "32768" },
-      "tabbyapi-exl3": { runtime: "tabbyapi-exl3", quantization: "EXL3 4.0bpw", contextLength: "16384" },
-      sglang: { runtime: "sglang", mechanism: "command", contextLength: "32768" },
-      external: { runtime: "vllm", mechanism: "external", apiProtocol: "openai" },
-      "vllm-tp": { runtime: "vllm", topoMode: "tp", parallelism: "2", minNodes: "2", maxNodes: "2" },
-      "vllm-dp": { runtime: "vllm", topoMode: "dp", parallelism: "2", minNodes: "2", maxNodes: "4" },
-    } as Record<string, Partial<RecipeDraft>>)[id];
+    if (id === "scratch") {
+      setPath("form");
+      return;
+    }
+    const preset = TEMPLATE_PRESETS[id];
     if (preset) setDraft((d) => ({ ...d, ...preset }));
-    setOnPicker(false);
+    setPath("form");
   }
 
   function validateStep(): string[] {
@@ -261,7 +352,15 @@ export function ModelWizard({
 
   function next() {
     const e = validateStep();
+    const w: string[] = [];
+    if (topologyUnknown(draft)) {
+      w.push("Topology unknown — confirm TP/PP/DP/EP degrees. Node count alone never sets parallelism.");
+    }
+    if (unknownFields.length) {
+      w.push(`${unknownFields.length} UNKNOWN discovered value(s) — confirm each before saving.`);
+    }
     setErrors(e);
+    setWarnings(w);
     if (e.length > 0) return;
     const target = step + 1;
     if (target === 5) {
@@ -345,7 +444,11 @@ export function ModelWizard({
   const activeRecipe = externalRecipe;
 
   // Spec §7: creation opens a template picker before the blank form.
-  if (onPicker) {
+  // Discovery is a first-class path alongside Template and Manual (scratch).
+  if (path === "discover") {
+    return <DiscoveryForm recipes={recipes} onSeed={applySeed} onBack={() => setPath("pick")} />;
+  }
+  if (path === "pick") {
     return (
       <div className="cp-panel">
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
@@ -353,16 +456,18 @@ export function ModelWizard({
           <Chip tone="accent">config only · dry-run</Chip>
         </div>
         <p className="muted" style={{ fontSize: 12, margin: "0 0 12px", maxWidth: 560 }}>
-          Start from a proven shape, or from scratch. Save writes CONFIG entities only — no process is started or stopped.
+          Discover a running endpoint, start from a proven shape, or from scratch. Save writes CONFIG entities only — no
+          process is started or stopped.
         </p>
         <TemplatePicker
           title="Start from a template"
           templates={MODEL_TEMPLATES}
           onPick={applyTemplate}
-          onScratch={() => setOnPicker(false)}
+          onScratch={() => setPath("form")}
+          onDiscover={() => setPath("discover")}
         />
         <FormFooter onCancel={onCancel} cancelLabel="Cancel wizard">
-          <span className="muted" style={{ fontSize: 12 }}>Pick a template or start blank.</span>
+          <span className="muted" style={{ fontSize: 12 }}>Pick a template, discover, or start blank.</span>
         </FormFooter>
       </div>
     );
@@ -399,6 +504,21 @@ export function ModelWizard({
         </div>
       ) : null}
 
+      {seedOrigin ? (
+        <div className="cp-panel" style={{ borderColor: "var(--color-accent)", marginBottom: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <Chip tone="accent">discovered (read-only)</Chip>
+            <span className="mono" style={{ fontSize: 12 }}>{seedOrigin}</span>
+            <span className="muted" style={{ fontSize: 11 }}>
+              Every value stays editable · badges show provenance · {unknownFields.length} UNKNOWN to confirm
+            </span>
+          </div>
+          <p className="cp-field-hint" style={{ marginTop: 4 }}>
+            Discovery is observation, not ownership — this endpoint stays external / observed.
+          </p>
+        </div>
+      ) : null}
+
       {/* 1. Model */}
       {step === 0 ? (
         <>
@@ -428,15 +548,19 @@ export function ModelWizard({
             <>
               <FormSection legend="Model identity" columns={2}>
                 <Field label="Model name" htmlFor="w-model-name">
-                  <TextInput
-                    id="w-model-name"
-                    value={model.name}
-                    placeholder="ex: Qwen 3.8 Flash"
-                    onChange={(e) => {
-                      const name = e.target.value;
-                      setModel((m) => ({ ...m, name, id: m.id || slugify(name) }));
-                    }}
-                  />
+                  <div className="cp-discover-field">
+                    <TextInput
+                      id="w-model-name"
+                      style={{ flex: 1 }}
+                      value={model.name}
+                      placeholder="ex: Qwen 3.8 Flash"
+                      onChange={(e) => {
+                        const name = e.target.value;
+                        setModel((m) => ({ ...m, name, id: m.id || slugify(name) }));
+                      }}
+                    />
+                    <ProvenanceBadge value={provOf("modelId")} onConfirm={() => confirm("modelId")} />
+                  </div>
                 </Field>
                 <Field label="id" htmlFor="w-model-id" hint="Lowercase slug">
                   <TextInput id="w-model-id" mono value={model.id} onChange={(e) => setModel((m) => ({ ...m, id: e.target.value }))} />
@@ -550,12 +674,19 @@ export function ModelWizard({
                       </button>
                     ))}
                   </div>
+                  <ProvenanceBadge value={provOf("runtime")} onConfirm={() => confirm("runtime")} />
                 </Field>
                 <Field label="Quantization" htmlFor="w-r-quant" hint="e.g. EXL3 4.0bpw">
-                  <TextInput id="w-r-quant" mono value={draft.quantization} onChange={(e) => set("quantization", e.target.value)} />
+                  <div className="cp-discover-field">
+                    <TextInput id="w-r-quant" mono style={{ flex: 1 }} value={draft.quantization} onChange={(e) => set("quantization", e.target.value)} />
+                    <ProvenanceBadge value={provOf("quantization")} onConfirm={() => confirm("quantization")} />
+                  </div>
                 </Field>
                 <Field label="Context length" htmlFor="w-r-ctx" hint="Tokens">
-                  <TextInput id="w-r-ctx" mono inputMode="numeric" value={draft.contextLength} onChange={(e) => set("contextLength", e.target.value)} />
+                  <div className="cp-discover-field">
+                    <TextInput id="w-r-ctx" mono style={{ flex: 1 }} inputMode="numeric" value={draft.contextLength} onChange={(e) => set("contextLength", e.target.value)} />
+                    <ProvenanceBadge value={provOf("contextLength")} onConfirm={() => confirm("contextLength")} />
+                  </div>
                 </Field>
                 <Field label="Working directory" htmlFor="w-r-model" hint="Absolute POSIX path on the node">
                   <TextInput id="w-r-model" mono value={draft.workdir} onChange={(e) => set("workdir", e.target.value)} />
@@ -604,7 +735,10 @@ export function ModelWizard({
         <FormSection legend="Runtime confirm" columns={2}>
           <div className="cp-kv" style={{ gridColumn: "1 / -1" }}>
             <dt>runtime</dt>
-            <dd>{runtimesList.find((r) => r.id === (activeRecipe?.engine?.runtime ?? draft.runtime))?.label ?? (activeRecipe?.engine?.runtime ?? draft.runtime)}</dd>
+            <dd>
+              {runtimesList.find((r) => r.id === (activeRecipe?.engine?.runtime ?? draft.runtime))?.label ?? (activeRecipe?.engine?.runtime ?? draft.runtime)}
+              <ProvenanceBadge value={provOf("runtime")} onConfirm={() => confirm("runtime")} />
+            </dd>
             <dt>endpoint</dt>
             <dd className="mono">
               {activeRecipe?.endpoint?.scheme ?? draft.scheme}://{activeRecipe?.endpoint?.hostTemplate ?? draft.hostTemplate}:
@@ -612,7 +746,10 @@ export function ModelWizard({
               {activeRecipe?.endpoint?.path ?? draft.endpointPath}
             </dd>
             <dt>api protocol</dt>
-            <dd className="mono">{activeRecipe?.engine?.apiProtocol ?? draft.apiProtocol}</dd>
+            <dd>
+              <span className="mono">{activeRecipe?.engine?.apiProtocol ?? draft.apiProtocol}</span>
+              <ProvenanceBadge value={provOf("apiProtocol")} onConfirm={() => confirm("apiProtocol")} />
+            </dd>
           </div>
           {!activeRecipe ? (
             <>
@@ -636,41 +773,19 @@ export function ModelWizard({
         </FormSection>
       ) : null}
 
-      {/* 4. Compute / topology */}
+      {/* 4. Compute / topology — PHYSICAL placement vs DEPLOYMENT topology, separated */}
       {step === 3 ? (
         <>
-          <FormSection legend="Topology" columns={3}>
-            <Field label="Mode" htmlFor="w-topo">
-              <Select id="w-topo" value={draft.topoMode} onChange={(e) => set("topoMode", e.target.value as RecipeDraft["topoMode"])}>
-                <option value="single">single</option>
-                <option value="tp">tp</option>
-                <option value="pp">pp</option>
-                <option value="dp">dp</option>
-              </Select>
-            </Field>
-            <Field label="Parallelism" htmlFor="w-par">
-              <TextInput id="w-par" mono inputMode="numeric" value={draft.parallelism} onChange={(e) => set("parallelism", e.target.value)} />
-            </Field>
-            <Field label="Node bounds" htmlFor="w-bounds" hint="min–max honored by the deployment">
-              <div style={{ display: "flex", gap: 6 }}>
-                <TextInput id="w-bounds" mono inputMode="numeric" aria-label="min nodes" value={draft.minNodes} onChange={(e) => set("minNodes", e.target.value)} />
-                <TextInput mono inputMode="numeric" aria-label="max nodes" value={draft.maxNodes} onChange={(e) => set("maxNodes", e.target.value)} />
-              </div>
-            </Field>
-          </FormSection>
-          <div className="cp-section-legend">
-            Pick node(s) — {draft.nodeIds.length} selected, bounds {range.min}–{range.max}
-          </div>
-          {draft.nodeIds.length < range.min || draft.nodeIds.length > range.max ? (
-            <div className="cp-field-error" role="alert">
-              Node count is out of the recipe topology bounds ({range.min === range.max ? range.min : `${range.min}–${range.max}`}).
-            </div>
-          ) : null}
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 6 }}>
-            {sparks.length === 0 ? (
-              <span className="cp-field-hint">No nodes registered — add one in Settings.</span>
-            ) : (
-              sparks.map((n) => (
+          <div className="cp-section-legend">Physical placement — fleet-backed nodes</div>
+          <p className="cp-field-hint" style={{ marginBottom: 8 }}>
+            Pick the node(s) this runs on, then a head/coordinator and worker count. Placement is physical — it never
+            implies a parallel degree.
+          </p>
+          {sparks.length === 0 ? (
+            <span className="cp-field-hint">No nodes registered — add one in Settings.</span>
+          ) : (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {sparks.map((n) => (
                 <button
                   key={n.id}
                   type="button"
@@ -681,9 +796,63 @@ export function ModelWizard({
                   <StatusDot status={n.online ? "online" : "offline"} />
                   {n.name}
                 </button>
-              ))
-            )}
+              ))}
+            </div>
+          )}
+          <FormSection legend="Head / coordinator & workers" columns={2} style={{ marginTop: 12 }}>
+            <Field label="Head / coordinator" htmlFor="w-head" hint="Optional — must be a selected node">
+              <Select id="w-head" value={draft.coordinator} onChange={(e) => set("coordinator", e.target.value)}>
+                <option value="">none</option>
+                {sparks.filter((s) => draft.nodeIds.includes(s.id)).map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Workers" htmlFor="w-workers" hint="Optional physical worker hint">
+              <TextInput id="w-workers" mono inputMode="numeric" value={draft.workers} onChange={(e) => set("workers", e.target.value)} />
+            </Field>
+          </FormSection>
+
+          <div className="cp-section-legend">Deployment topology — explicit degrees</div>
+          <p className="cp-field-hint" style={{ marginBottom: 8 }}>
+            TP/PP/DP/EP are entered explicitly and default to unknown. Leaving them blank NEVER infers parallelism from
+            the node count.
+          </p>
+          <FormSection legend="Degrees (blank = unknown)" columns={4}>
+            <Field label="TP" htmlFor="w-tp">
+              <TextInput id="w-tp" mono inputMode="numeric" value={draft.tp} onChange={(e) => set("tp", e.target.value)} />
+            </Field>
+            <Field label="PP" htmlFor="w-pp">
+              <TextInput id="w-pp" mono inputMode="numeric" value={draft.pp} onChange={(e) => set("pp", e.target.value)} />
+            </Field>
+            <Field label="DP" htmlFor="w-dp">
+              <TextInput id="w-dp" mono inputMode="numeric" value={draft.dp} onChange={(e) => set("dp", e.target.value)} />
+            </Field>
+            <Field label="EP" htmlFor="w-ep">
+              <TextInput id="w-ep" mono inputMode="numeric" value={draft.ep} onChange={(e) => set("ep", e.target.value)} />
+            </Field>
+          </FormSection>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+            <span className="muted" style={{ fontSize: 12 }}>Representation</span>
+            <TopologySummary view={topoView} />
+            <span className="muted" style={{ fontSize: 11 }}>
+              {draft.nodeIds.length} node(s) placed · bounds {range.min}–{range.max}
+            </span>
           </div>
+
+          {topologyUnknown(draft) ? (
+            <div className="cp-field-error" role="alert">
+              topology unknown — confirm: {draft.nodeIds.length} nodes placed but no TP/PP/DP/EP degree set.
+            </div>
+          ) : null}
+          {draft.nodeIds.length < range.min || draft.nodeIds.length > range.max ? (
+            <div className="cp-field-error" role="alert">
+              Node count is out of the recipe topology bounds ({range.min === range.max ? range.min : `${range.min}–${range.max}`}).
+            </div>
+          ) : null}
         </>
       ) : null}
 
@@ -692,13 +861,19 @@ export function ModelWizard({
         <>
           <FormSection legend="Endpoint & serving options" columns={2}>
             <Field label="API port" htmlFor="w-port">
-              <TextInput id="w-port" mono inputMode="numeric" value={activeRecipe ? String(activeRecipe.endpoint?.port ?? activeRecipe.apiPort) : draft.apiPort} disabled={Boolean(activeRecipe)} onChange={(e) => set("apiPort", e.target.value)} />
+              <div className="cp-discover-field">
+                <TextInput id="w-port" mono style={{ flex: 1 }} inputMode="numeric" value={activeRecipe ? String(activeRecipe.endpoint?.port ?? activeRecipe.apiPort) : draft.apiPort} disabled={Boolean(activeRecipe)} onChange={(e) => set("apiPort", e.target.value)} />
+                <ProvenanceBadge value={provOf("port")} onConfirm={() => confirm("port")} />
+              </div>
             </Field>
             <Field label="Path" htmlFor="w-path">
               <TextInput id="w-path" mono value={activeRecipe?.endpoint?.path ?? draft.endpointPath} disabled={Boolean(activeRecipe)} onChange={(e) => set("endpointPath", e.target.value)} />
             </Field>
             <Field label="Context length" htmlFor="w-ctx2">
-              <TextInput id="w-ctx2" mono inputMode="numeric" value={activeRecipe?.serving?.contextLength != null ? String(activeRecipe.serving.contextLength) : draft.contextLength} disabled={Boolean(activeRecipe)} onChange={(e) => set("contextLength", e.target.value)} />
+              <div className="cp-discover-field">
+                <TextInput id="w-ctx2" mono style={{ flex: 1 }} inputMode="numeric" value={activeRecipe?.serving?.contextLength != null ? String(activeRecipe.serving.contextLength) : draft.contextLength} disabled={Boolean(activeRecipe)} onChange={(e) => set("contextLength", e.target.value)} />
+                <ProvenanceBadge value={provOf("contextLength")} onConfirm={() => confirm("contextLength")} />
+              </div>
             </Field>
             <Field label="Log directory" htmlFor="w-log2" hint="Enables the Live Console (read-only tail)">
               <TextInput id="w-log2" mono value={activeRecipe?.logSource?.path ?? draft.logDir} disabled={Boolean(activeRecipe)} onChange={(e) => set("logDir", e.target.value)} />
@@ -740,23 +915,68 @@ export function ModelWizard({
         <div className="cp-panel">
           <div className="cp-panel-title">Exactly what will be created / associated</div>
           <dl className="cp-kv">
-            <dt>model</dt>
+            <dt>Model</dt>
             <dd>
               {savedModelId && modelMode === "new" ? "create" : modelMode === "existing" ? "associate" : "create"} —{" "}
               <span className="mono">{savedModelId ?? model.id ?? modelId}</span>
+              <ProvenanceBadge value={provOf("modelId")} onConfirm={() => confirm("modelId")} />
             </dd>
-            <dt>recipe</dt>
+            <dt>Recipe</dt>
             <dd>
               {recipeMode === "new" ? "create" : recipeMode === "duplicate" ? "duplicate (source untouched)" : "associate"} —{" "}
               <span className="mono">{savedRecipeId ?? (recipeMode === "new" ? draft.id : srcRecipeId)}</span>
             </dd>
-            <dt>deployment</dt>
-            <dd>create binding</dd>
-            <dt>nodes</dt>
-            <dd className="mono">{draft.nodeIds.join(", ") || "—"}</dd>
-            <dt>desired state</dt>
-            <dd className="mono">{desiredState}</dd>
-            <dt>remote processes</dt>
+            <dt>Runtime</dt>
+            <dd>
+              <span className="mono">{runtimesList.find((r) => r.id === draft.runtime)?.label ?? draft.runtime}</span>
+              <ProvenanceBadge value={provOf("runtime")} onConfirm={() => confirm("runtime")} />
+            </dd>
+            <dt>Endpoint</dt>
+            <dd className="mono">
+              {draft.scheme}://{draft.hostTemplate}:{draft.apiPort}
+              {draft.endpointPath}
+            </dd>
+            <dt>Compute</dt>
+            <dd className="mono">
+              {draft.nodeIds.length} node(s){draft.coordinator ? ` · head ${draft.coordinator}` : ""}
+              {draft.workers ? ` · ${draft.workers} workers` : ""}
+            </dd>
+            <dt>Topology</dt>
+            <dd>
+              <TopologySummary view={topoView} />
+              {topologyUnknown(draft) ? <span className="cp-field-hint"> — confirm degrees</span> : null}
+            </dd>
+            <dt>Context</dt>
+            <dd>
+              <span className="mono">{draft.contextLength || "—"}</span>
+              <ProvenanceBadge value={provOf("contextLength")} onConfirm={() => confirm("contextLength")} />
+            </dd>
+            <dt>Quantization</dt>
+            <dd className="mono">{draft.quantization || "—"}</dd>
+            <dt>API protocol</dt>
+            <dd>
+              <span className="mono">{draft.apiProtocol}</span>
+              <ProvenanceBadge value={provOf("apiProtocol")} onConfirm={() => confirm("apiProtocol")} />
+            </dd>
+            <dt>Capabilities</dt>
+            <dd className="mono">
+              {capabilities
+                ? (["text", "streaming", "vision", "tools", "reasoning"] as const)
+                    .map((k) => `${k}:${capabilities[k]}`)
+                    .join(" · ")
+                : "not probed (metadata only)"}
+            </dd>
+            <dt>Ownership</dt>
+            <dd>
+              {wantsExternal ? "External / observed (discovery ≠ ownership)" : "SparkDash-managed"}
+            </dd>
+            <dt>Deployment</dt>
+            <dd>
+              create binding · desired state <span className="mono">{desiredState}</span>
+            </dd>
+            <dt>SAFETY</dt>
+            <dd>CONFIG ONLY — no lifecycle action will occur</dd>
+            <dt>Remote processes</dt>
             <dd>untouched (config-only)</dd>
           </dl>
         </div>

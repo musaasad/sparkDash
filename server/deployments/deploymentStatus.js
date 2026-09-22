@@ -89,21 +89,45 @@ export function probeUrl(host, port, healthPath) {
 }
 
 /**
- * Read-only HTTP GET classification. Deliberately sends NO Authorization header
- * so an auth-gated endpoint yields 401/403 (proof of a live process).
+ * Read-only HTTP probe classification. Defaults to a bare GET with NO
+ * Authorization header so an auth-gated endpoint yields 401/403 (proof of a
+ * live process). Optional `headers` attach a caller-resolved cred reference;
+ * optional `method`/`json` allow the tiny capability POSTs — nothing else is
+ * ever sent and nothing is written.
  * @param {string|null} url
- * @param {{ fetchImpl?: typeof fetch, timeoutMs?: number }} [opts]
+ * @param {{
+ *   fetchImpl?: typeof fetch, timeoutMs?: number, headers?: Record<string,string>|null,
+ *   method?: string, json?: unknown, parseBody?: boolean,
+ * }} [opts]
  */
-export async function probeEndpoint(url, { fetchImpl = fetch, timeoutMs = 3000 } = {}) {
-  if (!url) return { status: null, errorCode: "ENOTFOUND", errorName: null };
+export async function probeEndpoint(
+  url,
+  { fetchImpl = fetch, timeoutMs = 3000, headers = null, method = "GET", json = null, parseBody = false } = {}
+) {
+  if (!url) return { status: null, errorCode: "ENOTFOUND", errorName: null, body: null };
+  const init = {
+    method,
+    signal: AbortSignal.timeout(timeoutMs),
+    headers: { ...(headers || {}), ...(json != null ? { "content-type": "application/json" } : {}) },
+  };
+  if (json != null) init.body = JSON.stringify(json);
   try {
-    const res = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) });
-    return { status: res.status, errorCode: null, errorName: null };
+    const res = await fetchImpl(url, init);
+    let body = null;
+    if (parseBody && res.ok) {
+      try {
+        body = await res.json();
+      } catch {
+        body = null;
+      }
+    }
+    return { status: res.status, errorCode: null, errorName: null, body };
   } catch (err) {
     return {
       status: null,
       errorCode: err?.cause?.code ?? err?.code ?? null,
       errorName: err?.name ?? null,
+      body: null,
     };
   }
 }

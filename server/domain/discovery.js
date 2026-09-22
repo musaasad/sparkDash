@@ -26,6 +26,8 @@ import path from "path";
 import { atomicWrite } from "../util/atomicWrite.js";
 import { DISCOVERED_JSON_PATH } from "../config.js";
 import { llmProbeHost } from "../collectors/llmHost.js";
+import { probeUrl, probeEndpoint } from "../deployments/deploymentStatus.js";
+import { loadSecrets, loadRecipeEnv } from "../secretsStore.js";
 import {
   detectRuntime,
   healthClassify,
@@ -38,6 +40,80 @@ import {
 
 const PGREP_CMD = processEvidenceCmd();
 const DEFAULT_TTL_MS = 60_000;
+/** Ad-hoc operator probes stay SHORT — a single endpoint, never a sweep. */
+const ADHOC_TIMEOUT_MS = 2500;
+const CAPABILITY_TIMEOUT_MS = 4000;
+
+/** Resolve a `credRef` to a plaintext value ONLY here; the value is never echoed. */
+function defaultCredResolver(ref) {
+  const s = String(ref || "").trim();
+  if (!s) return null;
+  if (s.startsWith("spark:")) {
+    const [, id, port] = s.split(":");
+    if (!id || !port) return null;
+    try {
+      return loadSecrets().llmApiKeys.get(id)?.[String(port)] || null;
+    } catch {
+      return null;
+    }
+  }
+  if (s.startsWith("recipe:")) {
+    try {
+      return loadRecipeEnv().get(s) || null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/** Bearer header for a resolved cred. NEVER carries the literal in the output. */
+function authHeaders(cred) {
+  return cred ? { Authorization: `Bearer ${cred}` } : null;
+}
+
+/** Metadata fields worth surfacing from a `/v1/models` entry, if exposed. */
+function metadataHints(body) {
+  const first = Array.isArray(body?.data) ? body.data[0] : Array.isArray(body) ? body[0] : null;
+  if (!first || typeof first !== "object") return {};
+  const contextLength =
+    first.context_length ?? first.max_model_len ?? first.max_context_length ?? first.context_window ?? null;
+  const quantization = first.quantization ?? first.quant ?? null;
+  return {
+    contextLength: contextLength != null ? Number(contextLength) || null : null,
+    quantization: quantization != null ? String(quantization).toLowerCase() : null,
+    apiProtocol: Array.isArray(body?.data) ? "openai" : Array.isArray(body) ? "native" : "unknown",
+  };
+}
+
+/**
+ * SUGGESTION only — the operator can always override. Low confidence whenever
+ * the runtime identity is uncertain, so the UI never pretends to be sure.
+ * @param {{runtime?:string|null, apiProtocol?:string|null, quantization?:string|null}} input
+ * @returns {{templateId:string, confidence:"high"|"medium"|"low"}}
+ */
+export function suggestTemplate({ runtime = null, apiProtocol = null, quantization = null } = {}) {
+  if (runtime === "tabbyapi-exl3" || quantization === "exl3") {
+    return { templateId: "tabbyapi-exl3", confidence: "high" };
+  }
+  if (runtime === "vllm") {
+    return apiProtocol === "openai"
+      ? { templateId: "vllm-openai", confidence: "high" }
+      : { templateId: "vllm-openai", confidence: "medium" };
+  }
+  if (apiProtocol === "openai") return { templateId: "external-observed", confidence: "low" };
+  return { templateId: "scratch", confidence: "low" };
+}
+
+/** Trivial capability detection from the model id — never a benchmark. */
+function idHints(ids = []) {
+  const s = ids.join(" ").toLowerCase();
+  return {
+    vision: /\b(vl|vision|llava|pixtral|multimodal)\b/.test(s) ? "yes" : "unknown",
+    tools: /\b(tools?|function|hermes)\b/.test(s) ? "yes" : "unknown",
+    reasoning: /\b(r1|reasoning|thinking|reasoner)\b/.test(s) ? "yes" : "unknown",
+  };
+}
 
 const slug = (s) =>
   String(s || "")
@@ -66,11 +142,14 @@ export class DiscoveryService {
     this.modelRegistry = opts.modelRegistry || null;
     this.fetchImpl = opts.fetchImpl || fetch;
     this.sshExecFn = opts.sshExecFn || null;
+    this.credResolver = opts.credResolver || defaultCredResolver;
     this.path = opts.path || DISCOVERED_JSON_PATH;
     this.ttlMs = opts.ttlMs ?? DEFAULT_TTL_MS;
     /** @type {Map<string, object>} id -> record */
     this._records = new Map();
     this._inFlight = new Set();
+    /** host -> Set<port> recently observed (ad-hoc + scanned), for bounded re-scan. */
+    this._observedPorts = new Map();
     this._load();
   }
 
@@ -98,12 +177,31 @@ export class DiscoveryService {
     }
   }
 
-  /** Inference ports worth scanning: declared llmPorts + ports any recipe uses. */
+  /**
+   * Remember an observed host:port so a later scan re-covers it. Bounded: only
+   * known fleet hosts or explicitly probed endpoints ever enter the set.
+   */
+  _rememberEndpoint(host, port) {
+    if (!host || !port) return;
+    const set = this._observedPorts.get(host) || new Set();
+    set.add(Number(port));
+    this._observedPorts.set(host, set);
+  }
+
+  /**
+   * Inference ports worth scanning: declared llmPorts + ports any recipe uses +
+   * ports recently observed on this node's host. NO blind LAN sweep — only these.
+   */
   portsForNode(nodeId) {
     const spark = this.sparkRegistry.getSpark(nodeId);
     const ports = new Set((spark?.llmPorts || []).map(Number).filter(Boolean));
     for (const r of this.recipeRegistry.list()) {
       if ((r.nodeIds || []).includes(nodeId) && r.endpoint?.port) ports.add(Number(r.endpoint.port));
+    }
+    const host = llmProbeHost(spark);
+    for (const p of this._observedPorts.get(host) || []) ports.add(Number(p));
+    for (const rec of this._records.values()) {
+      if (rec.nodeId === nodeId && rec.port) ports.add(Number(rec.port));
     }
     return [...ports].filter((p) => Number.isInteger(p) && p > 0 && p < 65536);
   }
@@ -232,17 +330,21 @@ export class DiscoveryService {
     };
   }
 
-  /** Scan every node/port. Idempotent, TTL-guarded, offline-safe. */
-  async scan() {
+  /**
+   * Scan every node/port, or a single node when `{nodeId}` is passed. Idempotent,
+   * TTL-guarded, offline-safe. Bounded targets only — never a blind LAN sweep.
+   */
+  async scan({ nodeId = null } = {}) {
     const now = Date.now();
-    for (const nodeId of this.sparkRegistry.sparkIds || []) {
-      for (const port of this.portsForNode(nodeId)) {
-        const id = `disc-${slug(nodeId)}-${port}`;
+    const nodeIds = nodeId ? [nodeId] : this.sparkRegistry.sparkIds || [];
+    for (const id_ of nodeIds) {
+      for (const port of this.portsForNode(id_)) {
+        const id = `disc-${slug(id_)}-${port}`;
         if (this._inFlight.has(id)) continue;
         const prev = this._records.get(id);
         if (prev && now - (prev.detectedAt || 0) < this.ttlMs) continue;
         this._inFlight.add(id);
-        void this._probe(nodeId, port)
+        void this._probe(id_, port)
           .then((rec) => {
             if (!rec) {
               // Endpoint stopped answering: keep the record but mark not-detected.
@@ -265,6 +367,159 @@ export class DiscoveryService {
           });
       }
     }
+  }
+
+  /**
+   * Ad-hoc discovery of ONE operator-supplied endpoint. READ-ONLY GET /v1/models
+   * via the shared probeUrl/probeEndpoint, short timeout, bounded (no sweep).
+   * A cred is attached ONLY as a reference — its value is never returned.
+   *
+   * @param {{host:string, port:number|string, scheme?:string, credRef?:string}} input
+   */
+  async discoverEndpoint({ host, port, scheme = "http", credRef = null } = {}) {
+    const p = Number(port);
+    const provenance = {};
+    if (!host || !Number.isInteger(p) || p < 1 || p > 65535) {
+      const err = new Error("host and port (1–65535) are required");
+      err.status = 400;
+      throw err;
+    }
+    const schemeUsed = scheme === "https" ? "https" : "http";
+    const base = `${schemeUsed}://${String(host).trim()}:${p}`;
+    const url = probeUrl(String(host).trim(), p, "/v1/models").replace(/^http:/, `${schemeUsed}:`);
+
+    provenance.host = "user";
+    provenance.port = "user";
+    provenance.scheme = "user";
+
+    let cred = null;
+    if (credRef) {
+      try {
+        cred = this.credResolver(credRef);
+      } catch {
+        cred = null;
+      }
+    }
+
+    const outcome = await probeEndpoint(url, {
+      fetchImpl: this.fetchImpl,
+      timeoutMs: ADHOC_TIMEOUT_MS,
+      headers: authHeaders(cred),
+      parseBody: true,
+    });
+
+    provenance.reachable = outcome.status != null ? "probed" : "unknown";
+    const body = outcome.body;
+    const owned = body?.data?.[0]?.owned_by ?? null;
+    const signals = { backendType: null, ownedBy: owned, serverIsOpenAI: outcome.status ? true : null, shape: body, port: p };
+    const runtime = detectRuntime(signals);
+    const health = healthClassify(runtime, { status: outcome.status, errorCode: outcome.errorCode, errorName: outcome.errorName });
+
+    const hints = metadataHints(body);
+    const ids = body ? servedModelIds(runtime, body) : [];
+
+    provenance.runtime = runtime !== "custom" ? "detected" : "unknown";
+    provenance.runtimeConfidence = runtime !== "custom" ? (body ? "medium" : "low") : "low";
+    provenance.servedModelIds = ids.length ? "detected" : "unknown";
+    provenance.modelId = ids.length ? "detected" : "unknown";
+    provenance.health = "probed";
+    provenance.contextLength = hints.contextLength != null ? "detected" : "unknown";
+    provenance.apiProtocol = hints.apiProtocol && hints.apiProtocol !== "unknown" ? "detected" : "unknown";
+    provenance.quantization = hints.quantization != null ? "detected" : "unknown";
+    provenance.credRef = credRef ? "user" : "unknown";
+    provenance.credApplied = credRef && cred ? "probed" : credRef ? "unknown" : "unknown";
+
+    this._rememberEndpoint(String(host).trim(), p);
+
+    const detected = {
+      reachable: outcome.status != null ? health !== "not-detected" : false,
+      runtime,
+      runtimeConfidence: provenance.runtimeConfidence,
+      servedModelIds: ids,
+      modelId: ids[0] ?? null,
+      health,
+      contextLength: hints.contextLength,
+      apiProtocol: hints.apiProtocol,
+      quantization: hints.quantization,
+      endpoint: `${base}/v1/models`,
+      credAttached: Boolean(cred),
+      provenance,
+    };
+    detected.suggestedTemplate = suggestTemplate({
+      runtime,
+      apiProtocol: hints.apiProtocol === "unknown" ? null : hints.apiProtocol,
+      quantization: hints.quantization,
+    });
+    return detected;
+  }
+
+  /**
+   * SEPARATE explicit opt-in capability probe. TINY + bounded: max_tokens 1,
+   * one-char prompt, short timeout. Never a benchmark, never a huge context.
+   * @param {{host:string, port:number|string, scheme?:string, credRef?:string, modelId?:string}} input
+   */
+  async probeCapabilities({ host, port, scheme = "http", credRef = null, modelId = null } = {}) {
+    const p = Number(port);
+    if (!host || !Number.isInteger(p) || p < 1 || p > 65535) {
+      const err = new Error("host and port (1–65535) are required");
+      err.status = 400;
+      throw err;
+    }
+    const schemeUsed = scheme === "https" ? "https" : "http";
+    const base = `${schemeUsed}://${String(host).trim()}:${p}`;
+
+    let cred = null;
+    if (credRef) {
+      try {
+        cred = this.credResolver(credRef);
+      } catch {
+        cred = null;
+      }
+    }
+    const headers = authHeaders(cred);
+    const model = modelId || "default";
+
+    // Discover the served model id when the operator did not supply one (tiny GET).
+    if (!modelId) {
+      const listed = await probeEndpoint(`${base}/v1/models`, {
+        fetchImpl: this.fetchImpl, timeoutMs: ADHOC_TIMEOUT_MS, headers, parseBody: true,
+      });
+      const ids = listed.body ? servedModelIds("custom", listed.body) : [];
+      if (ids[0]) modelId = ids[0];
+    }
+
+    const hints = idHints(modelId ? [modelId] : []);
+    const provenance = { text: "unknown", streaming: "unknown", vision: hints.vision === "yes" ? "detected" : "unknown", tools: hints.tools === "yes" ? "detected" : "unknown", reasoning: hints.reasoning === "yes" ? "detected" : "unknown" };
+    const result = { text: "unknown", streaming: "unknown", vision: hints.vision, tools: hints.tools, reasoning: hints.reasoning, modelId: modelId ?? null, provenance, credAttached: Boolean(cred) };
+
+    // Tiny text completion: 1 token, one char.
+    const textOut = await probeEndpoint(`${base}/v1/chat/completions`, {
+      fetchImpl: this.fetchImpl,
+      timeoutMs: CAPABILITY_TIMEOUT_MS,
+      headers,
+      method: "POST",
+      json: { model, messages: [{ role: "user", content: "hi" }], max_tokens: 1, stream: false },
+    });
+    if (textOut.status != null) {
+      result.text = textOut.status >= 200 && textOut.status < 300 ? "yes" : textOut.status === 400 || textOut.status === 404 ? "no" : "unknown";
+      provenance.text = textOut.status != null ? "probed" : "unknown";
+    }
+
+    // Tiny stream: 1 token, ask for streaming; unsupported → 4xx = "no".
+    const streamOut = await probeEndpoint(`${base}/v1/chat/completions`, {
+      fetchImpl: this.fetchImpl,
+      timeoutMs: CAPABILITY_TIMEOUT_MS,
+      headers,
+      method: "POST",
+      json: { model, messages: [{ role: "user", content: "hi" }], max_tokens: 1, stream: true },
+    });
+    if (streamOut.status != null) {
+      result.streaming = streamOut.status >= 200 && streamOut.status < 300 ? "yes" : streamOut.status === 400 || streamOut.status === 404 ? "no" : "unknown";
+      provenance.streaming = streamOut.status != null ? "probed" : "unknown";
+    }
+
+    this._rememberEndpoint(String(host).trim(), p);
+    return result;
   }
 
   /**

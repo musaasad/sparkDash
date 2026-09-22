@@ -462,6 +462,10 @@ import type {
   DiscoveryResponse,
   AdoptDiscoveryRequest,
   AdoptDiscoveryResult,
+  DiscoveryProbeRequest,
+  DiscoveryProbeResult,
+  ProbeCapabilitiesRequest,
+  ProbeCapabilitiesResult,
   RuntimeProviderInfo,
 } from "./types";
 
@@ -603,4 +607,20 @@ export function adoptDiscovered(id: string, body: AdoptDiscoveryRequest): Promis
     method: "POST",
     body: JSON.stringify(body),
   });
+}
+
+/**
+ * Read-only probe of ONE operator-typed endpoint (GET /v1/models). Automatic and
+ * free; bounded to that single endpoint — never a LAN sweep.
+ */
+export function probeDiscoveryEndpoint(body: DiscoveryProbeRequest): Promise<DiscoveryProbeResult> {
+  return apiFetch("/api/discovery/probe", { method: "POST", body: JSON.stringify(body) });
+}
+
+/**
+ * SEPARATE explicit opt-in TINY capability probe (max_tokens 1). Never a
+ * benchmark; never echoes a credential value.
+ */
+export function probeDiscoveryCapabilities(body: ProbeCapabilitiesRequest): Promise<ProbeCapabilitiesResult> {
+  return apiFetch("/api/discovery/probe-capabilities", { method: "POST", body: JSON.stringify(body) });
 }

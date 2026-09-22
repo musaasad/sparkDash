@@ -537,6 +537,45 @@ export function createControlPlane(deps) {
     }
   });
 
+  // Ad-hoc single-endpoint discovery (read-only) + opt-in tiny capability probe.
+  app.post("/api/discovery/probe", async (req, res) => {
+    try {
+      const b = req.body || {};
+      const result = await discovery.discoverEndpoint({
+        host: b.host,
+        port: b.port,
+        scheme: b.scheme,
+        credRef: b.credRef,
+      });
+      activity.push({
+        kind: "discovery",
+        subject: `${b.host}:${b.port}`,
+        summary: `ad-hoc endpoint probed (read-only)`,
+        meta: { runtime: result.runtime, health: result.health, suggestedTemplate: result.suggestedTemplate.templateId },
+      });
+      res.json(result);
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/discovery/probe-capabilities", async (req, res) => {
+    try {
+      const b = req.body || {};
+      res.json(
+        await discovery.probeCapabilities({
+          host: b.host,
+          port: b.port,
+          scheme: b.scheme,
+          credRef: b.credRef,
+          modelId: b.modelId,
+        })
+      );
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message });
+    }
+  });
+
   for (const action of ["start", "stop", "restart"]) {
     app.post(`/api/deployments/:id/${action}`, requireLifecycleAuth, (req, res) => {
       try {

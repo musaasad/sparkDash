@@ -18,12 +18,15 @@ export function TemplatePicker({
   templates,
   onPick,
   onScratch,
+  onDiscover,
   initialVisible = 4,
 }: {
   title: string;
   templates: TemplatePickerItem[];
   onPick: (id: string) => void;
   onScratch: () => void;
+  /** First-class path for an ALREADY-RUNNING endpoint (discovery). */
+  onDiscover?: () => void;
   initialVisible?: number;
 }) {
   const [showAll, setShowAll] = useState(false);
@@ -35,6 +38,15 @@ export function TemplatePicker({
       <div className="cp-picker-main">
         <div className="cp-picker-title">{title}</div>
         <div className="cp-picker-grid" role="list">
+          {onDiscover ? (
+            <button type="button" role="listitem" className="cp-discover-card" onClick={onDiscover}>
+              <span className="cp-discover-badge">First-class path</span>
+              <span className="cp-template-name">Discover running model</span>
+              <span className="cp-template-desc">
+                Already running a lab endpoint? Probe it read-only (GET /v1/models) and pre-fill the wizard.
+              </span>
+            </button>
+          ) : null}
           {visible.map((t) => (
             <button key={t.id} type="button" role="listitem" className="cp-template-card" onClick={() => onPick(t.id)}>
               <span className="cp-template-icon" aria-hidden="true">

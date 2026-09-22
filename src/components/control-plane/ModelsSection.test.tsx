@@ -102,4 +102,27 @@ describe("ModelsSection row grammar", () => {
     act(() => stoppedTab!.click());
     expect(container.querySelectorAll(".cp-deploy-row")).toHaveLength(1);
   });
+
+  it("exposes 'Discover running model' as a first-class entry into the wizard", () => {
+    cleanupRenders();
+    const { container } = render(
+      <ModelsSection models={[]} recipes={[]} deployments={[]} sparks={[spark("n1", "Spark A")]} activity={activity} navigate={() => {}} onSaved={() => {}} />
+    );
+    const discover = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === "Discover running model");
+    expect(discover).not.toBeUndefined();
+    act(() => discover!.click());
+    // Opens the read-only discovery form (one bounded host:port), not a picker.
+    expect(container.querySelector("#disc-host")).not.toBeNull();
+    expect(container.textContent).toContain("read-only");
+  });
+
+  it("shows the discover card in the template picker as a first-class path", () => {
+    cleanupRenders();
+    const { container } = render(
+      <ModelsSection models={[]} recipes={[]} deployments={[]} sparks={[spark("n1", "Spark A")]} activity={activity} navigate={() => {}} onSaved={() => {}} />
+    );
+    const add = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === "+ Add model");
+    act(() => add!.click());
+    expect(container.querySelector(".cp-discover-card")).not.toBeNull();
+  });
 });

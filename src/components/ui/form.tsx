@@ -118,13 +118,15 @@ export function FormSection({
   legend,
   children,
   columns = 2,
+  style,
 }: {
   legend: string;
   children: ReactNode;
-  columns?: 1 | 2 | 3;
+  columns?: 1 | 2 | 3 | 4;
+  style?: React.CSSProperties;
 }) {
   return (
-    <fieldset style={{ border: "none", padding: 0, margin: "0 0 18px" }}>
+    <fieldset style={{ border: "none", padding: 0, margin: "0 0 18px", ...style }}>
       <legend className="cp-section-legend">{legend}</legend>
       <div
         style={{

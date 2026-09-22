@@ -1199,6 +1199,73 @@ export interface AdoptDiscoveryResult {
   note: string;
 }
 
+// ─── WS-3b Discovery → Wizard ────────────────────────────────────────────────
+/** Where a wizard value came from. `detected`/`probed` are never the operator. */
+export type SeedProvenance = "detected" | "probed" | "user" | "unknown";
+/** Per-field provenance map keyed by discovered field name. */
+export type DiscoveryProvenance = Record<string, SeedProvenance>;
+
+export interface DiscoveryProbeRequest {
+  host: string;
+  port: number | string;
+  scheme?: "http" | "https";
+  /** Reference into the secrets store — the value is never echoed. */
+  credRef?: string | null;
+}
+
+/** Read-only GET /v1/models outcome. `reachable:false` + UNKNOWN degrade freely. */
+export interface DiscoveryProbeResult {
+  reachable: boolean;
+  runtime: RecipeRuntime;
+  runtimeConfidence: "high" | "medium" | "low";
+  servedModelIds: string[];
+  modelId: string | null;
+  health: DeploymentObserved;
+  contextLength: number | null;
+  apiProtocol: "openai" | "native" | "unknown";
+  quantization: string | null;
+  endpoint: string;
+  credAttached: boolean;
+  suggestedTemplate: { templateId: string; confidence: "high" | "medium" | "low" };
+  provenance: DiscoveryProvenance;
+}
+
+export type CapabilityValue = "yes" | "no" | "unknown";
+
+export interface ProbeCapabilitiesRequest {
+  host: string;
+  port: number | string;
+  scheme?: "http" | "https";
+  credRef?: string | null;
+  modelId?: string | null;
+}
+
+/** Opt-in TINY capability probe — never a benchmark. */
+export interface ProbeCapabilitiesResult {
+  text: CapabilityValue;
+  streaming: CapabilityValue;
+  vision: CapabilityValue;
+  tools: CapabilityValue;
+  reasoning: CapabilityValue;
+  modelId: string | null;
+  provenance: DiscoveryProvenance;
+  credAttached: boolean;
+}
+
+/**
+ * Seed handed to ModelWizard from the discovery form. Discovery = observation,
+ * NEVER ownership: an adopted external endpoint stays "external / observed".
+ * Every field is overridable and carries provenance.
+ */
+export interface DiscoveredSeed extends DiscoveryProbeResult {
+  host: string;
+  port: number;
+  scheme: "http" | "https";
+  credRef: string | null;
+  /** Optional opt-in capability result; null when the operator skipped it. */
+  capabilities: ProbeCapabilitiesResult | null;
+}
+
 export interface ActivityEvent {
   seq: number;
   ts: string;

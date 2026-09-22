@@ -4274,6 +4274,32 @@ html {
 }
 .cp-template-scratch:hover { border-color: var(--color-accent); background: var(--color-surface-hover); }
 
+/* ─── Discovery → wizard: first-class discover card + provenance (spec §10) ─── */
+.cp-discover-card {
+  grid-column: 1 / -1; display: flex; flex-direction: column; gap: 4px; text-align: left;
+  padding: var(--space-3); border: 1px solid var(--color-accent);
+  border-radius: var(--radius-card); background: var(--color-selected); cursor: pointer;
+}
+.cp-discover-card:hover { background: var(--color-accent-soft); }
+.cp-discover-card:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: 1px; }
+.cp-discover-badge { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--color-accent-strong); }
+
+.cp-prov { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 500; }
+.cp-prov-dot { width: 3px; height: 12px; border-radius: 999px; flex: none; }
+.cp-prov-confirm {
+  border: none; background: none; padding: 0 0 0 2px; font-size: 11px;
+  color: var(--color-accent-strong); cursor: pointer; text-decoration: underline;
+}
+
+.cp-discover-field { display: flex; align-items: center; gap: 6px; }
+.cp-discover-detected { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 6px 12px; font-size: 12px; }
+.cp-discover-detected dt { color: var(--color-muted); }
+.cp-discover-detected dd { margin: 0; display: flex; align-items: center; gap: 8px; color: var(--color-text); }
+.cp-cap-list { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; font-size: 12px; }
+.cp-cap-list dt { color: var(--color-muted); font-size: 11px; }
+.cp-cap-list dd { margin: 0; font-family: "JetBrains Mono", ui-monospace, monospace; color: var(--color-text); }
+.cp-cap-list dd.is-unknown { color: var(--color-muted); }
+
 /* ─── Getting-started checklist (spec §7/§8, fresh lab only) ─── */
 .cp-getstarted { display: flex; flex-direction: column; gap: var(--space-3); }
 .cp-getstarted-overline { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--color-muted); }

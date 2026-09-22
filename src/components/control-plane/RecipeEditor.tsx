@@ -3,6 +3,7 @@ import type {
   RecipePublic,
   RecipeRuntime,
   RecipeTopology,
+  RecipeTopologyBlock,
   TopologyMode,
   RecipeValidateResponse,
   SparkSnapshot,
@@ -54,6 +55,14 @@ export interface RecipeDraft {
   parallelism: string;
   minNodes: string;
   maxNodes: string;
+  /** DEPLOYMENT topology degrees — explicit, NEVER inferred from node count. */
+  tp: string;
+  pp: string;
+  dp: string;
+  ep: string;
+  /** PHYSICAL placement hints (separate from topology). */
+  coordinator: string;
+  workers: string;
   healthPath: string;
   logDir: string;
   nodeIds: string[];
@@ -87,6 +96,12 @@ export function emptyRecipeDraft(modelId: string, weightId?: string | null): Rec
     parallelism: "1",
     minNodes: "1",
     maxNodes: "1",
+    tp: "",
+    pp: "",
+    dp: "",
+    ep: "",
+    coordinator: "",
+    workers: "",
     healthPath: "/v1/models",
     logDir: "",
     nodeIds: [],
@@ -119,9 +134,47 @@ export function draftFromRecipe(r: RecipePublic): RecipeDraft {
     parallelism: String(r.topologyBlock?.parallelism ?? 1),
     minNodes: String(r.topologyBlock?.minNodes ?? (r.topologyBlock?.parallelism || 1)),
     maxNodes: String(r.topologyBlock?.maxNodes ?? (r.topologyBlock?.minNodes ?? r.topologyBlock?.parallelism ?? 1)),
+    tp: r.topologyBlock?.tp != null ? String(r.topologyBlock.tp) : "",
+    pp: r.topologyBlock?.pp != null ? String(r.topologyBlock.pp) : "",
+    dp: r.topologyBlock?.dp != null ? String(r.topologyBlock.dp) : "",
+    ep: r.topologyBlock?.ep != null ? String(r.topologyBlock.ep) : "",
+    coordinator: r.topologyBlock?.coordinator ?? "",
+    workers: r.topologyBlock?.workers != null ? String(r.topologyBlock.workers) : "",
     healthPath: r.healthProbe?.path ?? r.healthPath ?? "/v1/models",
     logDir: r.logSource?.path ?? r.logDir ?? "",
     nodeIds: [...(r.nodeIds ?? [])],
+  };
+}
+
+/** Product of the SET degrees; 0 when NONE is set (⇒ topology unknown). */
+export function degreeProduct(draft: RecipeDraft): number {
+  const parts = [draft.tp, draft.pp, draft.dp, draft.ep].map(Number).filter((n) => n > 0);
+  return parts.length ? parts.reduce((a, b) => a * b, 1) : 0;
+}
+
+/** >1 node placed but no degree set — must surface as "topology unknown". */
+export function topologyUnknown(draft: RecipeDraft): boolean {
+  return degreeProduct(draft) === 0 && draft.nodeIds.length > 1;
+}
+
+/** Structured WS-4 topology block for the draft. Degrees stay explicit/null. */
+export function topologyBlockFromDraft(draft: RecipeDraft): RecipeTopologyBlock {
+  const prod = degreeProduct(draft);
+  const unknown = topologyUnknown(draft);
+  const mode: TopologyMode = Number(draft.tp) > 1 ? "tp" : Number(draft.pp) > 1 ? "pp" : Number(draft.dp) > 1 ? "dp" : "single";
+  return {
+    mode,
+    parallelism: prod || 1,
+    tp: Number(draft.tp) || null,
+    pp: Number(draft.pp) || null,
+    dp: Number(draft.dp) || null,
+    ep: Number(draft.ep) || null,
+    coordinator: draft.coordinator || null,
+    workers: Number(draft.workers) || null,
+    minNodes: prod || Number(draft.minNodes) || 1,
+    maxNodes: prod || Number(draft.maxNodes) || Number(draft.minNodes) || 1,
+    nodeConstraints: {},
+    unknown,
   };
 }
 
@@ -153,13 +206,7 @@ export function recipeBodyFromDraft(draft: RecipeDraft, modelId: string, weightI
         })),
     },
     endpoint: { scheme: draft.scheme, hostTemplate: draft.hostTemplate || "{nodeIp}", port: Number(draft.apiPort), path: draft.endpointPath || "/v1" },
-    topology: {
-      mode: draft.topoMode,
-      parallelism: Number(draft.parallelism) || 1,
-      minNodes: Number(draft.minNodes) || 1,
-      maxNodes: Number(draft.maxNodes) || Number(draft.minNodes) || 1,
-      nodeConstraints: {},
-    },
+    topology: topologyBlockFromDraft(draft),
     healthProbe: { kind: "http", path: draft.healthPath || "/v1/models", expectUp: [200, 401, 403] },
     logSource: { kind: "file", path: draft.logDir || null },
     tags: draft.tags.split(",").map((t) => t.trim()).filter(Boolean),
@@ -190,9 +237,11 @@ export function validateRecipeDraft(draft: RecipeDraft, step: "identity" | "runt
 
 export function topologyNodeRange(draft: RecipeDraft): { min: number; max: number } {
   return ((): { min: number; max: number } => {
-    const min = draft.topoMode === "single" ? 1 : Number(draft.minNodes) || 1;
-    const max = draft.topoMode === "single" ? 1 : Math.max(min, Number(draft.maxNodes) || min);
-    return { min, max };
+    // Explicit degrees pin the node count exactly.
+    const prod = degreeProduct(draft);
+    if (prod > 0) return { min: prod, max: prod };
+    // No degree yet ⇒ topology unknown and the node count stays free.
+    return { min: 1, max: Math.max(2, draft.nodeIds.length + 1, Number(draft.maxNodes) || 1) };
   })();
 }
 
@@ -439,6 +488,21 @@ export function RecipeEditor({ modelId, existing, sparks, runtimes, onSaved, onC
             </Field>
             <Field label="Max nodes" htmlFor="r-max">
               <TextInput id="r-max" mono inputMode="numeric" value={draft.maxNodes} disabled={readOnly} onChange={(e) => set("maxNodes", e.target.value)} />
+            </Field>
+          </FormSection>
+
+          <FormSection legend="Explicit degrees (blank = unknown — never inferred from nodes)" columns={4}>
+            <Field label="TP" htmlFor="r-tp">
+              <TextInput id="r-tp" mono inputMode="numeric" value={draft.tp} disabled={readOnly} onChange={(e) => set("tp", e.target.value)} />
+            </Field>
+            <Field label="PP" htmlFor="r-pp">
+              <TextInput id="r-pp" mono inputMode="numeric" value={draft.pp} disabled={readOnly} onChange={(e) => set("pp", e.target.value)} />
+            </Field>
+            <Field label="DP" htmlFor="r-dp">
+              <TextInput id="r-dp" mono inputMode="numeric" value={draft.dp} disabled={readOnly} onChange={(e) => set("dp", e.target.value)} />
+            </Field>
+            <Field label="EP" htmlFor="r-ep">
+              <TextInput id="r-ep" mono inputMode="numeric" value={draft.ep} disabled={readOnly} onChange={(e) => set("ep", e.target.value)} />
             </Field>
           </FormSection>
 

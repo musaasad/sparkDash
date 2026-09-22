@@ -43,7 +43,7 @@ function provenanceOf(v: DeploymentView, labels: Record<string, string>): string
 }
 
 export function ModelsSection({ models, recipes, deployments, navigate, onSaved, sparks = [], activity }: ModelsProps) {
-  const [wizard, setWizard] = useState(false);
+  const [wizard, setWizard] = useState<false | "pick" | "discover">(false);
   const runtimeLabels = useRuntimeLabels();
   const providerRuntimes = useRuntimeOptions();
   const [sortKey, setSortKey] = useState<string | null>("name");
@@ -211,9 +211,14 @@ export function ModelsSection({ models, recipes, deployments, navigate, onSaved,
         }
         primary={
           wizard ? null : (
-            <button type="button" className="cp-btn primary" onClick={() => setWizard(true)}>
-              + Add model
-            </button>
+            <>
+              <button type="button" className="cp-btn" onClick={() => setWizard("discover")} title="Probe an already-running endpoint (read-only) and pre-fill the wizard">
+                Discover running model
+              </button>
+              <button type="button" className="cp-btn primary" onClick={() => setWizard("pick")}>
+                + Add model
+              </button>
+            </>
           )
         }
       />
@@ -226,6 +231,7 @@ export function ModelsSection({ models, recipes, deployments, navigate, onSaved,
           runtimes={providerRuntimes}
           navigate={navigate}
           onSaved={onSaved}
+          initialPath={wizard === "discover" ? "discover" : "pick"}
           onCancel={() => setWizard(false)}
         />
       ) : null}
@@ -405,7 +411,7 @@ export function ModelsSection({ models, recipes, deployments, navigate, onSaved,
             title="No models found"
             subtitle="Register a model, then add deployment recipes describing how it runs on your nodes."
             action={
-              <button type="button" className="cp-btn primary" onClick={() => setWizard(true)}>
+              <button type="button" className="cp-btn primary" onClick={() => setWizard("pick")}>
                 + Add model
               </button>
             }
