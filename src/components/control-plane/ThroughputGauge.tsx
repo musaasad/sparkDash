@@ -141,6 +141,13 @@ export const ThroughputGauge = memo(function ThroughputGauge({
         {scaled && !calm && spark.length >= 2 ? (
           <path className="cp-gauge-spark" d={sparkPath(spark, 28, 6, 1)} transform="translate(6, 31)" fill="none" />
         ) : null}
+        {/* value marker — the needle sits exactly ON the arc angle for `value` */}
+        {scaled && !calm ? (
+          (() => {
+            const p = polar(cx, cy, r, START_DEG + (SWEEP_DEG * pct) / 100);
+            return <circle className="cp-gauge-needle" cx={p.x.toFixed(2)} cy={p.y.toFixed(2)} r={1.5} />;
+          })()
+        ) : null}
       </svg>
 
       <div className="cp-gauge-center">
@@ -149,9 +156,9 @@ export const ThroughputGauge = memo(function ThroughputGauge({
             <span className="cp-gauge-value">{Math.round(value!)}</span>
             <span className="cp-gauge-unit">TOK/S</span>
           </>
-        ) : (
-          <span className="cp-gauge-state">{stateLabel(state)}</span>
-        )}
+        ) : null}
+        {/* state word always present — role/state stay visually distinct from load */}
+        <span className="cp-gauge-state">{stateLabel(state)}</span>
         {trend !== 0 && !calm ? (
           <span className={`cp-gauge-trend ${trend > 0 ? "is-up" : "is-down"}`} aria-hidden="true">
             {trend > 0 ? "▲" : "▼"}

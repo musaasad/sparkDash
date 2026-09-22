@@ -78,13 +78,13 @@ describe("DeploymentInstrument", () => {
     expect(container.querySelector(".cp-inst-recency")?.textContent).toContain("last request");
   });
 
-  it("says 'no traffic yet' when recency is unknown AND metrics are readable", () => {
+  it("says 'no active traffic' when recency is unknown AND metrics are readable", () => {
     cleanupRenders();
     const { container } = render(
       <DeploymentInstrument view={view({ telemetry: telem({ generationTps: null }) })} role="PRIMARY" state="ready"
         history={[]} lastRequestAt={null} now={1000} runtimeLabels={{}} runtimeMetrics={{}} onOpen={noop} />
     );
-    expect(container.querySelector(".cp-inst-recency")?.textContent).toContain("no traffic yet");
+    expect(container.querySelector(".cp-inst-recency")?.textContent).toContain("no active traffic");
   });
 
   it("expresses placement ONCE — no repeated node-name line under the chip", () => {
@@ -126,5 +126,54 @@ describe("DeploymentInstrument", () => {
         now={1000} runtimeLabels={{}} runtimeMetrics={{}} onOpen={noop} />
     );
     expect(container.querySelector(".cp-inst-runtime")?.textContent).toBe("vllm");
+  });
+
+  it("renders a FULL non-primary role distinctly from the state pill", () => {
+    cleanupRenders();
+    const { container } = render(
+      <DeploymentInstrument view={view()} role="SPECIALIST" state="busy" history={[100, 120]} lastRequestAt={null}
+        now={1000} runtimeLabels={{}} runtimeMetrics={{}} onOpen={noop} />
+    );
+    expect(container.querySelector(".cp-inst-role")?.textContent).toBe("SPECIALIST");
+    expect(container.querySelector(".cp-inst-state")?.textContent).toContain("BUSY");
+    expect(container.querySelector(".cp-inst")?.classList.contains("is-primary")).toBe(false);
+  });
+
+  it("weights PRIMARY via geometry, not the role label alone", () => {
+    cleanupRenders();
+    const { container } = render(
+      <DeploymentInstrument view={view()} role="PRIMARY" state="serving" history={[100, 120]} lastRequestAt={null}
+        now={1000} runtimeLabels={{}} runtimeMetrics={{}} onOpen={noop} />
+    );
+    expect(container.querySelector(".cp-inst")?.classList.contains("is-primary")).toBe(true);
+  });
+
+  it("renders node-derived telemetry cells with '—' for genuinely absent values", () => {
+    cleanupRenders();
+    const node = {
+      id: "n1", name: "Node 1", online: true, role: "head",
+      metrics: { gpu: { temperature: 56, usage: 40, power: { draw: 56, limit: 0 }, vram: { used: 0, total: 0, percentage: 0, available: 0 } }, cpu: null, ram: null, storage: [], network: null, unifiedMemory: null, llm: [], comfy: null, tailscale: null },
+    } as never;
+    const { container } = render(
+      <DeploymentInstrument view={view({ nodes: [node] })} role="PRIMARY" state="serving" history={[100, 120]} lastRequestAt={null}
+        now={1000} runtimeLabels={{}} runtimeMetrics={{}} onOpen={noop} />
+    );
+    const labels = [...container.querySelectorAll(".cp-inst-cell-label")].map((e) => e.textContent);
+    expect(labels).toContain("GPU TEMP");
+    expect(labels).toContain("POWER");
+    const power = [...container.querySelectorAll(".cp-inst-cell")].find((c) => c.textContent?.includes("POWER"));
+    expect(power?.querySelector(".cp-inst-cell-value")?.textContent).toContain("56");
+    expect(power?.querySelector(".cp-inst-cell-value")?.getAttribute("title")).toBeNull();
+    expect(container.querySelector(".cp-inst-cell-value")?.textContent).not.toBe("0");
+  });
+
+  it("shows OFFLINE visibly without dimming the state away", () => {
+    cleanupRenders();
+    const { container } = render(
+      <DeploymentInstrument view={view({ telemetry: telem({ generationTps: null }) })} role="PRIMARY" state="offline"
+        history={[]} lastRequestAt={null} now={1000} runtimeLabels={{}} runtimeMetrics={{}} onOpen={noop} />
+    );
+    expect(container.querySelector(".cp-inst-state")?.textContent).toContain("OFFLINE");
+    expect(container.querySelector(".cp-inst")?.classList.contains("is-offline")).toBe(true);
   });
 });

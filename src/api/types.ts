@@ -956,7 +956,9 @@ export type DeploymentDesired = "running" | "stopped" | "unknown";
 export type DeploymentObserved = "running" | "auth-gated" | "unhealthy" | "not-detected";
 
 /** OPTIONAL explicit deployment role set by the owner in config. */
-export type DeploymentRole = "primary" | "worker" | "edge";
+export type DeploymentRole = "primary" | "worker" | "specialist" | "reviewer" | "experimental" | "none";
+/** Legacy role spelling still accepted from older records (folds onto `worker`). */
+export type LegacyDeploymentRole = "edge";
 
 /**
  * Derived display state — fixed vocabulary (DESIGN_BRIEF global rule 10).
@@ -1149,7 +1151,7 @@ export interface DeploymentStatus {
   nodeIds: string[];
   apiPort: number;
   /** OPTIONAL explicit placement role (config-driven). Absent => FE heuristic. */
-  role?: DeploymentRole | null;
+  role?: DeploymentRole | LegacyDeploymentRole | null;
   managedBy: "external" | "sparkdash";
   dryRun: boolean;
   state: DeploymentState;

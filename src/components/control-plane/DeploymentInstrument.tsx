@@ -3,12 +3,16 @@ import { ThroughputGauge } from "./ThroughputGauge";
 import { TopologySummary } from "./TopologySummary";
 import {
   declaredMetrics,
+  isPrimary,
   lastRequestAgo,
+  nodeInstruments,
+  primaryMemberNode,
   runtimeName,
   secondaryInstruments,
   stateLabel,
   stateTone,
   type InstrumentRole,
+  type SecondaryInstrument,
 } from "./cockpitModel";
 import { fmtUptime } from "./fleetModel";
 import type { RuntimeLabelMap } from "./runtimeLabels";
@@ -22,6 +26,8 @@ export interface DeploymentInstrumentProps {
   now: number;
   runtimeLabels: RuntimeLabelMap;
   runtimeMetrics: Record<string, string[]>;
+  /** Config temperature scale for node-derived cells; never implied. */
+  temperatureUnit?: "celsius" | "fahrenheit";
   onOpen: () => void;
 }
 
@@ -31,8 +37,9 @@ function fmtContext(ctx: number | null): string | null {
 }
 
 /**
- * One LARGE primary instrument per active deployment. Level 2 only — endpoint,
- * recipe, quant and fabric links stay behind the click-through.
+ * One instrument per active deployment. PRIMARY gets greater weight (larger
+ * gauge/typography) — geometry, not glow. Role, state and performance are three
+ * SEPARATE channels: role label, state pill, and the tok/s gauge.
  */
 export function DeploymentInstrument({
   view,
@@ -43,21 +50,30 @@ export function DeploymentInstrument({
   now,
   runtimeLabels,
   runtimeMetrics,
+  temperatureUnit = "celsius",
   onOpen,
 }: DeploymentInstrumentProps) {
   const tone = stateTone(state);
+  const primary = isPrimary(role);
   const runtime = runtimeName(view.runtime, runtimeLabels);
   const ctx = fmtContext(view.contextLength);
-  const secondary = secondaryInstruments(declaredMetrics(view.runtime, runtimeMetrics), view.telemetry);
+  const node = primaryMemberNode(view);
   const recency = lastRequestAgo(lastRequestAt, now);
   const loaded = state === "ready" || state === "idle";
   // Auth-gated external runtimes have NO readable metrics — say so honestly.
   const telemetryReadable = view.telemetry != null && view.telemetry.available;
   const needsKey = !telemetryReadable && !!view.telemetry?.error && /auth|401|403/i.test(view.telemetry.error);
 
+  // Latency/queue instruments first, then node temperature/memory/power — the
+  // subordinate physical read backs the throughput without competing with it.
+  const secondary: SecondaryInstrument[] = [
+    ...secondaryInstruments(declaredMetrics(view.runtime, runtimeMetrics), view.telemetry, 5),
+    ...nodeInstruments(node, temperatureUnit, 6),
+  ].slice(0, 8);
+
   return (
     <div
-      className={`cp-inst tone-${tone}${role === "WORKER" ? " is-worker" : ""}`}
+      className={`cp-inst tone-${tone}${primary ? " is-primary" : " is-secondary"}${state === "offline" ? " is-offline" : ""}`}
       role="button"
       tabIndex={0}
       onClick={onOpen}
@@ -66,7 +82,9 @@ export function DeploymentInstrument({
       <div className="cp-inst-head">
         <div className="cp-inst-id">
           <span className="cp-inst-role mono">{role}</span>
-          <h3 className="cp-inst-name">{view.modelName}</h3>
+          <h3 className="cp-inst-name" title={view.modelName}>
+            {view.modelName}
+          </h3>
           <span className="cp-inst-runtime">{runtime}</span>
         </div>
         <span className={`cp-inst-state tone-${tone}`}>
@@ -80,12 +98,11 @@ export function DeploymentInstrument({
           value={view.telemetry?.generationTps ?? null}
           history={history}
           state={state}
-          size={188}
+          size={primary ? 208 : 168}
           ariaLabel={`${view.modelName} throughput, ${stateLabel(state)}`}
         />
         <div className="cp-inst-side">
-          {/* L2 meta only — no Level-3 dump. Placement is expressed ONCE by
-              TopologySummary; node names are not repeated below it. */}
+          {/* Placement expressed ONCE by TopologySummary; node names not repeated. */}
           <div className="cp-inst-meta">
             <span className="cp-inst-meta-label mono">PLACEMENT</span>
             <TopologySummary view={view} />
@@ -95,20 +112,25 @@ export function DeploymentInstrument({
               <span className="cp-inst-meta-label mono">CONTEXT</span>
               <span className="cp-inst-meta-value mono">{ctx}</span>
             </div>
-          ) : null}
+          ) : (
+            <div className="cp-inst-meta">
+              <span className="cp-inst-meta-label mono">CONTEXT</span>
+              <span className="cp-inst-meta-value mono cp-nodata">—</span>
+            </div>
+          )}
           {view.uptime != null ? (
             <div className="cp-inst-meta">
               <span className="cp-inst-meta-label mono">UPTIME</span>
               <span className="cp-inst-meta-value mono">{fmtUptime(view.uptime)}</span>
             </div>
           ) : null}
-          {/* idle must stay calm: show state + recency, never an alarming 0.
+          {/* idle stays calm: state + recency, never an alarming 0.
               Unreadable telemetry never claims "no traffic yet". */}
           {loaded && recency ? <span className="cp-inst-recency">last request {recency}</span> : null}
           {loaded && !recency && !telemetryReadable ? (
             <span className="cp-inst-recency">{needsKey ? "metrics require key" : "throughput unknown"}</span>
           ) : null}
-          {loaded && !recency && telemetryReadable ? <span className="cp-inst-recency">no traffic yet</span> : null}
+          {loaded && !recency && telemetryReadable ? <span className="cp-inst-recency">no active traffic</span> : null}
           {state === "serving" || state === "busy" ? (
             <span className="cp-inst-live mono">
               {view.telemetry?.requestsRunning ?? 0} RUNNING
@@ -123,7 +145,7 @@ export function DeploymentInstrument({
           {secondary.map((s) => (
             <div key={s.key} className="cp-inst-cell">
               <span className="cp-inst-cell-label mono">{s.label}</span>
-              <span className="cp-inst-cell-value mono">
+              <span className="cp-inst-cell-value mono" title={s.title}>
                 {s.value}
                 {s.unit ? <span className="cp-inst-cell-unit"> {s.unit}</span> : null}
               </span>

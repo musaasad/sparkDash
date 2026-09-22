@@ -87,4 +87,20 @@ describe("gauge idle honesty", () => {
     const { container } = render(<ThroughputGauge value={null} history={[10, 10]} state="idle" />);
     expect(container.querySelector(".cp-gauge")?.classList.contains("is-active")).toBe(false);
   });
+
+  it("keeps the STATE word visible even while a value is shown (role/state/load stay separate)", () => {
+    cleanupRenders();
+    const { container } = render(<ThroughputGauge value={412} history={[380, 412]} state="serving" />);
+    expect(container.querySelector(".cp-gauge-center")?.textContent).toContain("SERVING");
+    expect(container.querySelector(".cp-gauge-value")?.textContent).toBe("412");
+  });
+
+  it("renders a value needle only when the arc range is real", () => {
+    cleanupRenders();
+    const { container } = render(<ThroughputGauge value={412} history={[380, 412]} state="serving" />);
+    expect(container.querySelectorAll(".cp-gauge-needle")).toHaveLength(1);
+    cleanupRenders();
+    const { container: c2 } = render(<ThroughputGauge value={412} history={[412]} state="serving" />);
+    expect(c2.querySelectorAll(".cp-gauge-needle")).toHaveLength(0);
+  });
 });

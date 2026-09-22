@@ -2,9 +2,15 @@ import { describe, expect, it } from "vitest";
 import type { DeploymentStatus, RecipePublic, SparkSnapshot } from "../../api/types";
 import type { DeploymentView } from "./fleetModel";
 import {
+  fabricHealthSummary,
+  isPrimary,
+  labBriefing,
   labSummary,
   labVerdict,
   lastRequestAgo,
+  nodeInstruments,
+  nodeTelemetryRow,
+  primaryView,
   rankViews,
   roleOf,
   secondaryInstruments,
@@ -99,7 +105,7 @@ describe("lab verdict + summary", () => {
   });
 });
 
-describe("primary/worker role", () => {
+describe("full config role", () => {
   it("makes a deployment on a head node PRIMARY regardless of rank", () => {
     const head = spark({ id: "h", role: "head" });
     const a = view({ deployment: dep("r1", "m1", { display: "stopped" }), nodes: [spark({ id: "w", role: "worker" })] });
@@ -121,8 +127,17 @@ describe("primary/worker role", () => {
     const declaredWorker = view({ deployment: dep("r2", "m2", { role: "worker" }), key: "w", nodes: [head] });
     expect(roleOf(declaredPrimary, [declaredPrimary, declaredWorker])).toBe("PRIMARY");
     expect(roleOf(declaredWorker, [declaredPrimary, declaredWorker])).toBe("WORKER");
-    const edge = view({ deployment: dep("r3", "m3", { role: "edge" }), key: "e" });
-    expect(roleOf(edge, [edge])).toBe("WORKER");
+  });
+
+  it("returns the FULL role for every config value, including NONE (edge folded)", () => {
+    const mk = (r: NonNullable<DeploymentStatus["role"]>) => view({ deployment: dep("r1", "m1", { role: r }) });
+    expect(roleOf(mk("primary"), [])).toBe("PRIMARY");
+    expect(roleOf(mk("worker"), [])).toBe("WORKER");
+    expect(roleOf(mk("specialist"), [])).toBe("SPECIALIST");
+    expect(roleOf(mk("reviewer"), [])).toBe("REVIEWER");
+    expect(roleOf(mk("experimental"), [])).toBe("EXPERIMENTAL");
+    expect(roleOf(mk("none"), [])).toBe("NONE");
+    expect(roleOf(mk("edge"), [])).toBe("WORKER");
   });
 
   it("keeps the heuristic when no role is configured (backward compatible)", () => {
@@ -131,11 +146,32 @@ describe("primary/worker role", () => {
     expect(roleOf(a, [a, b])).toBe("PRIMARY");
   });
 
-  it("ranks live states ahead of idle and never hard-codes a model", () => {
+  it("rank keeps live states ahead of idle and never hard-codes a model", () => {
     const idle = view({ key: "idle", modelName: "zzz", deployment: dep("r1", "zzz") });
     const busy = view({ key: "busy", modelName: "aaa", deployment: dep("r2", "aaa") });
     const ranked = rankViews([idle, busy], ["idle", "busy"]);
     expect(ranked[0].key).toBe("busy");
+  });
+});
+
+describe("primary emphasis follows CONFIG, never promotion", () => {
+  it("selects the config PRIMARY even when it is offline", () => {
+    const p = view({ key: "p", deployment: dep("r1", "m1", { role: "primary", display: "stopped" }) });
+    const w = view({ key: "w", deployment: dep("r2", "m2", { role: "worker" }) });
+    expect(primaryView([p, w])?.key).toBe("p");
+  });
+
+  it("adapts to an absent primary with the heuristic top rank", () => {
+    const a = view({ key: "a" });
+    const b = view({ key: "b" });
+    expect(primaryView([a, b])?.key).toBe("a");
+    expect(primaryView([])).toBeNull();
+  });
+
+  it("isPrimary is true only for PRIMARY", () => {
+    expect(isPrimary("PRIMARY")).toBe(true);
+    expect(isPrimary("WORKER")).toBe(false);
+    expect(isPrimary("NONE")).toBe(false);
   });
 });
 
@@ -180,5 +216,64 @@ describe("recency", () => {
     expect(lastRequestAgo(now - 30_000, now)).toBe("30s ago");
     expect(lastRequestAgo(now - 5 * 60_000, now)).toBe("5m ago");
     expect(lastRequestAgo(null, now)).toBeNull();
+  });
+});
+
+describe("lab briefing + fabric aggregate", () => {
+  it("is fully data-driven with '—' for an absent primary", () => {
+    const b = labBriefing({ nodesOnline: 2, nodesTotal: 3, deploymentsActive: 1, primaryName: null, fabric: "ok", critical: 0, warning: 1 });
+    expect(b).toBe("2/3 COMPUTE ONLINE · 1 DEPLOYMENT ACTIVE · PRIMARY: — · FABRIC: NOMINAL · 0 CRITICAL · 1 WARNING");
+  });
+
+  it("aggregates fabric worst-case", () => {
+    expect(fabricHealthSummary(["ok", "warn", "ok"])).toBe("warn");
+    expect(fabricHealthSummary(["ok", "error"])).toBe("error");
+    expect(fabricHealthSummary([])).toBe("unknown");
+  });
+});
+
+describe("node telemetry honesty", () => {
+  it("renders '—' for a missing metric and never 0", () => {
+    const n = spark({ metrics: { ...spark().metrics, gpu: { temperature: 0, usage: 0, power: { draw: 0, limit: 0 }, vram: { used: 0, total: 0, percentage: 0, available: 0 } } } });
+    const row = nodeTelemetryRow(n, []);
+    const gpuTemp = row.metrics.find((m) => m.key === "gpuTemp")!;
+    expect(gpuTemp.value).toBe("0");
+    const mem = row.metrics.find((m) => m.key === "mem");
+    expect(mem).toBeUndefined();
+  });
+
+  it("shows '—' when gpu exists but cpu is absent (no fabricated node metric)", () => {
+    const n = spark({ metrics: { ...spark().metrics, gpu: { temperature: 55, usage: 40, power: { draw: 60, limit: 120 }, vram: { used: 1, total: 2, percentage: 50, available: 1 } } } });
+    const row = nodeTelemetryRow(n, []);
+    expect(row.metrics.find((m) => m.key === "cpuTemp")).toBeUndefined();
+    expect(row.metrics.find((m) => m.key === "gpuTemp")?.value).toBe("55");
+  });
+
+  it("shows power draw only when the limit is 0/null (no fabricated limit)", () => {
+    const n = spark({ metrics: { ...spark().metrics, gpu: { temperature: 55, usage: 40, power: { draw: 56, limit: 0 }, vram: { used: 1, total: 2, percentage: 50, available: 1 } } } });
+    const power = nodeTelemetryRow(n, []).metrics.find((m) => m.key === "power")!;
+    expect(power.value).toBe("56");
+    expect(power.title).toBeUndefined();
+  });
+
+  it("marks a reachable node warn ONLY from provider throttle, and offline unmistakably", () => {
+    const throttled = spark({ metrics: { ...spark().metrics, gpu: { temperature: 91, usage: 10, power: { draw: 1, limit: 2 }, vram: { used: 1, total: 2, percentage: 1, available: 1 }, throttle: { thermal: true, hwSlowdown: true, powerCap: false, active: true, reason: "thermal", smClockMHz: null, smClockMaxMHz: null, smClockPct: null, detail: "" } } } });
+    expect(nodeTelemetryRow(throttled, []).tone).toBe("warn");
+    expect(nodeTelemetryRow(throttled, []).metrics.find((m) => m.key === "gpuTemp")?.value).toBe("91");
+    const off = nodeTelemetryRow(spark({ online: false }), []);
+    expect(off.tone).toBe("off");
+    expect(off.online).toBe(false);
+  });
+
+  it("uses unified terminology and falls back to RAM only when no unified pool", () => {
+    const unified = spark({ metrics: { ...spark().metrics, unifiedMemory: { total: 130000, gpuUsed: 1, cpuUsed: 1, used: 65000, available: 65000, percentage: 50, oomRisk: "low", bandwidth: { current: 0, peak: 0 } } } });
+    expect(nodeTelemetryRow(unified, []).metrics.find((m) => m.key === "mem")?.label).toBe("UNIFIED");
+    const ramOnly = spark({ metrics: { ...spark().metrics, ram: { used: 10, total: 100, percentage: 10 } } });
+    expect(nodeTelemetryRow(ramOnly, []).metrics.find((m) => m.key === "mem")?.label).toBe("RAM");
+  });
+
+  it("omits node instruments entirely when the node has no metrics", () => {
+    expect(nodeInstruments(spark())).toEqual([]);
+    expect(nodeInstruments(null)).toEqual([]);
   });
 });

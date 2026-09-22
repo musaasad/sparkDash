@@ -79,7 +79,7 @@ describe("Overview health verdict", () => {
   it("gives each section a real, independently filtering window picker", () => {
     cleanupRenders();
     const { container } = render(<OverviewSection sparks={[spark()]} deployments={[]} recipes={[]} navigate={() => {}} loaded />);
-    expect(container.textContent).toContain("Compute nodes");
+    expect(container.textContent).toContain("Node telemetry");
     expect(container.textContent).toContain("Runtime activity");
     const nodeWindow = container.querySelector<HTMLElement>('[aria-label="Node window"]');
     const activityWindow = container.querySelector<HTMLElement>('[aria-label="Activity window"]');
@@ -119,5 +119,36 @@ describe("Overview health verdict", () => {
     const { container } = render(<OverviewSection sparks={[spark()]} deployments={[dep()]} recipes={[]} navigate={() => {}} loaded />);
     expect(container.querySelector(".cp-inst-state")?.textContent).toContain("READY");
     expect(container.querySelector(".cp-inst-state")?.classList.contains("tone-warn")).toBe(false);
+  });
+
+  it("renders a compact lab identity header with a data-driven briefing", () => {
+    cleanupRenders();
+    const { container } = render(<OverviewSection sparks={[spark()]} deployments={[]} recipes={[]} navigate={() => {}} loaded />);
+    const head = container.querySelector(".cp-labhead")!;
+    expect(head.textContent).toContain("ASAD");
+    expect(head.querySelector(".cp-labhead-brief")?.textContent).toContain("1/1 COMPUTE ONLINE");
+    expect(head.querySelector(".cp-labhead-brief")?.textContent).toContain("FABRIC:");
+    expect(head.querySelector(".cp-labhead-counts")?.textContent).toContain("0 CRITICAL");
+  });
+
+  it("emphasizes the CONFIG PRIMARY first and keeps it visible when OFFLINE", () => {
+    cleanupRenders();
+    const primary = dep({ recipeId: "rp", modelId: "primary-model", role: "primary", display: "stopped", observed: "not-detected" });
+    const worker = dep({ recipeId: "rw", modelId: "worker-model", role: "worker" });
+    const { container } = render(<OverviewSection sparks={[spark()]} deployments={[primary, worker]} recipes={[]} navigate={() => {}} loaded />);
+    const insts = [...container.querySelectorAll(".cp-inst")];
+    expect(insts[0].classList.contains("is-primary")).toBe(true);
+    expect(insts[0].querySelector(".cp-inst-state")?.textContent).toContain("OFFLINE");
+    expect(insts[0].querySelector(".cp-inst-name")?.textContent).toContain("primary-model");
+    const brief = container.querySelector(".cp-labhead-brief")?.textContent ?? "";
+    expect(brief).toContain("PRIMARY: primary-model");
+  });
+
+  it("renders a compact node telemetry strip, not giant cards", () => {
+    cleanupRenders();
+    const { container } = render(<OverviewSection sparks={[spark()]} deployments={[]} recipes={[]} navigate={() => {}} loaded />);
+    expect(container.querySelector(".cp-nodestrip")).not.toBeNull();
+    expect(container.querySelector(".cp-nodestrip-row")).not.toBeNull();
+    expect(container.querySelector(".cp-nodestrip-name")?.textContent).toBe("Node 1");
   });
 });

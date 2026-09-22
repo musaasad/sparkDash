@@ -10,9 +10,11 @@
  *   3. per-deployment secondary instrument selection from the runtime's OWN
  *      declared `metrics[]` — never a fixed panel.
  */
+import type { SparkSnapshot } from "../../api/types";
 import type { DeploymentTelemetry, DeploymentView, RuntimeState } from "./fleetModel";
 import type { RuntimeLabelMap } from "./runtimeLabels";
 import type { RuntimeOption } from "./runtimeLabels";
+import type { FabricHealth } from "./fabricModel";
 import { resolveSparkRole } from "../../api/sparkRole";
 
 /**
@@ -21,7 +23,11 @@ import { resolveSparkRole } from "../../api/sparkRole";
  * a memory warning) is ATTENTION — a warning is NOT a degradation.
  */
 export type LabVerdict = "nominal" | "attention" | "degraded";
-export type InstrumentRole = "PRIMARY" | "WORKER";
+/**
+ * FULL config role, uppercased, plus NONE. A heuristic PRIMARY/WORKER fallback
+ * is used ONLY when no config role is set. Role is never inferred from traffic.
+ */
+export type InstrumentRole = "PRIMARY" | "WORKER" | "SPECIALIST" | "REVIEWER" | "EXPERIMENTAL" | "NONE";
 /** Visual tone of a state pill — colour is a secondary cue, never the only cue. */
 export type StateTone = "live" | "calm" | "warn" | "alert" | "off";
 
@@ -116,19 +122,48 @@ export function labSummary(nodesOnline: number, nodesTotal: number, modelsActive
   return `${nodes} · ${models} · ${warnings}`;
 }
 
+const ROLE_UPPER: Record<string, InstrumentRole> = {
+  primary: "PRIMARY",
+  worker: "WORKER",
+  edge: "WORKER",
+  specialist: "SPECIALIST",
+  reviewer: "REVIEWER",
+  experimental: "EXPERIMENTAL",
+  none: "NONE",
+};
+
 /**
- * PRIMARY / WORKER role. CONFIG FIRST: an explicit deployment `role` wins
- * (`primary` => PRIMARY, `worker`/`edge` => WORKER). Only when no role is set
- * do we fall back to the heuristic: a deployment placed on a `head` node is
- * PRIMARY, else the top-ranked active deployment. Never a hard-coded model id.
+ * FULL config role. CONFIG FIRST: an explicit `role` is returned verbatim
+ * (uppercased, `edge` folded to WORKER). Only when no role is set does the
+ * heuristic apply — a deployment placed on a `head` node is PRIMARY, else the
+ * top-ranked active deployment is PRIMARY and the rest WORKER. Never role from
+ * traffic, never a hard-coded model id.
  */
 export function roleOf(view: DeploymentView, allViews: readonly DeploymentView[]): InstrumentRole {
   const declared = view.deployment.role ?? null;
-  if (declared === "primary") return "PRIMARY";
-  if (declared === "worker" || declared === "edge") return "WORKER";
+  if (declared != null && ROLE_UPPER[declared]) return ROLE_UPPER[declared];
   if (view.nodes.some((n) => resolveSparkRole(n) === "head")) return "PRIMARY";
   const ranked = rankViews(allViews);
   return ranked[0]?.key === view.key ? "PRIMARY" : "WORKER";
+}
+
+/** A role is PRIMARY strictly from config/heuristic — never from load. */
+export function isPrimary(role: InstrumentRole): boolean {
+  return role === "PRIMARY";
+}
+
+/**
+ * The emphasized deployment. CONFIG-driven: the one config role `primary`; if
+ * none is declared, the heuristic primary (head-node placement / top rank).
+ * Returns null for an empty lab. When the primary is offline it is STILL
+ * returned so it stays visible — another is never silently promoted.
+ */
+export function primaryView(views: readonly DeploymentView[]): DeploymentView | null {
+  const declared = views.find((v) => v.deployment.role === "primary");
+  if (declared) return declared;
+  const heads = views.find((v) => v.nodes.some((n) => resolveSparkRole(n) === "head"));
+  if (heads) return heads;
+  return rankViews(views)[0] ?? null;
 }
 
 /** Active deployments, primary-first: live states first, then throughput desc. */
@@ -155,6 +190,8 @@ export interface SecondaryInstrument {
   label: string;
   value: string;
   unit?: string;
+  /** Accessible full value when the rendered one is abbreviated. */
+  title?: string;
 }
 
 const METRIC_LABEL: Record<string, string> = {
@@ -258,4 +295,182 @@ export function lastRequestAgo(lastRequestAt: number | null, now: number): strin
   const h = Math.round(m / 60);
   if (h < 48) return `${h}h ago`;
   return `${Math.round(h / 24)}d ago`;
+}
+
+/* ───────────────────────── lab header briefing ───────────────────────── */
+
+const FABRIC_RANK: Record<FabricHealth, number> = { error: 0, warn: 1, offline: 2, unknown: 3, ok: 4 };
+
+/** Worst fabric health across nodes — the honest aggregate, never a fabricated one. */
+export function fabricHealthSummary(healths: readonly FabricHealth[]): FabricHealth {
+  if (healths.length === 0) return "unknown";
+  return [...healths].sort((a, b) => FABRIC_RANK[a] - FABRIC_RANK[b])[0];
+}
+
+export function fabricStateLabel(h: FabricHealth): string {
+  return h === "ok" ? "NOMINAL" : h === "warn" ? "WARN" : h === "error" ? "DEGRADED" : h === "offline" ? "OFFLINE" : "UNKNOWN";
+}
+
+export interface LabBriefing {
+  nodesOnline: number;
+  nodesTotal: number;
+  deploymentsActive: number;
+  primaryName: string | null;
+  fabric: FabricHealth;
+  critical: number;
+  warning: number;
+}
+
+/**
+ * One-line, ALL-CAPS, fully data-driven lab briefing. Never states a number the
+ * data does not carry; `—` for an absent primary.
+ */
+export function labBriefing(b: LabBriefing): string {
+  const nodes = `${b.nodesOnline}/${b.nodesTotal} COMPUTE ONLINE`;
+  const deps = `${b.deploymentsActive} DEPLOYMENT${b.deploymentsActive === 1 ? "" : "S"} ACTIVE`;
+  const primary = `PRIMARY: ${b.primaryName ?? "—"}`;
+  const fabric = `FABRIC: ${fabricStateLabel(b.fabric)}`;
+  const critical = `${b.critical} CRITICAL`;
+  const warnings = `${b.warning} WARNING${b.warning === 1 ? "" : "S"}`;
+  return [nodes, deps, primary, fabric, critical, warnings].join(" · ");
+}
+
+/* ───────────────────────── node telemetry ───────────────────────── */
+
+export interface NodeMetric {
+  key: string;
+  label: string;
+  value: string;
+  unit?: string;
+  title?: string;
+}
+
+export interface NodeTelemetryRow {
+  id: string;
+  name: string;
+  online: boolean;
+  /** Measured classification: offline when unreachable, warn on provider throttle. */
+  tone: "live" | "warn" | "off";
+  metrics: NodeMetric[];
+  /** Deployment names this node belongs to (may be empty). */
+  deployments: string[];
+  /** Config cluster role note (head/worker), else null. */
+  roleNote: string | null;
+}
+
+const EMPTY = "—";
+const isFiniteNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+const fmtNum = (v: unknown, digits = 0): string => (isFiniteNum(v) ? v.toFixed(digits) : EMPTY);
+const gb = (mb: number): string => `${Math.round(mb / 1024)}`;
+
+function fmtTemp(celsius: unknown, unit: "celsius" | "fahrenheit"): string {
+  if (!isFiniteNum(celsius)) return EMPTY;
+  const v = unit === "fahrenheit" ? (celsius * 9) / 5 + 32 : celsius;
+  return String(Math.round(v));
+}
+
+const tempUnit = (unit: "celsius" | "fahrenheit"): string => (unit === "fahrenheit" ? "°F" : "°C");
+
+/** Free pool in MB: unified carries `available`, RAM derives total − used. */
+function memFree(pool: { used: number; total: number; available?: number }): string {
+  const free = typeof pool.available === "number" ? pool.available : pool.total - pool.used;
+  return gb(free);
+}
+
+/**
+ * One compact node row: online state + measured GPU/CPU temp, memory, util and
+ * power, plus deployment membership. A missing metric renders `—` (never 0);
+ * ONLY provider throttle marks a reachable node `warn` — no fabricated temp
+ * threshold. Unified-memory systems keep unified terminology (fall back to RAM
+ * only when the snapshot carries no unified pool).
+ */
+export function nodeTelemetryRow(
+  node: SparkSnapshot,
+  deployments: readonly string[],
+  temperatureUnit: "celsius" | "fahrenheit" = "celsius"
+): NodeTelemetryRow {
+  const gpu = node.metrics?.gpu ?? null;
+  const cpu = node.metrics?.cpu ?? null;
+  const metrics: NodeMetric[] = [];
+
+  if (gpu) metrics.push({ key: "gpuTemp", label: "GPU TEMP", value: fmtTemp(gpu.temperature, temperatureUnit), unit: tempUnit(temperatureUnit) });
+  if (cpu) metrics.push({ key: "cpuTemp", label: "CPU TEMP", value: fmtTemp(cpu.temperature, temperatureUnit), unit: tempUnit(temperatureUnit) });
+
+  const unified = node.metrics?.unifiedMemory ?? null;
+  const ram = unified ? null : node.metrics?.ram ?? null;
+  const mem = unified ?? ram;
+  if (mem) {
+    metrics.push({
+      key: "mem",
+      label: unified ? "UNIFIED" : "RAM",
+      value: fmtNum(mem.percentage),
+      unit: "%",
+      title: `${gb(mem.used)}/${gb(mem.total)} GB · ${memFree(mem)} GB free`,
+    });
+  }
+
+  if (gpu) metrics.push({ key: "util", label: "GPU UTIL", value: fmtNum(gpu.usage), unit: "%" });
+  if (gpu?.power) {
+    const limit = isFiniteNum(gpu.power.limit) && gpu.power.limit > 0 ? `${Math.round(gpu.power.limit)} W` : null;
+    metrics.push({
+      key: "power",
+      label: "POWER",
+      value: fmtNum(gpu.power.draw),
+      unit: "W",
+      title: limit ? `${Math.round(gpu.power.draw)}/${limit}` : undefined,
+    });
+  }
+
+  const throttle = !!gpu?.throttle?.active;
+  return {
+    id: node.id,
+    name: node.name,
+    online: node.online,
+    tone: !node.online ? "off" : throttle ? "warn" : "live",
+    metrics,
+    deployments: [...deployments],
+    roleNote: node.role === "head" ? "head" : node.role === "worker" ? "worker" : null,
+  };
+}
+
+/** Primary (coordinator) member node of a deployment for node-derived cells. */
+export function primaryMemberNode(view: DeploymentView): SparkSnapshot | null {
+  return view.nodes.find((n) => resolveSparkRole(n) !== "worker") ?? view.nodes[0] ?? null;
+}
+
+/**
+ * Node-derived secondary instruments (temp / memory / util / power). Included
+ * only when the node snapshot carries the metric object; an absent sub-value
+ * renders `—`. No fabricated thermal threshold — throttle rides as a title.
+ */
+export function nodeInstruments(
+  node: SparkSnapshot | null,
+  temperatureUnit: "celsius" | "fahrenheit" = "celsius",
+  cap = 6
+): SecondaryInstrument[] {
+  if (!node) return [];
+  const gpu = node.metrics?.gpu ?? null;
+  const cpu = node.metrics?.cpu ?? null;
+  const out: SecondaryInstrument[] = [];
+
+  if (cpu) out.push({ key: "cpuTemp", label: "CPU TEMP", value: fmtTemp(cpu.temperature, temperatureUnit), unit: tempUnit(temperatureUnit) });
+  const mem = node.metrics?.unifiedMemory ?? null;
+  const ram = mem ? null : node.metrics?.ram ?? null;
+  const pool = mem ?? ram;
+  if (pool) {
+    out.push({
+      key: "mem",
+      label: mem ? "UNIFIED" : "RAM",
+      value: fmtNum(pool.percentage),
+      unit: "%",
+      title: `${gb(pool.used)}/${gb(pool.total)} GB · ${memFree(pool)} GB free`,
+    });
+  }
+  if (gpu) out.push({ key: "gpuTemp", label: "GPU TEMP", value: fmtTemp(gpu.temperature, temperatureUnit), unit: tempUnit(temperatureUnit), title: gpu.throttle?.active ? `throttle: ${gpu.throttle.reason}` : undefined });
+  if (gpu) out.push({ key: "util", label: "GPU UTIL", value: fmtNum(gpu.usage), unit: "%" });
+  if (gpu?.power) {
+    const limit = isFiniteNum(gpu.power.limit) && gpu.power.limit > 0 ? `${Math.round(gpu.power.limit)} W` : null;
+    out.push({ key: "power", label: "POWER", value: fmtNum(gpu.power.draw), unit: "W", title: limit ? `${Math.round(gpu.power.draw)}/${limit} W` : undefined });
+  }
+  return out.slice(0, cap);
 }
