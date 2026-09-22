@@ -12,13 +12,17 @@ import {
   allNodes,
   deploymentViews,
   deploymentsForNode,
+  deriveRuntimeState,
   friendlyName,
   fmtUptime,
   relativeAge,
   runtimeLabel,
 } from "./fleetModel";
-import { Topology } from "./Topology";
-import { useRuntimeLabels } from "./runtimeLabels";
+import { useRuntimeLabels, useRuntimeMetrics } from "./runtimeLabels";
+import { FabricPanel } from "./FabricPanel";
+import { DeploymentInstrument } from "./DeploymentInstrument";
+import { labSummary, labVerdict, rankViews, roleOf, stateLabel, stateTone, verdictLabel } from "./cockpitModel";
+import { useTelemetryHistory, type TelemetryHistory } from "./useTelemetryHistory";
 
 interface OverviewProps {
   sparks: SparkSnapshot[];
@@ -32,33 +36,6 @@ interface OverviewProps {
   activity?: ActivityEvent[];
   /** Temp scale from settings; never implied. */
   temperatureUnit?: "celsius" | "fahrenheit";
-}
-
-function HealthCell({
-  label,
-  value,
-  unit,
-  meta,
-  tone,
-  muted,
-}: {
-  label: string;
-  value: string | number;
-  unit?: string;
-  meta?: string;
-  tone?: "warning";
-  muted?: boolean;
-}) {
-  return (
-    <div className="cp-health-cell">
-      <span className="cp-health-label">{label}</span>
-      <span className={`cp-health-value${tone === "warning" && Number(value) > 0 ? " is-warning" : ""}${muted ? " is-muted" : ""}`}>
-        {value}
-        {unit ? <span className="cp-health-unit"> {unit}</span> : null}
-      </span>
-      {meta ? <span className="cp-health-meta">{meta}</span> : null}
-    </div>
-  );
 }
 
 function fmtContext(ctx: number | null): string | null {
@@ -91,16 +68,14 @@ function WindowPicker({ value, onChange, ariaLabel }: { value: number; onChange:
   );
 }
 
-
-
 export function OverviewSection({ sparks, deployments, recipes, navigate, loaded, models = [], activity = [], temperatureUnit = "celsius" }: OverviewProps) {
   const runtimeLabels = useRuntimeLabels();
+  const runtimeMetrics = useRuntimeMetrics();
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [now, setNow] = useState(() => Date.now());
   const [lastUpdated, setLastUpdated] = useState(() => Date.now());
-  const [depWindow, setDepWindow] = useState<number>(WINDOWS[0].key);
   const [nodeWindow, setNodeWindow] = useState<number>(WINDOWS[0].key);
   const [activityWindow, setActivityWindow] = useState<number>(WINDOWS[0].key);
 
@@ -109,6 +84,30 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
   const views = useMemo(() => deploymentViews(sparks, deployments, recipes, models), [sparks, deployments, recipes, models]);
   const nodes = useMemo(() => allNodes(sparks), [sparks]);
   const columns = useMemo(() => COLUMNS(deployments, models, temperatureUnit), [deployments, models, temperatureUnit]);
+
+  // Rolling per-deployment telemetry history — the gauge's real operating range.
+  const history: TelemetryHistory = useTelemetryHistory(views);
+
+  const states = useMemo(
+    () => views.map((v) => deriveRuntimeState(v.deployment, v.telemetry)),
+    [views]
+  );
+
+  const verdict = useMemo(
+    () => labVerdict(health.nodesOnline, health.nodesTotal, attention.length, views, states),
+    [health.nodesOnline, health.nodesTotal, attention.length, views, states]
+  );
+  const summary = useMemo(
+    () => labSummary(health.nodesOnline, health.nodesTotal, health.modelsRunning, attention.length),
+    [health.nodesOnline, health.nodesTotal, health.modelsRunning, attention.length]
+  );
+
+  // Cluster: active deployments only, primary first; fall back to all when idle.
+  const clusterViews = useMemo(() => {
+    const active = rankViews(views.filter((v) => v.deployment.display !== "stopped"));
+    return active.length > 0 ? active : rankViews(views);
+  }, [views]);
+  const visibleInstruments = clusterViews.slice(0, 4);
 
   // Last-updated stamp + periodic relative refresh.
   useEffect(() => {
@@ -122,11 +121,6 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
   /** Latest activity ts attributed to a node — the per-section window proxy. */
   const lastSeenAt = (id: string) =>
     activity.reduce((m, e) => (e.subject === id ? Math.max(m, Date.parse(e.ts)) : m), 0);
-
-  const windowedViews = useMemo(() => {
-    const cutoff = now - depWindow;
-    return views.filter((v) => !v.deployment.updatedAt || v.deployment.updatedAt >= cutoff);
-  }, [views, now, depWindow]);
 
   const windowedNodes = useMemo(() => {
     const cutoff = now - nodeWindow;
@@ -201,15 +195,20 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
           </div>
         </div>
       ) : null}
-      {/* Health verdict + last-updated + auto-refresh toggle */}
-      <div className={`cp-verdict${attention.length > 0 ? " is-warn" : ""}`} role="status">
-        <span className={`cp-dot ${attention.length > 0 ? "warn" : "running"}`} aria-hidden="true" />
-        <div>
+
+      {/* LEVEL 1 — glanceable lab verdict: one word, one line, no small text */}
+      <div className={`cp-verdict is-${verdict}`} role="status">
+        <div className="cp-verdict-lead">
+          <span className="cp-verdict-overline">AI LAB</span>
+          <span className={`cp-verdict-pill tone-${verdict}`}>{verdictLabel(verdict)}</span>
+        </div>
+        <div className="cp-verdict-mid">
           <div className="cp-verdict-text">
             {attention.length === 0
               ? "All systems normal"
               : `${attention.length} issue${attention.length === 1 ? "" : "s"} need${attention.length === 1 ? "s" : ""} attention`}
           </div>
+          <div className="cp-verdict-summary mono">{summary}</div>
           <div className="cp-verdict-meta">
             updated {relativeAge(lastUpdated, now)} · auto-refresh {autoRefresh ? "on" : "paused"}
           </div>
@@ -226,34 +225,49 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
         </div>
       </div>
 
-      {/* Layer 1 — fleet health (throughput lives on deployment rows, not here) */}
-      <div className="cp-health is-3">
-        <HealthCell
-          label="Nodes online"
-          value={`${health.nodesOnline}/${health.nodesTotal}`}
-          meta={offline > 0 ? `${offline} offline · last 15m` : "last 15m"}
-        />
-        <HealthCell
-          label="Deployments"
-          value={health.modelsRunning}
-          unit="running"
-          meta={
-            health.modelsStopped > 0 || health.modelsError > 0
-              ? `${health.modelsStopped + health.modelsError} not running`
-              : health.modelsLoading > 0
-                ? `${health.modelsLoading} loading`
-                : "steady"
+      {/* LEVEL 2 — instrument cluster: one LARGE instrument per active deployment
+          + the physical lab fabric panel beside it. */}
+      <div className="cp-section-block">
+        <SectionBand
+          icon={<BotIcon />}
+          title="Instrument cluster"
+          count={visibleInstruments.length}
+          actions={
+            <button type="button" className="cp-alert-link" onClick={() => navigate({ section: "models" })}>
+              Models →
+            </button>
           }
         />
-        <HealthCell
-          label="Active alerts"
-          value={health.activeAlerts}
-          tone="warning"
-          meta={health.activeAlerts === 0 ? "all clear" : "needs attention"}
-        />
+        {visibleInstruments.length === 0 ? (
+          <div className="cp-table-empty">No active deployments — cluster idle.</div>
+        ) : (
+          <div className="cp-cluster">
+            <div className="cp-cluster-instruments">
+              {visibleInstruments.map((v, i) => (
+                <DeploymentInstrument
+                  key={v.key}
+                  view={v}
+                  role={roleOf(v, clusterViews)}
+                  state={states[views.indexOf(v)] ?? deriveRuntimeState(v.deployment, v.telemetry)}
+                  history={history[v.key]?.samples ?? []}
+                  lastRequestAt={history[v.key]?.lastRequestAt ?? null}
+                  now={now}
+                  runtimeLabels={runtimeLabels}
+                  runtimeMetrics={runtimeMetrics}
+                  onOpen={() => navigate({ section: "model", modelId: v.deployment.modelId })}
+                />
+              ))}
+            </div>
+            <FabricPanel
+              sparks={sparks}
+              views={views}
+              navigate={(nodeId) => navigate({ section: "node", nodeId })}
+            />
+          </div>
+        )}
       </div>
 
-      {/* Attention digest — deduped by condition+resource with ×N badges */}
+      {/* Warnings / live activity strip — deduped by condition+resource */}
       {attention.length > 0 ? (
         <div className="cp-section-block">
           <SectionBand icon={<PanelIcon />} title="Attention" count={attention.length} />
@@ -273,42 +287,46 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
           </div>
         </div>
       ) : (
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div className="cp-strip">
           <StatusDot status="running" />
-          <span style={{ fontSize: 12, color: "var(--color-muted)" }}>No active alerts — lab is healthy.</span>
+          <span className="cp-strip-text">No active alerts — lab is healthy.</span>
+          {offline > 0 ? <span className="cp-strip-text mono">{offline} node{offline === 1 ? "" : "s"} offline</span> : null}
         </div>
       )}
 
-      {/* Layer 2 — deployments (hero) */}
+      {/* Compact deployments summary — Level 2 rows, link into detail */}
       <div className="cp-section-block">
         <SectionBand
           icon={<BotIcon />}
           title="Deployments"
-          count={windowedViews.length}
-          local={<WindowPicker value={depWindow} onChange={setDepWindow} ariaLabel="Deployment window" />}
+          count={views.length}
           actions={
             <button type="button" className="cp-alert-link" onClick={() => navigate({ section: "models" })}>
               Models →
             </button>
           }
         />
-        {windowedViews.length === 0 ? (
-          <div className="cp-table-empty">No deployments registered in this window.</div>
+        {views.length === 0 ? (
+          <div className="cp-table-empty">No deployments registered.</div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {windowedViews.map((v) => {
+            {views.map((v) => {
               const ctx = fmtContext(v.contextLength);
               const multi = v.nodes.length > 1;
+              const state = states[views.indexOf(v)];
               return (
                 <div
-                  key={v.deployment.recipeId}
-                  className="cp-deploy-row"
+                  key={v.key}
+                  className={`cp-deploy-row${state === "offline" ? " is-offline" : ""}`}
                   role="button"
                   tabIndex={0}
                   onClick={() => navigate({ section: "model", modelId: v.deployment.modelId })}
                   onKeyDown={(e) => e.key === "Enter" && navigate({ section: "model", modelId: v.deployment.modelId })}
                 >
-                  <StatusPill status={v.deployment.display} className="cp-deploy-state" />
+                  <span className={`cp-inst-state tone-${stateTone(state)}`}>
+                    <span className="cp-inst-state-dot" aria-hidden="true" />
+                    {stateLabel(state)}
+                  </span>
 
                   <div className="cp-deploy-model">
                     <span className="cp-deploy-name">{v.modelName}</span>
@@ -358,20 +376,6 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
           </div>
         )}
       </div>
-
-      {/* Layer 2 (visual) — topology, deployment enclosures */}
-      {nodes.length > 0 && nodes.length <= 4 ? (
-        <div className="cp-section-block">
-          <SectionBand icon={<NetworkIcon />} title="Topology" />
-          <Topology
-            sparks={sparks}
-            recipes={recipes}
-            deployments={deployments}
-            models={models}
-            onNodeClick={(id) => navigate({ section: "node", nodeId: id })}
-          />
-        </div>
-      ) : null}
 
       {/* Layer 3 — runtime activity */}
       <div className="cp-section-block">
@@ -490,7 +494,6 @@ function COLUMNS(
       render: (n) => {
         const um = n.metrics?.unifiedMemory;
         if (!um || um.total <= 0) return <span className="cp-nodata">—</span>;
-        // used/total are MB (collector convention, cf. RamPanel formatMb).
         return (
           <span title={`${Math.round(um.used / 1024)} / ${Math.round(um.total / 1024)} GB unified`}>
             {Math.round(um.percentage)}

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { act } from "react";
 import { OverviewSection } from "./OverviewSection";
-import type { SparkSnapshot } from "../../api/types";
+import type { DeploymentStatus, SparkSnapshot } from "../../api/types";
 import { render, cleanupRenders } from "../../testing/render";
 
 function spark(over: Partial<SparkSnapshot> = {}): SparkSnapshot {
@@ -12,6 +12,15 @@ function spark(over: Partial<SparkSnapshot> = {}): SparkSnapshot {
     metrics: { gpu: null, cpu: null, ram: null, storage: [], network: null, unifiedMemory: null, llm: [], comfy: null, tailscale: null },
     ...over,
   } as SparkSnapshot;
+}
+
+function dep(over: Partial<DeploymentStatus> = {}): DeploymentStatus {
+  return {
+    recipeId: "r1", modelId: "m1", nodeIds: ["n1"], apiPort: 8889,
+    managedBy: "external", dryRun: true, state: "running", desired: "unknown", observed: "auth-gated",
+    discovered: false, display: "running-external", lastOp: null, lastError: null, startedAt: null, updatedAt: 0,
+    ...over,
+  };
 }
 
 describe("Overview health verdict", () => {
@@ -73,5 +82,21 @@ describe("Overview health verdict", () => {
     cleanupRenders();
     const { container } = render(<OverviewSection sparks={[]} deployments={[]} recipes={[]} navigate={() => {}} loaded={false} />);
     expect(container.querySelectorAll(".cp-skeleton")).toHaveLength(3);
+  });
+
+  it("drops the standalone bottom Topology band — placement lives in the instrument", () => {
+    cleanupRenders();
+    const { container } = render(<OverviewSection sparks={[spark()]} deployments={[dep()]} recipes={[]} navigate={() => {}} loaded />);
+    expect(container.querySelector(".cp-topology")).toBeNull();
+    // placement still expressed per-instrument + the fabric panel
+    expect(container.querySelector(".cp-topo-summary")).not.toBeNull();
+    expect(container.querySelector(".cp-fabric")).not.toBeNull();
+  });
+
+  it("reads an auth-gated external runtime as calm tight, not degraded", () => {
+    cleanupRenders();
+    const { container } = render(<OverviewSection sparks={[spark()]} deployments={[dep()]} recipes={[]} navigate={() => {}} loaded />);
+    expect(container.querySelector(".cp-inst-state")?.textContent).toContain("READY");
+    expect(container.querySelector(".cp-inst-state")?.classList.contains("tone-warn")).toBe(false);
   });
 });

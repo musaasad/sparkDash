@@ -364,6 +364,46 @@ describe("deriveRuntimeState", () => {
     expect(t.generationTps).toBeNull();
     expect(deriveRuntimeState(dep("r1", "running"), t)).toBe("unknown");
   });
+
+  it("reads an auth-gated external runtime as healthy ready, never degraded", () => {
+    const qwen = {
+      ...dep("r1", "running"),
+      managedBy: "external" as const,
+      desired: "unknown" as const,
+      observed: "auth-gated" as const,
+      display: "running-external" as const,
+    };
+    // No readable metrics at all: still loaded + serving-capable.
+    expect(deriveRuntimeState(qwen, null)).toBe("ready");
+    // 401 on the probe is proof of a live gated process, not a failure.
+    const gated = deploymentTelemetry([nodeWithLlm("n1", {}, { available: false, error: "HTTP 401" })], qwen)!;
+    expect(deriveRuntimeState(qwen, gated)).toBe("ready");
+    // An external runtime whose endpoint answers but carries no load detail.
+    const observedRunning = { ...dep("r1", "running"), managedBy: "external" as const, observed: "running" as const, display: "running-external" as const };
+    const bare = deploymentTelemetry([nodeWithLlm("n1", {})], observedRunning)!;
+    expect(deriveRuntimeState(observedRunning, bare)).not.toBe("degraded");
+  });
+
+  it("keeps degraded for genuinely unhealthy signals only", () => {
+    const d = dep("r1", "running");
+    expect(deriveRuntimeState({ ...d, display: "degraded" }, null)).toBe("degraded");
+    expect(deriveRuntimeState({ ...d, observed: "unhealthy" }, null)).toBe("degraded");
+    // Managed deployment whose readable probe hard-fails.
+    const refused = deploymentTelemetry([nodeWithLlm("n1", {}, { available: false, error: "ECONNREFUSED" })], d)!;
+    expect(deriveRuntimeState(d, refused)).toBe("degraded");
+    const timeout = deploymentTelemetry([nodeWithLlm("n1", {}, { available: false, error: "TimeoutError" })], d)!;
+    expect(deriveRuntimeState(d, timeout)).toBe("degraded");
+    // External hard-fail is NOT degraded.
+    const ext = { ...d, managedBy: "external" as const, observed: "running" as const, display: "running-external" as const };
+    expect(deriveRuntimeState(ext, refused)).not.toBe("degraded");
+  });
+
+  it("still reads serving/busy from readable metrics for a healthy external runtime", () => {
+    const ext = { ...dep("r1", "running"), managedBy: "external" as const, observed: "auth-gated" as const, display: "running-external" as const };
+    const hot = deploymentTelemetry([nodeWithLlm("n1", {}, { generationTps: 50, requestsWaiting: 2 })], ext)!;
+    expect(deriveRuntimeState(ext, hot)).toBe("busy");
+    expect(deriveRuntimeState(ext, { ...hot, requestsWaiting: 0 })).toBe("serving");
+  });
 });
 
 describe("deploymentViews telemetry wiring", () => {

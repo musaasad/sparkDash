@@ -166,7 +166,7 @@ test("archived recipe cannot back a new deployment and renders read-only", () =>
   assert.equal(pub.archived, true);
 });
 
-const { normalizeRecipe, normalizeDeployment, normalizeTopology, topologySlug } = await import("../schema.js");
+const { normalizeRecipe, normalizeDeployment, normalizeTopology, topologySlug, validateDeployment } = await import("../schema.js");
 
 test("WS4 explicit tp/pp/dp/ep normalize, dominate mode and product the slug", () => {
   const t = normalizeTopology({ topology: { tp: 2, pp: 2 } });
@@ -258,4 +258,16 @@ test("F9 normalizeDeployment forces desiredState unknown for external managedBy"
   assert.equal(dep.desiredState, "unknown");
   const managed = normalizeDeployment({ recipeId: "r1", modelId: "m1", nodeIds: ["node-7"], desiredState: "running", metadata: { managedBy: "sparkdash" } });
   assert.equal(managed.desiredState, "running");
+});
+
+test("normalizeDeployment accepts an optional config role and stays backward compatible", () => {
+  for (const role of ["primary", "worker", "edge"]) {
+    assert.equal(normalizeDeployment({ recipeId: "r1", modelId: "m1", nodeIds: ["n"], role }).role, role);
+  }
+  assert.equal(normalizeDeployment({ recipeId: "r1", modelId: "m1", nodeIds: ["n"] }).role, null);
+  assert.equal(normalizeDeployment({ recipeId: "r1", modelId: "m1", nodeIds: ["n"], role: "bogus" }).role, null);
+  // prev role survives an unrelated update, and validateDeployment rejects a bad role.
+  const prev = normalizeDeployment({ id: "d1", recipeId: "r1", modelId: "m1", nodeIds: ["n"], role: "primary" });
+  assert.equal(normalizeDeployment({ nodeIds: ["n"] }, prev).role, "primary");
+  assert.equal(validateDeployment({ ...prev, role: "bogus" }).ok, false);
 });

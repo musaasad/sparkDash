@@ -230,6 +230,25 @@
   --color-info: #5aa2e0;
 }
 
+/* ─── Instrumentation tokens (cockpit cluster) ──────────── */
+/* Geometry + tone wiring for the gauge/fabric instruments. Colours are refs so
+   every theme adapts; motion is deliberately slow and calm. */
+:root {
+  --inst-gauge-size: 172px;
+  --inst-arc: 5px;
+  --inst-arc-thin: 2px;
+  --inst-track: var(--color-border-strong);
+  --inst-tick: var(--color-border-strong);
+  --inst-spark: var(--color-accent-strong);
+  --inst-tone-live: var(--color-success);
+  --inst-tone-calm: var(--color-muted-strong);
+  --inst-tone-warn: var(--color-warning);
+  --inst-tone-alert: var(--color-danger);
+  --inst-tone-off: var(--color-neutral);
+  --inst-pulse-duration: 1600ms;
+  --inst-arc-duration: 700ms;
+}
+
 /* ─── Density tokens (layout spacing) ───────────────────── */
 /* Compact is the default (matches server settings DEFAULTS.density).
    Comfortable is the roomier override. Both density attribute blocks sit
@@ -4411,3 +4430,199 @@ html {
 
 /* link used on a button element */
 button.cp-link { background: none; border: none; padding: 0; cursor: pointer; font-size: 12px; }
+
+/* ═══ AI LAB COCKPIT — instrument cluster (append-only) ══════════════════ */
+/* Typography + geometry lead; colour is a tone hairline, never a fill. */
+
+/* ─── Level-1 verdict header ───────────────────────────── */
+.cp-verdict {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: 18px var(--space-4);
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--inst-tone-live);
+  background: var(--color-surface);
+  border-radius: var(--radius-card);
+}
+.cp-verdict.is-degraded { border-left-color: var(--inst-tone-warn); }
+.cp-verdict.is-alert { border-left-color: var(--inst-tone-alert); }
+.cp-verdict-lead { display: flex; flex-direction: column; gap: 6px; min-width: 140px; }
+.cp-verdict-overline { font-size: 24px; font-weight: 700; letter-spacing: 0.16em; line-height: 1; }
+.cp-verdict-pill {
+  align-self: flex-start;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 9px; border-radius: var(--radius-chip);
+  border: 1px solid currentColor;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.14em;
+}
+.cp-verdict-pill::before { content: ""; width: 6px; height: 6px; border-radius: 999px; background: currentColor; }
+.cp-verdict-pill.tone-nominal { color: var(--inst-tone-live); }
+.cp-verdict-pill.tone-degraded { color: var(--inst-tone-warn); }
+.cp-verdict-pill.tone-alert { color: var(--inst-tone-alert); }
+.cp-verdict-mid { min-width: 0; }
+.cp-verdict-summary { font-size: 12px; letter-spacing: 0.1em; color: var(--color-muted-strong); margin-top: 2px; }
+.cp-verdict-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+
+/* ─── Cluster grid: instruments + physical fabric beside ── */
+.cp-cluster { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: var(--space-4); align-items: start; }
+.cp-cluster-instruments { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: var(--space-3); }
+
+/* ─── One deployment instrument ────────────────────────── */
+.cp-inst {
+  display: flex; flex-direction: column; gap: var(--space-2);
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-top: 2px solid var(--inst-tone-calm);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+  cursor: pointer;
+}
+.cp-inst:hover { border-color: var(--color-border-strong); }
+.cp-inst:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.cp-inst.tone-live { border-top-color: var(--inst-tone-live); }
+.cp-inst.tone-warn { border-top-color: var(--inst-tone-warn); }
+.cp-inst.tone-alert { border-top-color: var(--inst-tone-alert); }
+.cp-inst.is-worker { opacity: 0.94; }
+
+.cp-inst-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
+.cp-inst-id { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.cp-inst-role {
+  align-self: flex-start; font-size: 10px; font-weight: 700; letter-spacing: 0.14em;
+  color: var(--color-muted); border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-chip); padding: 2px 6px;
+}
+.cp-inst-name { font-size: 22px; font-weight: 600; line-height: 1.15; margin: 0; overflow: hidden; text-overflow: ellipsis; }
+.cp-inst-runtime { font-size: 12px; color: var(--color-muted); }
+
+.cp-inst-state {
+  display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto;
+  padding: 3px 8px; border-radius: var(--radius-chip); border: 1px solid currentColor;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.12em;
+}
+.cp-inst-state.tone-live { color: var(--inst-tone-live); }
+.cp-inst-state.tone-calm { color: var(--inst-tone-calm); }
+.cp-inst-state.tone-warn { color: var(--inst-tone-warn); }
+.cp-inst-state.tone-alert { color: var(--inst-tone-alert); }
+.cp-inst-state.tone-off { color: var(--inst-tone-off); }
+.cp-inst-state-dot { width: 6px; height: 6px; border-radius: 999px; background: currentColor; }
+
+/* body fills the card so the secondary row sits tight under it (no dead middle) */
+.cp-inst-body { display: flex; gap: var(--space-4); flex: 1 1 auto; align-items: stretch; min-height: 0; }
+.cp-inst-body .cp-gauge { align-self: center; }
+.cp-inst-side { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; justify-content: space-between; }
+.cp-inst-meta { display: flex; flex-direction: column; gap: 1px; }
+.cp-inst-meta-label { font-size: 10px; letter-spacing: 0.14em; color: var(--color-muted); }
+.cp-inst-nodes { font-size: 12px; color: var(--color-text); }
+.cp-inst-meta-value { font-size: 13px; }
+.cp-inst-recency { font-size: 11px; color: var(--color-muted); }
+.cp-inst-live { font-size: 11px; font-weight: 600; color: var(--inst-tone-live); letter-spacing: 0.06em; }
+
+.cp-inst-secondary {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(66px, 1fr)); gap: var(--space-2);
+  border-top: 1px solid var(--color-border); padding-top: var(--space-3);
+}
+.cp-inst-cell { display: flex; flex-direction: column; gap: 2px; }
+.cp-inst-cell-label { font-size: 10px; letter-spacing: 0.1em; color: var(--color-muted); }
+.cp-inst-cell-value { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.cp-inst-cell-unit { font-size: 10px; color: var(--color-muted); font-weight: 400; }
+
+/* ─── Throughput gauge ─────────────────────────────────── */
+.cp-gauge { position: relative; display: grid; place-items: center; flex: 0 0 auto; }
+.cp-gauge svg { position: absolute; inset: 0; }
+.cp-gauge-track { stroke: var(--inst-track); stroke-width: var(--inst-arc); stroke-linecap: butt; }
+.cp-gauge-fill {
+  stroke: var(--inst-tone-calm); stroke-width: var(--inst-arc); stroke-linecap: butt;
+  transition: stroke-dasharray var(--inst-arc-duration) cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+/* idle/ready/unknown: calm thin faint track + centered word, no fat blob */
+.cp-gauge.is-calm .cp-gauge-track { stroke-width: var(--inst-arc-thin); opacity: 0.72; }
+.cp-gauge.tone-live .cp-gauge-fill { stroke: var(--inst-tone-live); }
+.cp-gauge.tone-warn .cp-gauge-fill { stroke: var(--inst-tone-warn); }
+.cp-gauge.tone-alert .cp-gauge-fill { stroke: var(--inst-tone-alert); }
+.cp-gauge.tone-off .cp-gauge-fill { stroke: var(--inst-tone-off); }
+.cp-gauge-tick { stroke: var(--inst-tick); stroke-width: 0.4; }
+.cp-gauge-spark { stroke: var(--inst-spark); stroke-width: 0.7; opacity: 0.75; }
+/* generous center inset so the word/number never touches the arc */
+.cp-gauge-center { position: relative; display: flex; flex-direction: column; align-items: center; max-width: 60%; }
+.cp-gauge-value { font-size: 44px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; font-family: "JetBrains Mono", ui-monospace, monospace; }
+.cp-gauge-unit { font-size: 10px; letter-spacing: 0.16em; color: var(--color-muted); margin-top: 3px; }
+.cp-gauge-state { font-size: 14px; font-weight: 700; letter-spacing: 0.14em; color: var(--inst-tone-calm); }
+.cp-gauge.tone-live .cp-gauge-state { color: var(--inst-tone-live); }
+.cp-gauge-trend { font-size: 10px; margin-top: 2px; color: var(--color-muted); }
+.cp-gauge-trend.is-up { color: var(--inst-tone-live); }
+.cp-gauge-trend.is-down { color: var(--inst-tone-warn); }
+.cp-gauge-range { position: absolute; bottom: 2px; font-size: 9px; letter-spacing: 0.08em; color: var(--color-muted); }
+/* tiny activity pulse ONLY while requests are live; idle stays calm */
+.cp-gauge.is-active .cp-gauge-center::before {
+  content: ""; width: 4px; height: 4px; border-radius: 999px; background: var(--inst-tone-live);
+  animation: cp-inst-pulse var(--inst-pulse-duration) ease-in-out infinite;
+}
+@keyframes cp-inst-pulse { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .cp-gauge.is-active .cp-gauge-center::before { animation: none; opacity: 1; }
+  .cp-gauge-fill { transition: none; }
+}
+
+/* ─── Truthful activity / warning strip ────────────────── */
+.cp-strip { display: flex; align-items: center; gap: var(--space-2); padding: 6px 2px; }
+.cp-strip-text { font-size: 12px; color: var(--color-muted); }
+.cp-strip-text.mono { letter-spacing: 0.06em; }
+
+/* ─── Physical fabric panel (separate from deployment topology) ── */
+.cp-fabric {
+  border: 1px solid var(--color-border); border-radius: var(--radius-card);
+  background: var(--color-surface); padding: var(--space-4);
+  display: flex; flex-direction: column; gap: var(--space-3);
+}
+.cp-fabric-head { display: flex; align-items: baseline; gap: var(--space-2); }
+.cp-fabric-title { font-size: 11px; font-weight: 600; letter-spacing: 0.12em; color: var(--color-muted-strong); }
+.cp-fabric-count { font-size: 12px; color: var(--color-muted); }
+.cp-fabric-wiring { margin-left: auto; font-size: 10px; letter-spacing: 0.1em; color: var(--color-muted-strong); }
+.cp-fabric-wiring.is-honest { color: var(--color-warning); }
+.cp-fabric-canvas { position: relative; }
+.cp-fabric-links { position: absolute; inset: 0; }
+.cp-fabric-placeholders { position: absolute; inset: 0; }
+.cp-fabric-placeholders line { stroke: var(--color-border); stroke-width: 1; stroke-dasharray: 2 5; }
+.cp-fabric-link line { stroke: var(--color-border-strong); stroke-width: 1; }
+.cp-fabric-link.is-degraded line { stroke: var(--color-warning); stroke-dasharray: 3 3; }
+.cp-fabric-link-speed { font-size: 9px; fill: var(--color-muted); letter-spacing: 0.06em; }
+.cp-fabric-node {
+  position: absolute; display: flex; flex-direction: column; gap: 3px;
+  padding: 10px 12px; text-align: left;
+  border: 1px solid var(--color-border); border-left: 2px solid var(--inst-tone-calm);
+  border-radius: var(--radius-control); background: var(--color-surface-elevated, var(--color-surface));
+  cursor: pointer; overflow: hidden;
+}
+.cp-fabric-node:hover { border-color: var(--color-border-strong); }
+.cp-fabric-node.tone-live { border-left-color: var(--inst-tone-live); }
+.cp-fabric-node.tone-warn { border-left-color: var(--inst-tone-warn); }
+.cp-fabric-node.tone-alert { border-left-color: var(--inst-tone-alert); }
+.cp-fabric-node.tone-off { border-left-color: var(--inst-tone-off); opacity: 0.72; }
+.cp-fabric-node-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.cp-fabric-node-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--inst-tone-calm); flex: 0 0 auto; }
+.cp-fabric-node.tone-live .cp-fabric-node-dot { background: var(--inst-tone-live); }
+.cp-fabric-node.tone-warn .cp-fabric-node-dot { background: var(--inst-tone-warn); }
+.cp-fabric-node.tone-alert .cp-fabric-node-dot { background: var(--inst-tone-alert); }
+.cp-fabric-node.tone-off .cp-fabric-node-dot { background: var(--inst-tone-off); }
+.cp-fabric-node-name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cp-fabric-node-meta { font-size: 10px; letter-spacing: 0.1em; color: var(--color-muted); }
+.cp-fabric-node-speed {
+  align-self: flex-start; font-size: 10px; letter-spacing: 0.06em;
+  color: var(--color-muted-strong); border: 1px solid var(--color-border);
+  border-radius: var(--radius-chip); padding: 1px 5px;
+}
+.cp-fabric-node-models { font-size: 10px; color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cp-fabric-note { font-size: 11px; color: var(--color-muted); }
+.cp-fabric-empty { font-size: 12px; color: var(--color-muted); }
+
+/* ─── Reflow: never shrink text, stack majors on narrow ── */
+@media (max-width: 1180px) {
+  .cp-cluster { grid-template-columns: 1fr; }
+}
+@media (max-width: 720px) {
+  .cp-inst-body { flex-direction: column; }
+  .cp-verdict { flex-wrap: wrap; }
+  .cp-verdict-right { margin-left: 0; }
+  .cp-verdict-overline { font-size: 20px; }
+}

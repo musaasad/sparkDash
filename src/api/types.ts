@@ -938,6 +938,9 @@ export type DeploymentDesired = "running" | "stopped" | "unknown";
  */
 export type DeploymentObserved = "running" | "auth-gated" | "unhealthy" | "not-detected";
 
+/** OPTIONAL explicit deployment role set by the owner in config. */
+export type DeploymentRole = "primary" | "worker" | "edge";
+
 /**
  * Derived display state — fixed vocabulary (DESIGN_BRIEF global rule 10).
  * Transitional lifecycle slugs pass through while a dry-run op is in flight.
@@ -1128,6 +1131,8 @@ export interface DeploymentStatus {
   processEvidence?: boolean | null;
   nodeIds: string[];
   apiPort: number;
+  /** OPTIONAL explicit placement role (config-driven). Absent => FE heuristic. */
+  role?: DeploymentRole | null;
   managedBy: "external" | "sparkdash";
   dryRun: boolean;
   state: DeploymentState;

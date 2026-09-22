@@ -28,6 +28,7 @@ const quoteClamp = (s) => String(s).slice(0, 64);
 
 export const TOPOLOGY_MODES = Object.freeze(["single", "tp", "pp", "dp"]);
 export const LAUNCH_MECHANISMS = Object.freeze(["command", "systemd", "docker", "external"]);
+export const DEPLOYMENT_ROLES = Object.freeze(["primary", "worker", "edge"]);
 export const API_PROTOCOLS = Object.freeze(["openai", "custom"]);
 export const PROBE_KINDS = Object.freeze(["http", "tcp", "process"]);
 export const DISCOVERY_STRATEGIES = Object.freeze(["openai-models", "process", "manual"]);
@@ -317,6 +318,8 @@ export function normalizeDeployment(body = {}, prev = null) {
     : prev?.desiredState ?? "unknown";
   // An external runtime has no SparkDash intent → desired must stay 'unknown'.
   if (managedBy === "external") desiredState = "unknown";
+  // OPTIONAL explicit role (owner's mental model). Absent => FE heuristic.
+  const role = DEPLOYMENT_ROLES.includes(body.role) ? body.role : prev?.role != null && DEPLOYMENT_ROLES.includes(prev.role) ? prev.role : null;
   return {
     id: body.id ?? prev?.id,
     schemaVersion: 2,
@@ -324,6 +327,7 @@ export function normalizeDeployment(body = {}, prev = null) {
     recipeId: body.recipeId ?? prev?.recipeId,
     nodeIds: Array.isArray(body.nodeIds) ? [...new Set(body.nodeIds)] : [...(prev?.nodeIds || [])],
     desiredState,
+    role,
     metadata,
     createdAt: body.createdAt ?? prev?.createdAt ?? Date.now(),
     updatedAt: body.updatedAt ?? Date.now(),
@@ -442,6 +446,7 @@ export function validateDeployment(dep) {
   if (new Set(dep?.nodeIds || []).size !== (dep?.nodeIds || []).length) errors.push("nodeIds must be unique");
   for (const n of dep?.nodeIds || []) if (!isValidSlug(n)) errors.push(`invalid node id: ${n}`);
   if (!["running", "stopped", "unknown"].includes(dep?.desiredState)) errors.push("desiredState must be running|stopped|unknown");
+  if (dep?.role != null && !DEPLOYMENT_ROLES.includes(dep.role)) errors.push(`role must be one of: ${DEPLOYMENT_ROLES.join(", ")}`);
   return { ok: errors.length === 0, errors };
 }
 

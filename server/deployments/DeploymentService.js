@@ -194,6 +194,7 @@ export class DeploymentService {
       modelId: dep?.modelId ?? recipe?.modelRef?.modelId ?? null,
       nodeIds,
       apiPort: recipe?.endpoint?.port ?? null,
+      role: dep?.role ?? null,
       servedModelId: recipe?.metadata?.servedModelId ?? null,
       endpoint: recipe?.endpoint
         ? `${recipe.endpoint.scheme || "http"}://${recipe.endpoint.hostTemplate || "{nodeIp}"}:${recipe.endpoint.port}${recipe.endpoint.path || "/v1"}`

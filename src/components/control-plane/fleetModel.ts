@@ -338,22 +338,59 @@ export function deploymentTelemetry(sparks: SparkSnapshot[], d: DeploymentStatus
   };
 }
 
+/** Hard transport failure signatures — only these may read as degraded. */
+const HARD_TRANSPORT = /5\d\d|timeout|timed out|refused|econnrefused|abort/i;
+
+/**
+ * A healthy OBSERVED state that proves a live process even though SparkDash may
+ * not read its metrics: an auth-gated 401/403 endpoint, an externally-launched
+ * runtime, or any running-external display. External runtimes are first-class —
+ * never "broken"/"degraded" merely because SparkDash did not launch them.
+ */
+function isObservedHealthyExternal(d: DeploymentStatus): boolean {
+  return (
+    d.observed === "auth-gated" ||
+    d.display === "running-external" ||
+    (d.managedBy === "external" && d.observed === "running")
+  );
+}
+
 /**
  * Derive a coarse operational state. A healthy-but-generating-nothing model
- * reads as idle/ready — never a scary "0". Order matters: offline and degraded
- * win over any live signal.
+ * reads as idle/ready — never a scary "0".
+ *
+ * `degraded` is RESERVED for genuinely unhealthy signals: an observed-degraded
+ * display, an explicit unhealthy probe, or a MANAGED deployment whose readable
+ * probe hard-fails (5xx / timeout / refused). An auth-gated external runtime
+ * with no readable metrics is loaded and serving-capable → `ready`.
  */
 export function deriveRuntimeState(d: DeploymentStatus, telemetry: DeploymentTelemetry | null): RuntimeState {
   if (d.state === "stopped" || d.display === "stopped" || d.observed === "not-detected") return "offline";
-  if (d.display === "degraded" || d.observed === "unhealthy" || d.observed === "auth-gated") return "degraded";
-  if (!telemetry) return "unknown";
-  if (!telemetry.available && telemetry.error && /auth|401|403/i.test(telemetry.error)) return "degraded";
+
+  if (d.display === "degraded" || d.observed === "unhealthy") return "degraded";
+  if (
+    d.managedBy !== "external" &&
+    telemetry &&
+    !telemetry.available &&
+    telemetry.error &&
+    HARD_TRANSPORT.test(telemetry.error)
+  ) {
+    return "degraded";
+  }
+
+  // Observed-healthy external runtime: process is up but metrics may be gated.
+  const healthyExternal = isObservedHealthyExternal(d);
+  if (!telemetry) return healthyExternal ? "ready" : "unknown";
 
   if ((telemetry.requestsWaiting ?? 0) > 0) return "busy";
   if ((telemetry.requestsRunning ?? 0) > 0 || (telemetry.generationTps ?? 0) > 0) return "serving";
 
   const loaded = (telemetry.slotsTotal ?? 0) > 0 || !!telemetry.modelId;
-  if (!loaded) return telemetry.available ? "degraded" : "unknown";
+  if (!loaded) {
+    // Missing load detail => still loaded/serving-capable when observed healthy.
+    if (healthyExternal) return "ready";
+    return telemetry.available ? "degraded" : "unknown";
+  }
 
   // Loaded, healthy, no active work: idle when it has served before, else ready.
   return (telemetry.totalOutputTokens ?? 0) > 0 ? "idle" : "ready";
