@@ -32,30 +32,42 @@ export type InstrumentRole = "PRIMARY" | "WORKER" | "SPECIALIST" | "REVIEWER" | 
 export type StateTone = "live" | "calm" | "warn" | "alert" | "off";
 
 const STATE_RANK: Record<RuntimeState, number> = {
+  online: 0,
   serving: 0,
   busy: 1,
   ready: 2,
   idle: 3,
-  unknown: 4,
-  degraded: 5,
-  offline: 6,
+  reachable: 4,
+  loaded: 4,
+  starting: 4,
+  unknown: 5,
+  degraded: 6,
+  offline: 7,
 };
 
 const STATE_LABEL: Record<RuntimeState, string> = {
+  online: "ONLINE",
   serving: "SERVING",
   busy: "BUSY",
   ready: "READY",
   idle: "IDLE",
+  reachable: "REACHABLE",
+  loaded: "LOADED",
+  starting: "STARTING",
   unknown: "UNKNOWN",
   degraded: "DEGRADED",
   offline: "OFFLINE",
 };
 
 const STATE_TONE: Record<RuntimeState, StateTone> = {
+  online: "live",
   serving: "live",
   busy: "live",
   ready: "calm",
   idle: "calm",
+  reachable: "calm",
+  loaded: "calm",
+  starting: "warn",
   unknown: "off",
   degraded: "warn",
   offline: "alert",

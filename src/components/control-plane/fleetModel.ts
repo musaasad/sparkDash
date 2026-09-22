@@ -1,5 +1,7 @@
 import type { SparkSnapshot, DeploymentStatus, DeploymentDisplay, RecipePublic, RecipeTopology, RecipeLifecycleState, ModelEntry, ActivityEvent, LlmMetrics } from "../../api/types";
 import { isWorkerSpark } from "../../api/sparkRole";
+import { fleetInventory, primaryAnchorNode, nodeById, workersOf as inventoryWorkersOf } from "../../shared/inventory.js";
+import { deriveRuntimeState as canonicalRuntimeState, telemetryQuality, probeOutcome, RUNTIME_STATE, type RuntimeState as CanonicalRuntimeState } from "../../shared/runtimeState.js";
 
 export interface FleetHealth {
   nodesOnline: number;
@@ -88,8 +90,8 @@ export interface DeploymentTelemetry {
   error: string | null;
 }
 
-/** Coarse operational state a deployment row can render. */
-export type RuntimeState = "offline" | "degraded" | "busy" | "serving" | "idle" | "ready" | "unknown";
+/** Coarse operational state a deployment row can render (canonical vocabulary). */
+export type RuntimeState = CanonicalRuntimeState;
 
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
@@ -123,7 +125,7 @@ export function computeFleetHealth(
   const alerts = computeFleetAlerts(sparks, deployments);
   return {
     nodesOnline,
-    nodesTotal: sparks.length,
+    nodesTotal: fleetNodes(sparks).length,
     modelsRunning,
     modelsStopped,
     modelsError,
@@ -240,18 +242,31 @@ export function attentionDigest(
   return [...groups.values()].sort((a, b) => order[a.severity] - order[b.severity]);
 }
 
-/** Non-worker nodes (heads + standalone) for fleet drill-down tables. */
+/**
+ * Canonical inventory: EVERY configured/adopted node, config order, workers
+ * included. Fleet/Overview/counters all resolve from this. Role collapsing
+ * (primaryNodes) may pick a deployment's telemetry anchor but MUST NOT hide a
+ * node from the inventory.
+ */
+export function fleetNodes(sparks: SparkSnapshot[]): SparkSnapshot[] {
+  return fleetInventory(sparks);
+}
+
+/**
+ * Non-worker nodes (heads + standalone). Kept for anchor picking only — the
+ * Fleet table uses `fleetNodes` so a worker never disappears.
+ */
 export function primaryNodes(sparks: SparkSnapshot[]): SparkSnapshot[] {
   return sparks.filter((s) => !isWorkerSpark(s));
 }
 
-/** Every node, config order, workers included (Overview telemetry table). */
+/** Every node, config order, workers included (canonical inventory alias). */
 export function allNodes(sparks: SparkSnapshot[]): SparkSnapshot[] {
-  return [...sparks];
+  return fleetNodes(sparks);
 }
 
 export function workersOf(sparks: SparkSnapshot[], headId: string): SparkSnapshot[] {
-  return sparks.filter((s) => isWorkerSpark(s) && (s.workerHeadId === headId || !s.workerHeadId));
+  return inventoryWorkersOf(sparks, headId);
 }
 
 /** Recipes deployed on a given node. */
@@ -280,11 +295,12 @@ export function deploymentDecodeTps(sparks: SparkSnapshot[], d: DeploymentStatus
   return total > 0 ? Math.round(total) : null;
 }
 
-/** Primary (coordinator) node for a deployment: first non-worker node with a snapshot, else first node. */
+/** Primary (coordinator) node for a deployment: stable-id anchor over nodeIds. */
 export function primaryNodeOf(sparks: SparkSnapshot[], d: DeploymentStatus): SparkSnapshot | null {
-  const present = d.nodeIds.map((id) => sparks.find((s) => s.id === id)).filter((s): s is SparkSnapshot => !!s);
-  return present.find((s) => !isWorkerSpark(s)) ?? present[0] ?? null;
+  return primaryAnchorNode(sparks, d);
 }
+
+export { nodeById, type CanonicalRuntimeState };
 
 /** LLM probe series for one node + port, index-aligned with `llmPorts` (no fallback match). */
 function llmForNode(s: SparkSnapshot | null | undefined, apiPort: number): LlmMetrics | undefined {
@@ -356,45 +372,50 @@ function isObservedHealthyExternal(d: DeploymentStatus): boolean {
 }
 
 /**
- * Derive a coarse operational state. A healthy-but-generating-nothing model
- * reads as idle/ready — never a scary "0".
+ * Derive a coarse operational state from the CANONICAL shared module — one
+ * authoritative implementation consumed by every surface.
  *
  * `degraded` is RESERVED for genuinely unhealthy signals: an observed-degraded
  * display, an explicit unhealthy probe, or a MANAGED deployment whose readable
  * probe hard-fails (5xx / timeout / refused). An auth-gated external runtime
- * with no readable metrics is loaded and serving-capable → `ready`.
+ * with no readable metrics is loaded and serving-capable → `ready`/`reachable`.
+ * A reachable endpoint with missing OPTIONAL telemetry is NEVER `offline`.
  */
-export function deriveRuntimeState(d: DeploymentStatus, telemetry: DeploymentTelemetry | null): RuntimeState {
-  if (d.state === "stopped" || d.display === "stopped" || d.observed === "not-detected") return "offline";
-
-  if (d.display === "degraded" || d.observed === "unhealthy") return "degraded";
-  if (
-    d.managedBy !== "external" &&
-    telemetry &&
-    !telemetry.available &&
-    telemetry.error &&
-    HARD_TRANSPORT.test(telemetry.error)
-  ) {
-    return "degraded";
-  }
-
-  // Observed-healthy external runtime: process is up but metrics may be gated.
+export function deriveRuntimeState(
+  d: DeploymentStatus,
+  telemetry: DeploymentTelemetry | null,
+  opts: { telemetryAgeMs?: number | null; staleMs?: number } = {}
+): RuntimeState {
   const healthyExternal = isObservedHealthyExternal(d);
-  if (!telemetry) return healthyExternal ? "ready" : "unknown";
-
-  if ((telemetry.requestsWaiting ?? 0) > 0) return "busy";
-  if ((telemetry.requestsRunning ?? 0) > 0 || (telemetry.generationTps ?? 0) > 0) return "serving";
-
-  const loaded = (telemetry.slotsTotal ?? 0) > 0 || !!telemetry.modelId;
-  if (!loaded) {
-    // Missing load detail => still loaded/serving-capable when observed healthy.
-    if (healthyExternal) return "ready";
-    return telemetry.available ? "degraded" : "unknown";
-  }
-
-  // Loaded, healthy, no active work: idle when it has served before, else ready.
-  return (telemetry.totalOutputTokens ?? 0) > 0 ? "idle" : "ready";
+  const probe = probeOutcome({
+    available: telemetry?.available === true,
+    hasKey: false,
+    error: telemetry?.error ?? null,
+  });
+  const reachable = telemetry?.available === true || healthyExternal || probe.reachable;
+  return canonicalRuntimeState({
+    state: d.state,
+    display: d.display,
+    observed: d.observed,
+    managedBy: d.managedBy,
+    // Feed the canonical shape so it can read active/loaded signals itself.
+    telemetry: telemetry as unknown as Record<string, unknown> | null,
+    telemetryAgeMs: opts.telemetryAgeMs ?? null,
+    staleMs: opts.staleMs,
+    reachable,
+    keyedWithoutKey: probe.keyedWithoutKey,
+  });
 }
+
+/** Canonical telemetry quality for a deployment's telemetry (FULL/PARTIAL/STALE/ABSENT). */
+export function deploymentTelemetryQuality(
+  telemetry: DeploymentTelemetry | null,
+  telemetryAgeMs: number | null = null
+): ReturnType<typeof telemetryQuality> {
+  return telemetryQuality(telemetry as unknown as Record<string, unknown> | null, { telemetryAgeMs });
+}
+
+export { RUNTIME_STATE };
 
 /** Deployment rows joined with recipe, friendly name and member nodes. */
 export function deploymentViews(
@@ -643,7 +664,7 @@ export function externalConnectView(
   labels?: Record<string, string> | null
 ): ExternalConnect | null {
   if (d.managedBy !== "external") return null;
-  const node = sparks.find((s) => d.nodeIds.includes(s.id));
+  const node = primaryAnchorNode(sparks, d);
   const host = node?.lanIp ?? d.nodeIds[0] ?? "localhost";
   const secretEnv = recipe?.env.find((e) => e.secret && (e.hasValue ?? !!e.value)) ?? null;
   return {

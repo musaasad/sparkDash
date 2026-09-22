@@ -70,6 +70,8 @@ export class LlmProbe {
     this.serverIsOpenAI = null; // true = OpenAI-compatible
     /** Whether /v1/models (or /slots) answered without credentials. null = unknown. */
     this.authOpen = null;
+    /** Last auth-gate HTTP status (401/403) when authOpen === false. */
+    this.authStatus = null;
     this.stepId = 0;
     this.modelId = null;
     this.modelPath = null;
@@ -250,6 +252,7 @@ export class LlmProbe {
     this.serverIsOpenAI = null;
     this.backendType = null;
     this.authOpen = null;
+    this.authStatus = null;
     this.lastErrorCode = null;
     this.lastErrorName = null;
     this.modelId = null;
@@ -290,9 +293,24 @@ export class LlmProbe {
     }
     if (status === 401 || status === 403) {
       this.authOpen = false;
+      this.authStatus = status;
       return "auth";
     }
     return "other";
+  }
+
+  /**
+   * Honest auth failure detail. A keyed endpoint probed WITHOUT a key stays
+   * UNAVAILABLE (available=false) with an explicit auth error — never offline,
+   * never invented telemetry.
+   * @returns {string|null}
+   */
+  _authError() {
+    if (this.authOpen !== false) return null;
+    const status = this.authStatus ?? 401;
+    return this._apiKey()
+      ? `API key rejected (${status})`
+      : `API key required (${status})`;
   }
 
   // ─── Server type detection ───────────────────────────────
@@ -1568,42 +1586,64 @@ export class LlmProbe {
 
   _getSnapshot() {
     const metricsLive = this.serverIsOpenAI !== null && this.authOpen !== false;
+    // Reachable-but-gated: record an explicit auth error so the snapshot is
+    // honestly UNAVAILABLE (never offline, never invented metrics).
+    const authError = this._authError();
+    if (authError) {
+      this.error = authError;
+      this.lastErrorName = this._apiKey() ? "AuthRejected" : "AuthRequired";
+    }
+    // Golden rule: when metrics are NOT live (auth-gated / unreachable / down),
+    // numeric telemetry is UNKNOWN — never a stale or default 0. The UI renders
+    // "—", not a fabricated "0 TOK/S". contextLength/modelId stay whatever was
+    // last legitimately read (null when never fetched).
+    const num = (v) => (metricsLive ? v : null);
     return {
       available: metricsLive,
       port: this.port,
+      /** Process answered (2xx / 401 / 403) even when metrics are gated. */
+      reachable: this.serverIsOpenAI !== null,
+      authGated: this.authOpen === false,
       errorCode: this.lastErrorCode,
       errorName: this.lastErrorName,
       backend: this.backendType,
       modelId: this.modelId || null,
       modelPath: this.modelPath || null,
       contextLength: this.contextLength,
-      gpuMemoryUtilization: this.gpuMemoryUtilization,
-      slotsActive: this.slotsActive,
-      slotsTotal: this.slotsTotal,
-      generationTps: this.generationTps,
-      prefillTps: this.prefillTps,
-      cachedPrefillTps: this.cachedPrefillTps,
-      uncachedPrefillTps: this.uncachedPrefillTps,
-      totalOutputTokens: this.totalOutputTokens,
-      kvCacheUsage: this.kvCacheUsage,
-      requestsRunning: this.requestsRunning,
-      requestsWaiting: this.requestsWaiting,
-      ttftP95Seconds: this.ttftP95Seconds,
-      ttftSeconds: this.ttftSeconds,
-      preemptionsTotal: this.preemptionsTotal,
-      prefixCacheHitRate: this.prefixCacheHitRate,
-      e2eP95Seconds: this.e2eP95Seconds,
-      itlP95Seconds: this.itlP95Seconds,
-      mtpAcceptanceRate: this.mtpAcceptanceRate,
+      gpuMemoryUtilization: num(this.gpuMemoryUtilization),
+      slotsActive: num(this.slotsActive),
+      slotsTotal: num(this.slotsTotal),
+      generationTps: num(this.generationTps),
+      prefillTps: num(this.prefillTps),
+      cachedPrefillTps: num(this.cachedPrefillTps),
+      uncachedPrefillTps: num(this.uncachedPrefillTps),
+      totalOutputTokens: num(this.totalOutputTokens),
+      kvCacheUsage: num(this.kvCacheUsage),
+      requestsRunning: num(this.requestsRunning),
+      requestsWaiting: num(this.requestsWaiting),
+      ttftP95Seconds: num(this.ttftP95Seconds),
+      ttftSeconds: num(this.ttftSeconds),
+      preemptionsTotal: num(this.preemptionsTotal),
+      prefixCacheHitRate: num(this.prefixCacheHitRate),
+      e2eP95Seconds: num(this.e2eP95Seconds),
+      itlP95Seconds: num(this.itlP95Seconds),
+      mtpAcceptanceRate: num(this.mtpAcceptanceRate),
       posture: this._buildPosture(),
       error: this.error,
     };
   }
 
   _defaultLlm() {
+    const authError = this._authError();
+    if (authError) {
+      this.error = authError;
+      this.lastErrorName = this._apiKey() ? "AuthRejected" : "AuthRequired";
+    }
     return {
       available: false,
       port: this.port,
+      reachable: this.serverIsOpenAI !== null,
+      authGated: this.authOpen === false,
       errorCode: this.lastErrorCode,
       errorName: this.lastErrorName,
       backend: this.backendType,
@@ -1611,13 +1651,16 @@ export class LlmProbe {
       modelPath: null,
       contextLength: null,
       gpuMemoryUtilization: null,
-      slotsActive: 0,
-      slotsTotal: 0,
-      generationTps: 0,
-      prefillTps: 0,
+      // Unavailable telemetry is UNKNOWN, never a measured zero (golden rule:
+      // never convert missing data into 0). Numeric telemetry stays null so the
+      // UI renders "—", not a fabricated 0 TOK/S.
+      slotsActive: null,
+      slotsTotal: null,
+      generationTps: null,
+      prefillTps: null,
       cachedPrefillTps: null,
       uncachedPrefillTps: null,
-      totalOutputTokens: 0,
+      totalOutputTokens: null,
       kvCacheUsage: null,
       requestsRunning: null,
       requestsWaiting: null,

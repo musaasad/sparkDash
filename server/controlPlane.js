@@ -702,10 +702,33 @@ export function createControlPlane(deps) {
   const discoveredCache = new Map();
   const discoveryInFlight = new Set();
 
-  /** Declared probe host for a deployment's primary node (same host rule as LlmProbe). */
+  /** Declared probe host for a deployment's PRIMARY member node (stable ids). */
   function deploymentHost(dep) {
-    const spark = sparkRegistry.getSpark(dep.nodeIds?.[0]);
-    return spark ? llmProbeHost(spark) : null;
+    // Explicit compute membership (nodeIds) + endpoint port — never positional.
+    const members = (dep.nodeIds || []).map((id) => sparkRegistry.getSpark(id)).filter(Boolean);
+    const port = recipeForDeployment(dep)?.endpoint?.port;
+    const node =
+      members.find((s) => (s.llmPorts || []).includes(port) && s.role !== "worker") ||
+      members.find((s) => (s.llmPorts || []).includes(port)) ||
+      members[0];
+    return node ? llmProbeHost(node) : null;
+  }
+
+  /** Primary snapshot for a deployment, resolved by stable member ids + port. */
+  function deploymentPrimarySnapshot(recipe, dep) {
+    const port = recipe?.endpoint?.port;
+    for (const id of dep.nodeIds || []) {
+      const monitor = monitors.get(id);
+      if (!monitor) continue;
+      let snap = null;
+      try {
+        snap = monitor.snapshot();
+      } catch {
+        continue;
+      }
+      if ((snap.llmPorts || []).includes(port)) return snap;
+    }
+    return null;
   }
 
   function recipeForDeployment(dep) {
@@ -714,7 +737,9 @@ export function createControlPlane(deps) {
 
   function classifyFromSnapshot(recipe, snap) {
     const list = snap?.metrics?.llm || [];
-    const llm = list.find((l) => l.port === recipe?.endpoint?.port) || list[0];
+    // Identity match on the endpoint PORT only — no positional fallback, so a
+    // wrong-port series can never misattribute load.
+    const llm = list.find((l) => l.port === recipe?.endpoint?.port);
     if (!llm) return "not-detected";
     if (llm.available === true) return "running";
     if (llm.posture?.auth === "protected") return "auth-gated";
@@ -744,7 +769,11 @@ export function createControlPlane(deps) {
       const disc = discoveredCache.get(dep.id);
       if (discoveryInFlight.has(dep.id)) continue;
       if (disc && now - disc.at < DISCOVERY_TTL_MS) continue;
-      const spark = sparkRegistry.getSpark(dep.nodeIds?.[0]);
+      const recipe2 = recipeForDeployment(dep);
+      const port = recipe2?.endpoint?.port;
+      const spark =
+        (dep.nodeIds || []).map((id) => sparkRegistry.getSpark(id)).find((s) => s && (s.llmPorts || []).includes(port)) ||
+        sparkRegistry.getSpark(dep.nodeIds?.[0]);
       if (!spark) continue;
       discoveryInFlight.add(dep.id);
       sshExec(spark, processEvidenceCmd(), {
@@ -765,19 +794,10 @@ export function createControlPlane(deps) {
     for (const dep of deploymentRegistry.list()) {
       const recipe = recipeForDeployment(dep);
       if (!recipe) continue;
-      const primary = monitors.get(dep.nodeIds?.[0]);
       let observed = "not-detected";
-      if (primary) {
-        let snap = null;
-        let online = false;
-        try {
-          snap = primary.snapshot();
-          online = Boolean(snap?.online);
-        } catch {
-          online = false;
-        }
-        if (online) observed = probeCache.get(dep.id)?.observed || classifyFromSnapshot(recipe, snap);
-      }
+      const snap = deploymentPrimarySnapshot(recipe, dep);
+      const online = Boolean(snap?.online);
+      if (online) observed = probeCache.get(dep.id)?.observed || classifyFromSnapshot(recipe, snap);
       dep.servedModelId = recipe.metadata?.servedModelId ?? null;
       deployments.observe(dep.id, {
         observed,

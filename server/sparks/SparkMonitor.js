@@ -5,6 +5,7 @@ import {
   collectionWasSuccessful,
 } from "../collectors/SystemCollector.js";
 import { LlmProbe } from "../collectors/LlmProbe.js";
+import { llmMonitoringEnabled } from "../../src/shared/runtimeState.js";
 import { ComfyProbe } from "../collectors/ComfyProbe.js";
 import { HermesProbe } from "../collectors/HermesProbe.js";
 import { TailscaleProbe } from "../collectors/TailscaleProbe.js";
@@ -234,14 +235,13 @@ export class SparkMonitor {
   }
 
   /**
-   * Workers: never. Head: always. Standalone: llmMonitoring (default true).
+   * Canonical rule (shared runtimeState module): Workers default OFF but an
+   * EXPLICIT llmMonitoring opt-in wins, so a worker-hosted endpoint is never
+   * silently unobserved. Head always. Standalone defaults on.
    * @param {object} [spark]
    */
   _llmMonitoringEnabled(spark = this.spark) {
-    const role = spark?.role || (spark?.workerNode ? "worker" : "standalone");
-    if (role === "worker") return false;
-    if (role === "head") return true;
-    return spark?.llmMonitoring !== false;
+    return llmMonitoringEnabled(spark);
   }
 
   /**

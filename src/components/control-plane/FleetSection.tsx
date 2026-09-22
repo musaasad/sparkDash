@@ -6,9 +6,9 @@ import { StatusPill, StatusDot, Chip, EmptyState } from "../ui/Status";
 import { SectionBand } from "../ui/SectionBand";
 import { Toolbar, DensityToggle } from "../ui/Toolbar";
 import { KebabIcon, NetworkIcon } from "../ui/icons";
-import { primaryNodes, recipesOnNode, fmtUptime, nodeHealthRail, nodeMatchesRail } from "./fleetModel";
+import { fleetNodes, recipesOnNode, fmtUptime, nodeHealthRail, nodeMatchesRail } from "./fleetModel";
 import { Topology } from "./Topology";
-import { isWorkerSpark } from "../../api/sparkRole";
+import { nodeRole } from "../../shared/inventory.js";
 
 interface FleetProps {
   sparks: SparkSnapshot[];
@@ -30,8 +30,9 @@ export function FleetSection({ sparks, deployments, recipes, navigate, models = 
   const [query, setQuery] = useState("");
   const [dense, setDense] = useState(false);
 
-  const nodes = useMemo(() => primaryNodes(sparks), [sparks]);
-  const workers = useMemo(() => sparks.filter(isWorkerSpark), [sparks]);
+  // CANONICAL inventory: every configured/adopted node, workers included. A
+  // worker node never disappears — its cluster role rides as a badge.
+  const nodes = useMemo(() => fleetNodes(sparks), [sparks]);
   // Data-driven compact switch: at larger N the fleet stops assuming the three
   // giant cards / topology block reading and tightens to a dense list.
   const compact = nodes.length > 6;
@@ -56,7 +57,7 @@ export function FleetSection({ sparks, deployments, recipes, navigate, models = 
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <EntityChip icon={<NetworkIcon />} label={n.name} title={n.lanIp ?? n.name} />
           <Chip>{n.kind === "host" ? "host" : "spark"}</Chip>
-          {n.role === "head" ? <Chip tone="accent">head</Chip> : null}
+          <Chip tone={nodeRole(n) === "head" ? "accent" : undefined}>{nodeRole(n)}</Chip>
         </div>
       ),
     },
@@ -243,41 +244,6 @@ export function FleetSection({ sparks, deployments, recipes, navigate, models = 
             <div className="cp-panel">
               <div className="cp-panel-title">Topology</div>
               <Topology sparks={sparks} recipes={recipes} deployments={deployments} models={models} onNodeClick={(id) => navigate({ section: "node", nodeId: id })} />
-            </div>
-          ) : null}
-
-          {workers.length > 0 ? (
-            <div className="cp-section-block">
-              <SectionBand icon={<NetworkIcon />} title="Worker nodes" count={workers.length} />
-              <DataTable
-                ariaLabel="Worker nodes"
-                columns={[
-                  {
-                    key: "name",
-                    header: "Worker",
-                    render: (n) => (
-                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <StatusDot status={n.online ? "online" : "offline"} />
-                        <span style={{ fontWeight: 500 }}>{n.name}</span>
-                        <Chip>worker</Chip>
-                      </div>
-                    ),
-                  },
-                  {
-                    key: "label",
-                    header: "Cluster",
-                    render: (n) => n.workerLabel || n.workerDerivedLabel || <span className="muted">unknown</span>,
-                  },
-                  {
-                    key: "status",
-                    header: "Status",
-                    render: (n) => <StatusPill status={n.online ? "online" : "offline"} />,
-                  },
-                ]}
-                rows={workers}
-                rowKey={(n) => n.id}
-                onRowClick={(n) => navigate({ section: "node", nodeId: n.id })}
-              />
             </div>
           ) : null}
         </>

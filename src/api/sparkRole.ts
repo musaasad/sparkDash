@@ -1,4 +1,5 @@
 import type { SparkRole } from "./types";
+import { llmMonitoringEnabled as canonicalLlmMonitoringEnabled } from "../shared/runtimeState.js";
 
 /** Resolve cluster role from config/snapshot fields (supports legacy workerNode-only). */
 export function resolveSparkRole(spark: {
@@ -20,15 +21,14 @@ export function isWorkerSpark(spark: {
 
 /**
  * Whether this Spark should probe/show the local LLM API.
- * Workers: never. Head: always. Standalone: llmMonitoring (default true).
+ * Canonical rule (shared module): Workers default OFF but honour an EXPLICIT
+ * llmMonitoring opt-in so a worker-hosted endpoint is never silently unobserved.
+ * Head always. Standalone defaults on.
  */
 export function isLlmMonitoringEnabled(spark: {
   role?: SparkRole | string | null;
   workerNode?: boolean | null;
   llmMonitoring?: boolean | null;
 }): boolean {
-  const role = resolveSparkRole(spark);
-  if (role === "worker") return false;
-  if (role === "head") return true;
-  return spark.llmMonitoring !== false;
+  return canonicalLlmMonitoringEnabled(spark);
 }

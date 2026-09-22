@@ -9,6 +9,7 @@ import {
   computeFleetHealth,
   attentionDigest,
   allNodes,
+  fleetNodes,
   deploymentViews,
   deriveRuntimeState,
   friendlyName,
@@ -94,11 +95,18 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
   const attention = useMemo(() => attentionDigest(sparks, deployments, models), [sparks, deployments, models]);
   const views = useMemo(() => deploymentViews(sparks, deployments, recipes, models), [sparks, deployments, recipes, models]);
   const nodes = useMemo(() => allNodes(sparks), [sparks]);
+  /** Canonical inventory — the same count the Fleet surface resolves from. */
+  const inventory = useMemo(() => fleetNodes(sparks), [sparks]);
 
   // Rolling per-deployment telemetry history — the gauge's real operating range.
   const history: TelemetryHistory = useTelemetryHistory(views);
 
-  const states = useMemo(() => views.map((v) => deriveRuntimeState(v.deployment, v.telemetry)), [views]);
+  // Identity-keyed states: association by stable deployment key, never index.
+  const statesByKey = useMemo(
+    () => new Map(views.map((v) => [v.key, deriveRuntimeState(v.deployment, v.telemetry)])),
+    [views]
+  );
+  const states = useMemo(() => views.map((v) => statesByKey.get(v.key)!), [views, statesByKey]);
 
   const verdict = useMemo(
     () => labVerdict(health.nodesOnline, health.nodesTotal, attention.length, views, states),
@@ -115,7 +123,7 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
 
   // CONFIG-driven PRIMARY emphasis, then other active deployments.
   const pv = useMemo(() => primaryView(views), [views]);
-  const pvState = pv ? states[views.indexOf(pv)] ?? deriveRuntimeState(pv.deployment, pv.telemetry) : null;
+  const pvState = pv ? statesByKey.get(pv.key) ?? deriveRuntimeState(pv.deployment, pv.telemetry) : null;
   const others = useMemo(
     () => (pv ? rankViews(views.filter((v) => v.deployment.display !== "stopped" && v.key !== pv.key)).slice(0, 3) : []),
     [views, pv]
@@ -291,7 +299,7 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
                     key={v.key}
                     view={v}
                     role={role}
-                    state={states[views.indexOf(v)] ?? deriveRuntimeState(v.deployment, v.telemetry)}
+                    state={statesByKey.get(v.key) ?? deriveRuntimeState(v.deployment, v.telemetry)}
                     history={history[v.key]?.samples ?? []}
                     lastRequestAt={history[v.key]?.lastRequestAt ?? null}
                     now={now}
@@ -314,7 +322,7 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
         <SectionBand
           icon={<NetworkIcon />}
           title="Node telemetry"
-          count={windowedNodes.length}
+          count={inventory.length}
           local={<WindowPicker value={nodeWindow} onChange={setNodeWindow} ariaLabel="Node window" />}
           actions={
             <button type="button" className="cp-alert-link" onClick={() => navigate({ section: "fleet" })}>
@@ -350,7 +358,7 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
             {views.map((v) => {
               const ctx = fmtContext(v.contextLength);
               const multi = v.nodes.length > 1;
-              const state = states[views.indexOf(v)];
+              const state = statesByKey.get(v.key)!;
               const role = roleOf(v, views);
               return (
                 <div

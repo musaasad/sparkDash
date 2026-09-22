@@ -3,6 +3,7 @@ import { SPARKS_JSON_PATH, LLM_PORT } from "../config.js";
 import { loadSecrets, saveSecrets } from "../secretsStore.js";
 import { atomicWrite } from "../util/atomicWrite.js";
 import { isValidSparkId } from "../validate.js";
+import { llmMonitoringEnabled } from "../../src/shared/runtimeState.js";
 
 /**
  * SparkRegistry — loads, persists, and emits change events for the Spark list.
@@ -613,11 +614,11 @@ export class SparkRegistry {
         ? this._normalizeWorkerHeadId(config.workerHeadId, config.id)
         : null,
       /**
-       * Standalone: probe/show local LLM (default true).
-       * Head always on; worker always off.
+       * Standalone: probe/show local LLM (default true). Head always on; worker
+       * defaults off BUT an EXPLICIT opt-in wins so a worker-hosted endpoint is
+       * never silently unobserved. Explicit `false` always wins.
        */
-      llmMonitoring:
-        role === "worker" ? false : role === "head" ? true : config.llmMonitoring !== false,
+      llmMonitoring: llmMonitoringEnabled({ role, workerNode: isWorker, llmMonitoring: config.llmMonitoring }),
       /**
        * Probe local ComfyUI and show the ComfyUI card (default false; all roles).
        */
