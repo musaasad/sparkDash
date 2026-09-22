@@ -17,19 +17,24 @@ interface FleetProps {
   navigate: (route: Route) => void;
   /** Model registry — friendly topology labels; falls back to raw ids. */
   models?: ModelEntry[];
+  /** Obvious entry into the guided Add Compute wizard. */
+  onAddCompute?: () => void;
 }
 
 function fmtTemp(celsius: number): string {
   return `${Math.round(celsius)}°C`;
 }
 
-export function FleetSection({ sparks, deployments, recipes, navigate, models = [] }: FleetProps) {
+export function FleetSection({ sparks, deployments, recipes, navigate, models = [], onAddCompute }: FleetProps) {
   const [rail, setRail] = useState("all");
   const [query, setQuery] = useState("");
   const [dense, setDense] = useState(false);
 
   const nodes = useMemo(() => primaryNodes(sparks), [sparks]);
   const workers = useMemo(() => sparks.filter(isWorkerSpark), [sparks]);
+  // Data-driven compact switch: at larger N the fleet stops assuming the three
+  // giant cards / topology block reading and tightens to a dense list.
+  const compact = nodes.length > 6;
   // One rail vocabulary for both the side rail and the toolbar tabs so a chip
   // persists when the other surface is used.
   const railItems = useMemo(() => nodeHealthRail(nodes, deployments), [nodes, deployments]);
@@ -163,11 +168,16 @@ export function FleetSection({ sparks, deployments, recipes, navigate, models = 
         }
         utilities={<DensityToggle dense={dense} onChange={setDense} />}
         primary={
-          query ? (
-            <button type="button" className="cp-btn ghost" onClick={() => setQuery("")}>
-              Clear
+          <div style={{ display: "flex", gap: 8 }}>
+            {query ? (
+              <button type="button" className="cp-btn ghost" onClick={() => setQuery("")}>
+                Clear
+              </button>
+            ) : null}
+            <button type="button" className="cp-btn ghost" onClick={() => onAddCompute?.()}>
+              + Add compute
             </button>
-          ) : null
+          </div>
         }
       />
 
@@ -176,10 +186,10 @@ export function FleetSection({ sparks, deployments, recipes, navigate, models = 
           <EmptyState
             icon={<NetworkIcon />}
             title="No compute nodes found"
-            subtitle="Add a Spark or host in Settings to start observing your lab."
+            subtitle="Add a Spark or host to start observing your lab."
             action={
-              <button type="button" className="cp-btn primary" onClick={() => navigate({ section: "settings" })}>
-                + Connect node
+              <button type="button" className="cp-btn primary" onClick={() => onAddCompute?.()}>
+                + Add compute
               </button>
             }
             learnMore={
@@ -192,6 +202,11 @@ export function FleetSection({ sparks, deployments, recipes, navigate, models = 
       ) : (
         <>
           <SectionBand icon={<NetworkIcon />} title="Compute nodes" count={rows.length} />
+          {compact ? (
+            <div className="cp-fleet-compact-note muted" style={{ fontSize: 12 }}>
+              Compact representation — {nodes.length} nodes rendered data-driven; fleet size never implies parallelism degree.
+            </div>
+          ) : null}
           <div className="cp-fleet-layout">
             {/* Aggregate health rail — clicking a count filters the table */}
             <div className="cp-rail" aria-label="Fleet health rail">
@@ -213,7 +228,7 @@ export function FleetSection({ sparks, deployments, recipes, navigate, models = 
             <div id="fleet-nodes">
               <DataTable
                 ariaLabel="Compute nodes"
-                dense={dense}
+                dense={dense || compact}
                 columns={columns}
                 rows={rows}
                 rowKey={(n) => n.id}
@@ -224,7 +239,7 @@ export function FleetSection({ sparks, deployments, recipes, navigate, models = 
             </div>
           </div>
 
-          {nodes.length <= 4 ? (
+          {nodes.length <= 4 && !compact ? (
             <div className="cp-panel">
               <div className="cp-panel-title">Topology</div>
               <Topology sparks={sparks} recipes={recipes} deployments={deployments} models={models} onNodeClick={(id) => navigate({ section: "node", nodeId: id })} />

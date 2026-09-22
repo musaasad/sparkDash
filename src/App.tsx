@@ -333,10 +333,11 @@ function DashboardApp() {
                   models={cp.models}
                   activity={cp.activity}
                   temperatureUnit={settings?.temperatureUnit ?? "celsius"}
+                  onAddCompute={() => setShowAdd(true)}
                 />
               ) : null}
               {route.section === "fleet" ? (
-                <FleetSection sparks={liveSparks} deployments={deployments} recipes={cp.recipes} models={cp.models} navigate={guardNavigate} />
+                <FleetSection sparks={liveSparks} deployments={deployments} recipes={cp.recipes} models={cp.models} navigate={guardNavigate} onAddCompute={() => setShowAdd(true)} />
               ) : null}
               {route.section === "node" ? (
                 activeNode ? (
@@ -451,6 +452,8 @@ function DashboardApp() {
           void refreshFromApi();
         }}
         defaultLlmPort={settings?.defaultLlmPort ?? 8888}
+        sparks={liveSparks}
+        credRefs={cp.recipes.flatMap((r) => (r.env ?? []).filter((e) => e.secret || e.secretRef).map((e) => `recipe:${r.id}:${e.name}`))}
       />
       <EditSparkDialog
         open={editId != null}

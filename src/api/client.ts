@@ -467,6 +467,9 @@ import type {
   ProbeCapabilitiesRequest,
   ProbeCapabilitiesResult,
   RuntimeProviderInfo,
+  ComputeDiscoveryRequest,
+  ComputeDiscoveryResult,
+  ComputeValidateResult,
 } from "./types";
 
 export function fetchModels(includeArchived = false): Promise<{ models: ModelEntry[] }> {
@@ -623,4 +626,25 @@ export function probeDiscoveryEndpoint(body: DiscoveryProbeRequest): Promise<Dis
  */
 export function probeDiscoveryCapabilities(body: ProbeCapabilitiesRequest): Promise<ProbeCapabilitiesResult> {
   return apiFetch("/api/discovery/probe-capabilities", { method: "POST", body: JSON.stringify(body) });
+}
+
+// ─── Guided Add Compute (read-only discover + config-only validate) ─────────
+/**
+ * Bounded, read-only discovery of ONE operator-supplied host. Nothing is
+ * written, no remote is mutated, no LAN/port sweep is performed.
+ */
+export function discoverCompute(body: ComputeDiscoveryRequest): Promise<ComputeDiscoveryResult> {
+  return apiFetch("/api/compute/discover", { method: "POST", body: JSON.stringify(body) });
+}
+
+/**
+ * Config-only pre-SAVE validation. Inspects the registry and, where safe, one
+ * bounded GET per port. Distinguishes INVALID from NOT-VERIFIED.
+ */
+export function validateCompute(body: {
+  draft: Record<string, unknown>;
+  discovered?: ComputeDiscoveryResult | null;
+  selfId?: string | null;
+}): Promise<ComputeValidateResult> {
+  return apiFetch("/api/compute/validate", { method: "POST", body: JSON.stringify(body) });
 }

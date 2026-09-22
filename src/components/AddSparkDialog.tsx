@@ -5,12 +5,17 @@ import type { SparkConfig, SparkTestResponse } from "../api/types";
 import { useModalPresence } from "../hooks/useModalPresence";
 import { useFocusTrap } from "../hooks/useFocusTrap";
 import { ConnectivityResult } from "./ui/ConnectivityResult";
+import { AddComputeWizard } from "./control-plane/AddComputeWizard";
 
 interface AddSparkDialogProps {
   open: boolean;
   onClose: () => void;
   onAdded: () => void;
   defaultLlmPort?: number;
+  /** Registered nodes — guided wizard uniqueness + fabric peer selection. */
+  sparks?: readonly { id: string; name?: string; lanIp?: string }[];
+  /** Optional secret refs offered to the guided wizard. */
+  credRefs?: readonly string[];
 }
 
 function useEscape(onClose: () => void) {
@@ -33,12 +38,21 @@ const defaultConfig: Omit<SparkConfig, "id"> = {
   ssh: { host: "", user: "zurih", auth: "key" },
 };
 
-export function AddSparkDialog({ open, onClose, onAdded, defaultLlmPort = 8888 }: AddSparkDialogProps) {
+export function AddSparkDialog({
+  open,
+  onClose,
+  onAdded,
+  defaultLlmPort = 8888,
+  sparks = [],
+  credRefs = [],
+}: AddSparkDialogProps) {
   const [config, setConfig] = useState(defaultConfig);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<SparkTestResponse | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Guided is the DEFAULT path; the classic form stays as Advanced manual. */
+  const [mode, setMode] = useState<"guided" | "manual">("guided");
 
   useEscape(onClose);
 
@@ -58,6 +72,8 @@ export function AddSparkDialog({ open, onClose, onAdded, defaultLlmPort = 8888 }
   useEffect(() => {
     if (open) {
       setConfig((prev) => ({ ...prev, llmPorts: [defaultLlmPort] }));
+      setMode("guided");
+      setError(null);
     }
   }, [open, defaultLlmPort]);
 
@@ -119,6 +135,22 @@ export function AddSparkDialog({ open, onClose, onAdded, defaultLlmPort = 8888 }
     }
   };
 
+  /** Guided path: the wizard already built a config-only payload. */
+  const handleSaveConfig = async (payload: SparkConfig) => {
+    setSaving(true);
+    setError(null);
+    try {
+      await addSpark(payload);
+      onAdded();
+      setConfig(defaultConfig);
+      onClose();
+    } catch (err: any) {
+      setError(err.message ?? String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return createPortal(
     <div
       className={`modal-overlay${visible ? " is-open" : ""}`}
@@ -134,10 +166,25 @@ export function AddSparkDialog({ open, onClose, onAdded, defaultLlmPort = 8888 }
         aria-labelledby="add-spark-title"
       >
         <div className="modal-sheet__header" id="add-spark-title">
-          Add Spark/GPU Host
+          {mode === "guided" ? "Add compute" : "Add Spark/GPU Host"}
         </div>
 
-        <div className="modal-sheet__body">
+        {mode === "guided" ? (
+          <div className="modal-sheet__body">
+            <AddComputeWizard
+              existing={sparks}
+              credRefs={credRefs}
+              defaultLlmPort={defaultLlmPort}
+              onCancel={onClose}
+              onSave={handleSaveConfig}
+              onAdvanced={() => setMode("manual")}
+              saving={saving}
+              error={error}
+            />
+          </div>
+        ) : (
+          <>
+          <div className="modal-sheet__body">
         <div className="space-y-3">
           <div>
             <label className="mb-1 block text-xs text-muted">Unit type</label>
@@ -309,6 +356,8 @@ export function AddSparkDialog({ open, onClose, onAdded, defaultLlmPort = 8888 }
             </button>
           </div>
         </div>
+          </>
+        )}
       </div>
     </div>,
     document.body

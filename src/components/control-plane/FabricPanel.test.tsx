@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { act } from "react";
 import type { DeploymentStatus, RecipePublic, SparkSnapshot } from "../../api/types";
 import type { DeploymentView } from "./fleetModel";
 import { FabricPanel } from "./FabricPanel";
@@ -105,5 +106,68 @@ describe("FabricPanel honesty", () => {
     expect(parseInt(card.style.height, 10)).toBeGreaterThanOrEqual(112);
     const models = card.querySelector(".cp-fabric-node-models");
     expect(models?.textContent).toContain(longName);
+  });
+
+  it("has an obvious '+ Add compute' entry on the Lab Fabric surface", () => {
+    cleanupRenders();
+    const onAddCompute = vi.fn();
+    const { container } = render(<FabricPanel sparks={[spark()]} views={[]} navigate={() => {}} onAddCompute={onAddCompute} />);
+    const btn = [...container.querySelectorAll("button")].find((b) => b.textContent?.includes("Add compute"))!;
+    expect(btn).toBeTruthy();
+    act(() => btn.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(onAddCompute).toHaveBeenCalled();
+  });
+
+  it("keeps physical and deployment as SEPARATE visual modes with a legend", () => {
+    cleanupRenders();
+    const nodes = [spark({ id: "a", cx7Ip: "10.0.0.1" }), spark({ id: "b", cx7Ip: "10.0.0.2" })];
+    const { container } = render(<FabricPanel sparks={nodes} views={[view("Llama 3", "a")]} navigate={() => {}} />);
+    // physical default: one discovered (dashed) edge, marked by provenance
+    expect(container.querySelectorAll(".cp-fabric-link")).toHaveLength(1);
+    expect(container.querySelector(".cp-fabric-link")?.getAttribute("data-provenance")).toBe("discovered");
+    expect(container.querySelector(".cp-fabric-legend")?.textContent).toContain("configured link");
+
+    const dep = [...container.querySelectorAll<HTMLButtonElement>(".cp-fabric-modes button")].find((b) => b.textContent === "Deployment")!;
+    act(() => dep.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    // deployment mode: no physical links at all, placements instead
+    expect(container.querySelectorAll(".cp-fabric-link")).toHaveLength(0);
+    expect(container.querySelector(".cp-fabric-legend")?.textContent).toContain("no physical edges");
+    expect(container.textContent).toContain("Llama 3");
+  });
+
+  it("marks CONFIGURED links as solid provenance and DISCOVERED as dashed", () => {
+    cleanupRenders();
+    const nodes = [
+      spark({ id: "a", fabricLinks: [{ to: "b", medium: "cx7" }] }),
+      spark({ id: "b", cx7Ip: "10.0.0.9" }),
+      spark({ id: "c", cx7Ip: "10.0.0.10" }),
+    ];
+    const { container } = render(<FabricPanel sparks={nodes} views={[]} navigate={() => {}} />);
+    const links = [...container.querySelectorAll(".cp-fabric-link")];
+    const configured = links.filter((l) => l.getAttribute("data-provenance") === "configured");
+    const disc = links.filter((l) => l.getAttribute("data-provenance") === "discovered");
+    expect(configured.length).toBe(1);
+    expect(disc.length).toBe(1);
+    expect(configured[0].querySelector("line")?.getAttribute("stroke-dasharray")).toBeNull();
+    expect(disc[0].querySelector("line")?.getAttribute("stroke-dasharray")).toBe("6 5");
+  });
+
+  it("is honest when no placement exists in deployment mode", () => {
+    cleanupRenders();
+    const { container } = render(<FabricPanel sparks={[spark()]} views={[]} navigate={() => {}} />);
+    const dep = [...container.querySelectorAll<HTMLButtonElement>(".cp-fabric-modes button")].find((b) => b.textContent === "Deployment")!;
+    act(() => dep.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(container.querySelector(".cp-fabric-note")?.textContent).toContain("No deployment placement");
+    expect(container.textContent).toContain("no model placed");
+  });
+
+  it("handles 1..8 nodes data-driven without triangulating", () => {
+    cleanupRenders();
+    for (const n of [1, 4, 8]) {
+      const nodes = [...Array(n).keys()].map((i) => spark({ id: `n${i}` }));
+      const { container } = render(<FabricPanel sparks={nodes} views={[]} navigate={() => {}} />);
+      expect(container.querySelectorAll(".cp-fabric-node")).toHaveLength(n);
+      expect(container.querySelectorAll(".cp-fabric-link")).toHaveLength(0);
+    }
   });
 });

@@ -55,6 +55,63 @@ export interface FabricModel {
   wiringDiscovered: boolean;
 }
 
+// ─── DEPLOYMENT PLACEMENT (separate visual, never merged with the fabric) ────
+/** Which deployment/model sits on which node. Placement, not topology degree. */
+export interface PlacementNode {
+  id: string;
+  label: string;
+  online: boolean;
+  health: FabricHealth;
+}
+
+export interface Placement {
+  nodeId: string;
+  deploymentKey: string;
+  modelName: string;
+  runtime: string;
+  display: string;
+}
+
+export interface PlacementModel {
+  nodes: PlacementNode[];
+  placements: Placement[];
+}
+
+/**
+ * Derive DEPLOYMENT PLACEMENT — deliberately separate from physical links so
+ * the two graphs are never conflated. Fleet size never implies parallelism; the
+ * recipe topology stays on the deployment.
+ */
+export function derivePlacement(
+  sparks: SparkSnapshot[],
+  deploymentViews: readonly DeploymentView[]
+): PlacementModel {
+  const degraded = new Set(
+    deploymentViews
+      .filter((v) => v.deployment.display === "degraded" || !!v.deployment.lastError)
+      .flatMap((v) => v.deployment.nodeIds)
+  );
+  const nodes: PlacementNode[] = sparks.map((s) => ({
+    id: s.id,
+    label: s.name || s.id,
+    online: s.online,
+    health: healthOf(s, degraded.has(s.id)),
+  }));
+  const placements: Placement[] = [];
+  for (const v of deploymentViews) {
+    for (const nodeId of v.deployment.nodeIds) {
+      placements.push({
+        nodeId,
+        deploymentKey: v.key,
+        modelName: v.modelName || v.rawModelId,
+        runtime: v.runtime,
+        display: v.deployment.display,
+      });
+    }
+  }
+  return { nodes, placements };
+}
+
 /** First three octets of an IPv4 — the /24 fabric segment. */
 function subnet(ip: string | null | undefined): string | null {
   if (!ip) return null;

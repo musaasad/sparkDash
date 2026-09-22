@@ -6,6 +6,8 @@ import { render } from "../testing/render";
 vi.mock("../api/client", () => ({
   addSpark: vi.fn(),
   testSparkConfig: vi.fn(),
+  discoverCompute: vi.fn(),
+  validateCompute: vi.fn(),
 }));
 
 class MemoryWebSocket {

@@ -48,6 +48,8 @@ interface OverviewProps {
   activity?: ActivityEvent[];
   /** Temp scale from settings; never implied. */
   temperatureUnit?: "celsius" | "fahrenheit";
+  /** Obvious entry into the guided Add Compute wizard (Lab Fabric surface). */
+  onAddCompute?: () => void;
 }
 
 function fmtContext(ctx: number | null): string | null {
@@ -80,7 +82,7 @@ function WindowPicker({ value, onChange, ariaLabel }: { value: number; onChange:
   );
 }
 
-export function OverviewSection({ sparks, deployments, recipes, navigate, loaded, models = [], activity = [], temperatureUnit = "celsius" }: OverviewProps) {
+export function OverviewSection({ sparks, deployments, recipes, navigate, loaded, models = [], activity = [], temperatureUnit = "celsius", onAddCompute }: OverviewProps) {
   const runtimeLabels = useRuntimeLabels();
   const runtimeMetrics = useRuntimeMetrics();
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -306,7 +308,7 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
                 );
               })}
             </div>
-            <FabricPanel sparks={sparks} views={views} navigate={(nodeId) => navigate({ section: "node", nodeId })} />
+            <FabricPanel sparks={sparks} views={views} navigate={(nodeId) => navigate({ section: "node", nodeId })} onAddCompute={onAddCompute} />
           </div>
         )}
       </div>

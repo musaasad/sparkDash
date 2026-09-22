@@ -594,6 +594,7 @@ export function SettingsSection({ sparks, navigate, onSparksChanged, activityLat
       <AddSparkDialog
         open={addOpen}
         onClose={() => setAddOpen(false)}
+        sparks={sparks}
         onAdded={() => {
           setAddOpen(false);
           onSparksChanged();

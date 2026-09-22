@@ -28,6 +28,8 @@ import { createRateLimiter } from "./validate.js";
 import { probeEndpoint, probeUrl } from "./deployments/deploymentStatus.js";
 import { detectRuntime, healthClassify, providerFor, RUNTIME_TYPES, processEvidenceCmd, metricsFor } from "./domain/providers/registry.js";
 import { DiscoveryService } from "./domain/discovery.js";
+import { ComputeDiscoveryService } from "./domain/computeDiscovery.js";
+import { validateComputeDraft } from "./domain/computeValidate.js";
 import { sshExec } from "./collectors/ssh.js";
 import { llmProbeHost } from "./collectors/llmHost.js";
 import {
@@ -143,6 +145,14 @@ export function createControlPlane(deps) {
     recipeRegistry,
     deploymentRegistry,
     modelRegistry,
+    fetchImpl: deps.fetchImpl || fetch,
+    sshExecFn: sshExec,
+  });
+
+  // ─── Compute discovery (read-only, bounded) + pre-SAVE validation ──
+  // Never mutates a remote; validation is registry/config + bounded GET only.
+  const computeDiscovery = new ComputeDiscoveryService({
+    sparkRegistry,
     fetchImpl: deps.fetchImpl || fetch,
     sshExecFn: sshExec,
   });
@@ -601,6 +611,46 @@ export function createControlPlane(deps) {
     }
   });
 
+  // ─── Routes: guided Add Compute (read-only discover + config-only validate) ─
+  // Both routes are pure observation. Nothing is written, no monitor is started
+  // and the remote is never mutated to discover or validate.
+  app.post("/api/compute/discover", async (req, res) => {
+    try {
+      const b = req.body || {};
+      const result = await computeDiscovery.discover({
+        host: b.host,
+        port: b.port,
+        sshUser: b.sshUser,
+        sshAuth: b.sshAuth,
+        credRef: b.credRef,
+        nodeId: b.nodeId,
+      });
+      activity.push({
+        kind: "discovery",
+        subject: `${b.host}`,
+        summary: `compute discovery probed (read-only, bounded)`,
+        meta: { reachable: result.reachable, knownNodeId: result.knownNodeId, endpoints: result.endpoints.length },
+      });
+      res.json({ ...result, readOnly: true });
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/compute/validate", async (req, res) => {
+    try {
+      const b = req.body || {};
+      const result = await validateComputeDraft(sparkRegistry, b.draft || b, {
+        fetchImpl: deps.fetchImpl || fetch,
+        discovered: b.discovered || null,
+        selfId: b.selfId || null,
+      });
+      res.json({ ...result, configOnly: true });
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message });
+    }
+  });
+
   for (const action of ["start", "stop", "restart"]) {
     app.post(`/api/deployments/:id/${action}`, requireLifecycleAuth, (req, res) => {
       try {
@@ -806,6 +856,7 @@ export function createControlPlane(deps) {
     deploymentRegistry,
     deployments,
     discovery,
+    computeDiscovery,
     liveConsole,
     activity,
     handleWsMessage,

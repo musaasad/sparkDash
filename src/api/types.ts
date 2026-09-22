@@ -1285,6 +1285,95 @@ export interface DiscoveredSeed extends DiscoveryProbeResult {
   capabilities: ProbeCapabilitiesResult | null;
 }
 
+// ─── Guided Add Compute (read-only discovery + config-only validation) ───────
+/**
+ * Compute-local provenance vocabulary. Deliberately richer than SeedProvenance:
+ * a compute field can be CONFIGURED (came from an existing registered node),
+ * INFERRED (a subnet hint, never claimed as observed) or MANUAL (operator typed).
+ * UNKNOWN is first-class — a value is never fabricated.
+ */
+export type ComputeProvenance = "discovered" | "configured" | "inferred" | "manual" | "unknown";
+
+/** One compute field plus where it came from. */
+export interface ComputeField<T = unknown> {
+  value: T | null;
+  provenance: ComputeProvenance;
+}
+
+/** Fields a guided discovery run can carry provenance for. */
+export interface ComputeFieldMap {
+  hostname: ComputeField<string>;
+  device: ComputeField<string>;
+  gpuChip: ComputeField<string>;
+  gpuDriver: ComputeField<string>;
+  gpuMemoryGB: ComputeField<number>;
+  cpuModel: ComputeField<string>;
+  cpuCores: ComputeField<number>;
+  memoryGB: ComputeField<number>;
+  arch: ComputeField<string>;
+  kernel: ComputeField<string>;
+  processes: ComputeField<string[]>;
+  interfaces: ComputeField<Array<{ name: string; ip: string }>>;
+  fabricIp: ComputeField<string>;
+  cx7Ip: ComputeField<string>;
+  fabric: ComputeField<string>;
+  nodeKind: ComputeField<"spark" | "host">;
+}
+
+export interface ComputeDiscoveryRequest {
+  /** Hostname or IP the operator supplies — one host, never a sweep. */
+  host: string;
+  /** Optional runtime port to try GET /v1/models on. */
+  port?: number | null;
+  sshUser?: string;
+  sshAuth?: "key" | "pass";
+  /** Reference into the secrets store — the value is never echoed. */
+  credRef?: string | null;
+  /** Optional already-registered node id to match against. */
+  nodeId?: string | null;
+}
+
+export interface ComputeEndpointProbe {
+  port: number;
+  url: string;
+  reachable: boolean;
+  status: number | null;
+  servedModelIds: string[];
+  provenance: ComputeProvenance;
+}
+
+export interface ComputeDiscoveryResult {
+  host: string;
+  knownNodeId: string | null;
+  hostProvenance: "configured" | "user";
+  reachable: boolean;
+  sshReachable: boolean | null;
+  fields: Partial<ComputeFieldMap>;
+  endpoints: ComputeEndpointProbe[];
+  notes: string[];
+  /** Explainability: what ran and what answered (read-only). */
+  steps: string[];
+  readOnly: boolean;
+}
+
+export type ComputeIssueSeverity = "invalid" | "unverified";
+
+export interface ComputeValidateIssue {
+  code: string;
+  field: string;
+  severity: ComputeIssueSeverity;
+  message: string;
+}
+
+export interface ComputeValidateResult {
+  /** ok = no INVALID issue. UNVERIFIED is not failure. */
+  ok: boolean;
+  invalidCount: number;
+  unverifiedCount: number;
+  issues: ComputeValidateIssue[];
+}
+
+
 export interface ActivityEvent {
   seq: number;
   ts: string;

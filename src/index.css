@@ -4732,3 +4732,22 @@ button.cp-link { background: none; border: none; padding: 0; cursor: pointer; fo
   .cp-verdict-overline { font-size: 20px; }
   .cp-labhead-counts { flex-direction: row; }
 }
+
+/* ─── Guided Add Compute + fabric physical/deployment overlay ─── */
+.cp-fabric-modes { display: flex; gap: 2px; }
+.cp-fabric-modes .cp-btn.is-active { border-color: var(--color-accent); color: var(--color-text); }
+.cp-fabric-legend {
+  display: flex; flex-wrap: wrap; gap: 12px; margin: 6px 0 4px;
+  font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-muted);
+}
+.cp-legend-item { display: inline-flex; align-items: center; gap: 5px; }
+.cp-legend-item.prov-configured::before { content: ""; width: 14px; height: 1px; background: var(--color-border-strong); }
+.cp-legend-item.prov-discovered::before { content: ""; width: 14px; height: 1px; background: repeating-linear-gradient(90deg, var(--color-border-strong) 0 4px, transparent 4px 8px); }
+.cp-fabric-link.prov-configured line { stroke: var(--color-border-strong); }
+.cp-fabric-link.prov-discovered line { stroke: var(--color-border); }
+.cp-fabric-node-models.is-empty { font-style: italic; }
+
+.cp-add-compute { display: flex; flex-direction: column; gap: 8px; }
+.cp-issue-list { font-size: 12px; }
+.cp-issue-list li { margin-bottom: 2px; }
+.cp-fleet-compact-note { margin-bottom: 6px; }
