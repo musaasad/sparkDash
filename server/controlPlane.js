@@ -66,6 +66,56 @@ function seedQwenExample(modelRegistry, recipeRegistry) {
 }
 
 /**
+ * Seed the distributed TP2 deployment: DeepSeek V4.1 Flash served by vLLM with
+ * --tensor-parallel-size 2 --nnodes 2 across dgx-1 (rank 0) + dgx-2 (rank 1).
+ * Facts verified live from /v1/models + the process table (read-only).
+ * Observe-only; idempotent by recipe id.
+ */
+function seedTp2Example(modelRegistry, recipeRegistry) {
+  try {
+    if (recipeRegistry.get("v41-tp2-vllm-dgx12")) return;
+    modelRegistry.upsert({
+      id: "deepseek-v41-flash",
+      name: "DeepSeek V4.1 Flash",
+      family: "DeepSeek",
+      notes: "EXL3-quantized MoE served tensor-parallel across two DGX Sparks.",
+    });
+    recipeRegistry.upsert(
+      {
+        id: "v41-tp2-vllm-dgx12",
+        modelId: "deepseek-v41-flash",
+        name: "vLLM TP2 (dgx-1 + dgx-2)",
+        runtime: "vllm",
+        topology: "tp2",
+        nodeIds: ["dgx-1", "dgx-2"],
+        modelPath: "/model",
+        workdir: "/model",
+        logDir: null,
+        apiPort: 8888,
+        healthPath: "/v1/models",
+        contextLength: 600000,
+        cpuAffinity: null,
+        launcher:
+          "vllm serve /model --served-model-name DeepSeek-V4.1-Flash-UNCENSORED-EXL3 --tensor-parallel-size 2 --nnodes 2 (containerized)",
+        metadata: {
+          managedBy: "external",
+          servedModelId: "DeepSeek-V4.1-Flash-UNCENSORED-EXL3",
+          masterAddr: "10.100.124.2",
+          speculative: "dspark x3",
+        },
+        notes:
+          "Distributed deployment: dgx-1 rank 0 (API) + dgx-2 rank 1 (worker). Started outside SparkDash — observe-only.",
+        env: [],
+      },
+      { skipNodeCheck: true }
+    );
+    console.log("[control-plane] seeded DeepSeek V4.1 TP2 deployment (observe-only)");
+  } catch (err) {
+    console.warn("[control-plane] TP2 seed skipped:", err.message);
+  }
+}
+
+/**
  * @param {{
  *   app: import("express").Express,
  *   wss: import("ws").WebSocketServer,
@@ -86,6 +136,7 @@ export function createControlPlane(deps) {
   // Seed the first real deployment (Qwen 3.8 on dgx-3) as OBSERVE-ONLY metadata
   // when the registry is empty. Idempotent; never controls the live process.
   seedQwenExample(modelRegistry, recipeRegistry);
+  seedTp2Example(modelRegistry, recipeRegistry);
 
   const activity = new ActivityLog();
 
