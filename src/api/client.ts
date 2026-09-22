@@ -442,3 +442,90 @@ export function updateSettings(patch: Partial<Settings>): Promise<Settings> {
     body: JSON.stringify(patch),
   });
 }
+
+// ─── Control plane: Model Registry ────────────────────────
+import type {
+  ModelEntry,
+  RecipePublic,
+  DeploymentStatus,
+  ActivityEvent,
+  AuditEntry,
+} from "./types";
+
+export function fetchModels(includeArchived = false): Promise<{ models: ModelEntry[] }> {
+  return apiFetch(`/api/models${includeArchived ? "?includeArchived=1" : ""}`);
+}
+
+export function upsertModel(body: Partial<ModelEntry> & { id: string; name: string }): Promise<{ model: ModelEntry }> {
+  return apiFetch("/api/models", { method: "POST", body: JSON.stringify(body) });
+}
+
+export function fetchModel(id: string): Promise<{
+  model: ModelEntry;
+  recipes: RecipePublic[];
+  deployments: DeploymentStatus[];
+}> {
+  return apiFetch(`/api/models/${encodeURIComponent(id)}`);
+}
+
+export function archiveModel(id: string, hard = false): Promise<{ archived?: boolean; deleted?: boolean }> {
+  return apiFetch(`/api/models/${encodeURIComponent(id)}${hard ? "?hard=1" : ""}`, { method: "DELETE" });
+}
+
+export function restoreModel(id: string): Promise<{ model: ModelEntry }> {
+  return apiFetch(`/api/models/${encodeURIComponent(id)}/restore`, { method: "POST" });
+}
+
+// ─── Control plane: Recipes ───────────────────────────────
+export function fetchRecipes(includeArchived = false): Promise<{ recipes: RecipePublic[] }> {
+  return apiFetch(`/api/recipes${includeArchived ? "?includeArchived=1" : ""}`);
+}
+
+export function upsertRecipe(body: unknown): Promise<{ recipe: RecipePublic }> {
+  return apiFetch("/api/recipes", { method: "POST", body: JSON.stringify(body) });
+}
+
+export function archiveRecipe(id: string, hard = false): Promise<{ archived?: boolean; deleted?: boolean }> {
+  return apiFetch(`/api/recipes/${encodeURIComponent(id)}${hard ? "?hard=1" : ""}`, { method: "DELETE" });
+}
+
+export function cloneRecipe(id: string, newId: string, overrides?: Record<string, unknown>): Promise<{ recipe: RecipePublic }> {
+  return apiFetch(`/api/recipes/${encodeURIComponent(id)}/clone`, {
+    method: "POST",
+    body: JSON.stringify({ id: newId, overrides }),
+  });
+}
+
+// ─── Control plane: Deployments (DRY-RUN lifecycle) ───────
+export function fetchDeployments(): Promise<{ deployments: DeploymentStatus[]; dryRun: boolean }> {
+  return apiFetch("/api/deployments");
+}
+
+export function deploymentAction(
+  recipeId: string,
+  action: "start" | "stop" | "restart"
+): Promise<{ deployment: DeploymentStatus; dryRun: boolean }> {
+  return apiFetch(`/api/deployments/${encodeURIComponent(recipeId)}/${action}`, { method: "POST" });
+}
+
+// ─── Control plane: Activity + audit ──────────────────────
+export function fetchActivity(limit = 100, kinds?: string[]): Promise<{ events: ActivityEvent[] }> {
+  const q = new URLSearchParams({ limit: String(limit) });
+  if (kinds?.length) q.set("kinds", kinds.join(","));
+  return apiFetch(`/api/activity?${q.toString()}`);
+}
+
+export function fetchAudit(limit = 100): Promise<{ entries: AuditEntry[] }> {
+  return apiFetch(`/api/audit?limit=${limit}`);
+}
+
+export function fetchConsoleStatus(recipeId: string): Promise<{
+  recipeId: string;
+  logDir: string | null;
+  streaming: boolean;
+  error: string | null;
+  bufferedLines: number;
+  startedAt: number | null;
+}> {
+  return apiFetch(`/api/console/${encodeURIComponent(recipeId)}/status`);
+}

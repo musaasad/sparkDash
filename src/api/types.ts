@@ -611,6 +611,8 @@ export interface DecodeBenchConfig {
   /** On-demand remote host (Tailscale HTTPS, etc.). */
   host?: string;
   tls?: boolean;
+  /** Control-plane recipe this run belongs to (server-derived or explicit). */
+  recipeId?: string | null;
 }
 
 export interface DecodeBenchStreamResult {
@@ -754,6 +756,8 @@ export interface PrefillBenchConfig {
   contextSizes: number[];
   host?: string;
   tls?: boolean;
+  /** Control-plane recipe this run belongs to (server-derived or explicit). */
+  recipeId?: string | null;
 }
 
 export interface PrefillBenchSizeResult {
@@ -905,4 +909,147 @@ export interface ShowcaseListResponse {
 export interface ShowcaseStartResponse {
   sessionId: string;
   status: "running";
+}
+// ─── Control plane: Model Registry / Recipes / Deployments ──
+export type DeploymentState =
+  | "available"
+  | "starting"
+  | "loading"
+  | "running"
+  | "stopping"
+  | "stopped"
+  | "error";
+
+export type RecipeRuntime = "tabbyapi-exl3" | "vllm" | "sglang" | "llama.cpp" | "custom";
+export type RecipeTopology = "single" | "tp2" | "tp3";
+
+export interface ModelEntry {
+  id: string;
+  name: string;
+  family: string | null;
+  notes: string;
+  archived: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** Env entry as returned by the API — secret values are stripped. */
+export interface RecipeEnvPublic {
+  name: string;
+  value?: string;
+  secret: boolean;
+  hasValue?: boolean;
+}
+
+/** Env entry sent on write (secret values included by the client). */
+export interface RecipeEnvWrite {
+  name: string;
+  value: string;
+  secret: boolean;
+}
+
+export interface RecipePublic {
+  id: string;
+  modelId: string;
+  name: string;
+  runtime: RecipeRuntime;
+  topology: RecipeTopology;
+  nodeIds: string[];
+  modelPath: string;
+  workdir: string;
+  logDir: string | null;
+  apiPort: number;
+  healthPath: string;
+  contextLength: number | null;
+  cpuAffinity: string | null;
+  launcher: string | null;
+  metadata: Record<string, unknown>;
+  notes: string;
+  env: RecipeEnvPublic[];
+  archived: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface DeploymentStatus {
+  recipeId: string;
+  modelId: string;
+  nodeIds: string[];
+  apiPort: number;
+  managedBy: "external" | "sparkdash";
+  dryRun: boolean;
+  state: DeploymentState;
+  lastOp: string | null;
+  lastError: string | null;
+  startedAt: number | null;
+  updatedAt: number;
+}
+
+export interface ActivityEvent {
+  seq: number;
+  ts: string;
+  kind: "node" | "lifecycle" | "bench" | "showcase" | "console" | "alert";
+  subject: string | null;
+  summary: string;
+  attribution: { client?: string; actor?: string } | null;
+  meta: Record<string, unknown> | null;
+}
+
+export interface AuditEntry {
+  ts: string;
+  actor: string;
+  node: string;
+  recipe: string;
+  action: string;
+  result: string;
+  dryRun: boolean;
+}
+
+/** One parsed inference request row for the Live Console telemetry view. */
+export interface ConsoleTelemetryRow {
+  reqId: number;
+  ts: string | null;
+  state: "inflight" | "done";
+  promptTokens: number | null;
+  generatedTokens: number | null;
+  cachedPct: number | null;
+  newPromptTokens: number | null;
+  prefillTps: number | null;
+  ttftSeconds: number | null;
+  decodeTps: number | null;
+  totalSeconds: number | null;
+  draftAccepted: number | null;
+  draftAttempted: number | null;
+  draftPct: number | null;
+  toolCalls: number;
+  temperature: number | null;
+}
+
+export interface ConsoleLine {
+  ts: string | null;
+  level: string;
+  msg: string;
+  raw: string;
+}
+
+export interface ConsoleInitMessage {
+  type: "console:init";
+  recipeId: string;
+  ok: boolean;
+  reason: string | null;
+  status: { streaming: boolean; error: string | null; bufferedLines: number; startedAt: number | null };
+  buffered: ConsoleLine[];
+  telemetry: ConsoleTelemetryRow[];
+}
+
+export interface ConsoleDataMessage {
+  type: "console";
+  recipeId: string;
+  lines: ConsoleLine[];
+  telemetry: ConsoleTelemetryRow[];
+}
+
+export interface LifecycleMessage {
+  type: "lifecycle";
+  state: DeploymentStatus;
 }

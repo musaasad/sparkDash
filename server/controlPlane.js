@@ -16,6 +16,56 @@ import { ActivityLog } from "./activity/ActivityLog.js";
 import { createRateLimiter } from "./validate.js";
 
 /**
+ * Seed the first real deployment as generic architecture metadata (not logic).
+ * Qwen 3.8 on dgx-3 via TabbyAPI+EXL3 — the known-good values from the lab.
+ * Observe-only (managedBy: external): SparkDash reads its state from the LLM
+ * probe and never starts/stops it. Skips silently if a model already exists.
+ */
+function seedQwenExample(modelRegistry, recipeRegistry) {
+  try {
+    if (modelRegistry.list().length > 0 || recipeRegistry.list().length > 0) return;
+    modelRegistry.upsert({
+      id: "qwen38-flash-next",
+      name: "Qwen 3.8 Flash Next",
+      family: "Qwen",
+      notes: "EXL3 quantized MoE with MTP speculative decoding.",
+    });
+    recipeRegistry.upsert(
+      {
+        id: "qwen38-tabbyapi-dgx3",
+        modelId: "qwen38-flash-next",
+        name: "TabbyAPI EXL3 (dgx-3)",
+        runtime: "tabbyapi-exl3",
+        topology: "single",
+        nodeIds: ["dgx-3"],
+        modelPath: "/home/musaasad/models/Qwen3.8-Flash-Next-EXL3",
+        workdir: "/home/musaasad/tabbyAPI",
+        logDir: "/home/musaasad/tabbyAPI/logs",
+        apiPort: 8889,
+        healthPath: "/v1/models",
+        contextLength: 262144,
+        cpuAffinity: "5-9,15-19",
+        launcher: "taskset -c 5-9,15-19 python main.py",
+        metadata: { managedBy: "external", venv: "/home/musaasad/exllamav3/.venv" },
+        notes: "Known-good single-node deployment. Started outside SparkDash — observe-only.",
+        env: [
+          { name: "EXL3_INT8_GEMV", value: "0", secret: false },
+          { name: "EXL3_MOE_COOP_WIDE", value: "1", secret: false },
+          { name: "EXL3_GR_INT8", value: "1", secret: false },
+          { name: "EXL3_MTP_HEAD_N", value: "65536", secret: false },
+          { name: "EXL3_NGRAM_STREAM", value: "0", secret: false },
+          { name: "TORCH_CUDA_ARCH_LIST", value: "12.1", secret: false },
+        ],
+      },
+      { skipNodeCheck: true }
+    );
+    console.log("[control-plane] seeded Qwen 3.8 example deployment (observe-only)");
+  } catch (err) {
+    console.warn("[control-plane] Qwen seed skipped:", err.message);
+  }
+}
+
+/**
  * @param {{
  *   app: import("express").Express,
  *   wss: import("ws").WebSocketServer,
@@ -32,6 +82,10 @@ export function createControlPlane(deps) {
 
   // ─── Registries ────────────────────────────────────────
   recipeRegistry.getKnownNodeIds = () => sparkRegistry.sparkIds;
+
+  // Seed the first real deployment (Qwen 3.8 on dgx-3) as OBSERVE-ONLY metadata
+  // when the registry is empty. Idempotent; never controls the live process.
+  seedQwenExample(modelRegistry, recipeRegistry);
 
   const activity = new ActivityLog();
 

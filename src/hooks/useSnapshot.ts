@@ -1,11 +1,35 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import type { SparkSnapshot, WsSnapshot } from "../api/types";
+import type {
+  SparkSnapshot,
+  WsSnapshot,
+  ConsoleInitMessage,
+  ConsoleDataMessage,
+  LifecycleMessage,
+} from "../api/types";
 import { ingestSnapshots } from "./metricsStore";
+import {
+  seedConsole,
+  appendConsole,
+  setConsoleConnection,
+  upsertDeployment,
+} from "./domainStore";
 import { OVERVIEW_ID } from "../constants";
 
 const TOKEN = (typeof localStorage !== "undefined" && localStorage.getItem("sparkdashToken")) || "";
 const WS_URL = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws${TOKEN ? `?token=${encodeURIComponent(TOKEN)}` : ""}`;
 const RECONNECT_DELAY = 2000;
+
+/** Shared socket for control-plane sends (console subscribe/unsubscribe). */
+let activeSocket: WebSocket | null = null;
+
+/** Send a control-plane control message over the live socket (no-op if down). */
+export function cpSend(msg: Record<string, unknown>): boolean {
+  if (activeSocket && activeSocket.readyState === WebSocket.OPEN) {
+    activeSocket.send(JSON.stringify(msg));
+    return true;
+  }
+  return false;
+}
 
 /**
  * useSnapshot — connects to the WebSocket and exposes live spark data.
@@ -38,12 +62,28 @@ export function useSnapshot() {
     ws.onopen = () => {
       // A socket alone is not healthy; wait for one valid snapshot.
       setConnected(false);
+      activeSocket = ws;
       console.log("[ws] connected");
     };
 
     ws.onmessage = (ev) => {
       try {
-        const msg: WsSnapshot = JSON.parse(ev.data);
+        const msg: WsSnapshot | ConsoleInitMessage | ConsoleDataMessage | LifecycleMessage =
+          JSON.parse(ev.data);
+        // Control-plane channels are dispatched before the snapshot check so
+        // they never trip the "invalid telemetry payload" error path.
+        if (msg.type === "console:init") {
+          seedConsole(msg.recipeId, msg.buffered || [], msg.telemetry || [], msg.ok, msg.reason || null);
+          return;
+        }
+        if (msg.type === "console") {
+          appendConsole(msg.recipeId, msg.lines || [], msg.telemetry || []);
+          return;
+        }
+        if (msg.type === "lifecycle") {
+          upsertDeployment(msg.state);
+          return;
+        }
         if (msg.type === "snapshot" && Array.isArray(msg.sparks)) {
           const receivedAt = Date.now();
           // Feed the central history store (8b) before notifying React state.

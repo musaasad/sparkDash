@@ -5,6 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>sparkDash — Multi-DGX Spark Monitoring Dashboard</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e8a830' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M13 2L3 14h9l-1 8 10-12h-9l1-8z'/></svg>" />
+  <script>
+    // Pre-paint theme: apply the stored theme before first paint to avoid a flash.
+    (function () {
+      try {
+        var t = localStorage.getItem("sparkdash-theme");
+        if (["white", "light", "dark", "oled"].indexOf(t) !== -1) {
+          document.documentElement.setAttribute("data-theme", t);
+        }
+      } catch (e) { /* private mode — keep default */ }
+    })();
+  </script>
 </head>
 <body>
   <div id="root"></div>

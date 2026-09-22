@@ -28,3 +28,10 @@ HANDOFF.md
 HANDOFF-HERMES.md
 handoff.md
 test/
+
+# Control-plane runtime state (local registry + logs)
+config/models.json
+config/recipes.json
+config/deployments-active.json
+config/audit.jsonl
+config/activity.jsonl

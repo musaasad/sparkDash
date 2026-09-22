@@ -1,42 +1,27 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
 import { useSnapshot } from "./hooks/useSnapshot";
-import { useAppRoute, useRoute } from "./hooks/useRoute";
-import { fetchSparks, reorderSparks, fetchSettings } from "./api/client";
-import { SparkTabs } from "./components/SparkTabs";
+import { useAppRoute } from "./hooks/useRoute";
+import { useControlPlaneRoute } from "./hooks/router";
+import { useControlPlaneData } from "./hooks/useControlPlaneData";
+import { useDeployments } from "./hooks/domainStore";
+import { fetchSparks, fetchSettings } from "./api/client";
 import { AddSparkDialog } from "./components/AddSparkDialog";
 import { EditSparkDialog } from "./components/EditSparkDialog";
-import { SparkPage } from "./components/SparkPage/SparkPage";
-import { HermesUpdateDialog } from "./components/SparkPage/HermesUpdateDialog";
-import { OverviewPage } from "./components/OverviewPage/OverviewPage";
 import { ShowcasePage } from "./components/ShowcasePage/ShowcasePage";
+import { HermesUpdateDialog } from "./components/SparkPage/HermesUpdateDialog";
 import { ThemeSwitch } from "./components/ThemeSwitch";
-import { SettingsDialog } from "./components/SettingsDialog";
-import { GearIcon, BoltIcon } from "./components/ui/icons";
 import { ConnectionBanner } from "./components/ui/ConnectionBanner";
 import { ErrorBanner } from "./components/ui/ErrorBanner";
-import { OVERVIEW_ID } from "./constants";
+import { AppNav } from "./components/control-plane/AppNav";
+import { OverviewSection } from "./components/control-plane/OverviewSection";
+import { FleetSection } from "./components/control-plane/FleetSection";
+import { NodeDetail } from "./components/control-plane/NodeDetail";
+import { ModelsSection } from "./components/control-plane/ModelsSection";
+import { ModelDetail } from "./components/control-plane/ModelDetail";
+import { ActivitySection } from "./components/control-plane/ActivitySection";
+import { BenchmarksSection } from "./components/control-plane/BenchmarksSection";
+import { SettingsSection } from "./components/control-plane/SettingsSection";
 import type { Settings, SparkSnapshot } from "./api/types";
-import { isWorkerSpark } from "./api/sparkRole";
-
-/** Keep hidden worker ids in their original slots when the visible tabs are reordered. */
-function mergeTabOrderKeepingHidden(
-  allSparks: SparkSnapshot[],
-  visibleOrder: string[],
-  hiddenIds: Set<string>
-): string[] {
-  if (hiddenIds.size === 0) return visibleOrder;
-  const result: string[] = [];
-  let vi = 0;
-  for (const spark of allSparks) {
-    if (hiddenIds.has(spark.id)) {
-      result.push(spark.id);
-    } else if (vi < visibleOrder.length) {
-      result.push(visibleOrder[vi++]);
-    }
-  }
-  while (vi < visibleOrder.length) result.push(visibleOrder[vi++]);
-  return result;
-}
 
 function placeholderSnapshot(
   id: string,
@@ -126,22 +111,20 @@ function placeholderSnapshot(
 function DashboardApp() {
   const {
     sparks,
-    activeId,
-    setActiveId,
-    activeSpark,
     connected,
     lastValidSnapshotAt,
     snapshotError,
     refreshInterval,
   } = useSnapshot();
+  const { route, navigate } = useControlPlaneRoute();
+  const cp = useControlPlaneData();
+  const deployments = useDeployments();
   const [telemetryNow, setTelemetryNow] = useState(Date.now());
-  const navigate = useRoute(setActiveId);
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
-  const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  /** Used when WS is down so add/delete still updates the tab bar */
+  /** Used when WS is down so section data still renders. */
   const [fallbackSparks, setFallbackSparks] = useState<SparkSnapshot[]>([]);
   const staleAfterMs = Math.max(10_000, 3 * (refreshInterval ?? 2_000));
   const telemetryStale =
@@ -154,57 +137,13 @@ function DashboardApp() {
     return () => window.clearInterval(timer);
   }, [lastValidSnapshotAt]);
 
-  // Prefer live WS data; fall back to API-fetched list when empty
   const liveSparks = sparks.length > 0 ? sparks : fallbackSparks;
-  /** Optimistic tab order while drag-save races the next WS snapshot */
-  const [orderOverride, setOrderOverride] = useState<string[] | null>(null);
-
-  const displaySparks = useMemo(() => {
-    if (!orderOverride?.length) return liveSparks;
-    const map = new Map(liveSparks.map((s) => [s.id, s]));
-    const ordered: SparkSnapshot[] = [];
-    for (const id of orderOverride) {
-      const s = map.get(id);
-      if (s) {
-        ordered.push(s);
-        map.delete(id);
-      }
-    }
-    for (const s of map.values()) ordered.push(s);
-    return ordered;
-  }, [liveSparks, orderOverride]);
-
-  // Drop override once server/WS order matches
-  useEffect(() => {
-    if (!orderOverride) return;
-    const live = liveSparks.map((s) => s.id).join("\0");
-    if (live === orderOverride.join("\0")) setOrderOverride(null);
-  }, [liveSparks, orderOverride]);
-
-
-  const isOverview = activeId === OVERVIEW_ID;
-  const hideWorkers = settings?.hideWorkers ?? false;
-  const hiddenWorkerIds = useMemo(() => {
-    if (!hideWorkers) return new Set<string>();
-    return new Set(
-      displaySparks
-        .filter((s) => isWorkerSpark(s) && s.id !== activeId)
-        .map((s) => s.id)
-    );
-  }, [displaySparks, hideWorkers, activeId]);
-  const tabSparks = useMemo(
-    () => (hideWorkers ? displaySparks.filter((s) => !hiddenWorkerIds.has(s.id)) : displaySparks),
-    [displaySparks, hideWorkers, hiddenWorkerIds]
-  );
-  const displayActive = isOverview
-    ? null
-    : displaySparks.find((s) => s.id === activeId) || displaySparks[0] || activeSpark || null;
 
   useEffect(() => {
     if (sparks.length > 0) setFallbackSparks([]);
   }, [sparks]);
 
-  // Fetch global settings on mount
+  // Fetch global settings on mount (density, units, feature flags).
   useEffect(() => {
     fetchSettings()
       .then(setSettings)
@@ -213,10 +152,6 @@ function DashboardApp() {
           `Could not load settings: ${err instanceof Error ? err.message : String(err)}. Reload to retry.`
         )
       );
-  }, []);
-
-  const handleSettingsSaved = useCallback((s: Settings) => {
-    setSettings(s);
   }, []);
 
   // Apply layout density (comfortable/compact) from persisted settings.
@@ -233,8 +168,6 @@ function DashboardApp() {
         configs.map((c) => {
           const existing = sparks.find((s) => s.id === c.id);
           if (existing) {
-            // Keep live metrics, but never let a stale WS snapshot override
-            // role fields that were just saved via the API.
             return {
               ...existing,
               name: c.name,
@@ -273,111 +206,105 @@ function DashboardApp() {
           );
         })
       );
-      if (configs.length && activeId !== OVERVIEW_ID && !configs.some((c) => c.id === activeId)) {
-        setActiveId(configs[0].id);
-      }
-      if (configs.length === 0 && activeId !== OVERVIEW_ID) setActiveId(null);
     } catch (err) {
       console.error("Failed to refresh sparks:", err);
       setActionError(
         `Could not refresh Sparks: ${err instanceof Error ? err.message : String(err)}. Previous data remains visible.`
       );
     }
-  }, [sparks, activeId, setActiveId]);
+  }, [sparks]);
 
-  const handleReorder = useCallback(
-    async (orderedIds: string[]) => {
-      const next = mergeTabOrderKeepingHidden(displaySparks, orderedIds, hiddenWorkerIds);
-      setOrderOverride(next);
-      try {
-        await reorderSparks(next);
-      } catch (err) {
-        console.error("Failed to reorder Sparks:", err);
-        setOrderOverride(null);
-        setActionError(
-          `Could not save the Spark order: ${err instanceof Error ? err.message : String(err)}. The previous order was restored.`
-        );
-      }
-    },
-    [displaySparks, hiddenWorkerIds]
-  );
+  const activeNode = useMemo(() => {
+    if (route.section !== "node") return null;
+    return liveSparks.find((s) => s.id === route.nodeId) ?? null;
+  }, [route, liveSparks]);
 
   return (
-    <div className="min-h-screen p-0 text-text sm:p-8">
-      <div className="dashboard-shell">
-        <header className="flex flex-wrap items-center gap-3" style={{ marginBottom: "var(--density-header-gap)" }}>
-          <button
-            type="button"
-            onClick={() => navigate(OVERVIEW_ID)}
-            className="logo-pill"
-          >
-            <BoltIcon className="h-3.5 w-3.5 text-accent" />
-            <span>
-              spark<span className="logo-pill-dash">Dash</span>
-            </span>
-          </button>
-          <SparkTabs
-            sparks={tabSparks}
-            activeId={displayActive?.id ?? activeId}
-            onSelect={navigate}
-            onAdd={() => setShowAdd(true)}
-            onEdit={(id) => setEditId(id)}
-            onReorder={handleReorder}
-          />
-          <div className="ml-auto flex items-center gap-2.5">
-            <button
-              type="button"
-              onClick={() => setShowSettings(true)}
-              className="icon-circle"
-              title="Settings"
-              aria-label="Settings"
-            >
-              <GearIcon className="h-4 w-4" />
-            </button>
-            <ThemeSwitch />
-          </div>
-        </header>
-        <ConnectionBanner
+    <div className="min-h-screen p-0 text-text sm:p-6">
+      <div className="cp-shell">
+        <AppNav
+          route={route}
+          navigate={navigate}
           connected={connected}
-          lastValidSnapshotAt={lastValidSnapshotAt}
-          snapshotError={snapshotError}
-          now={telemetryNow}
           stale={telemetryStale}
+          right={<ThemeSwitch />}
         />
-        <ErrorBanner message={actionError} onDismiss={() => setActionError(null)} />
-        <main className={telemetryStale || !connected ? "telemetry-stale" : undefined}>
-          {isOverview ? (
-            <OverviewPage
-              sparks={displaySparks}
-              hideOffline={settings?.autoHideOffline ?? false}
-              hideWorkers={hideWorkers}
-              showFleetEnergy={settings?.showFleetEnergy ?? false}
-              showFleetExceptions={settings?.showFleetExceptions ?? false}
-              showOverviewSearch={settings?.showOverviewSearch ?? false}
-              temperatureUnit={settings?.temperatureUnit ?? "celsius"}
-              onSelectSpark={navigate}
-            />
-          ) : displayActive ? (
-            <SparkPage
-              spark={displayActive}
-              temperatureUnit={settings?.temperatureUnit ?? "celsius"}
-              benchShareImage={settings?.benchShareImage ?? false}
-              onEdit={() => setEditId(displayActive.id)}
-            />
-          ) : (
-            <div className="panel mx-auto mt-16 max-w-md p-8 text-center">
-              <div className="mx-auto mb-4 flex h-10 w-10 items-center justify-center rounded-full bg-accent-soft text-accent">
-                <span className="text-lg leading-none">+</span>
-              </div>
-              <h2 className="text-sm font-semibold text-text-strong">No Spark registered</h2>
-              <p className="mt-1 text-xs text-muted">
-                Click the&nbsp;
-                <span className="rounded border border-border bg-surface-elevated px-1 py-0.5 text-text">+</span>
-                &nbsp;tab to add a DGX Spark unit.
-              </p>
-            </div>
-          )}
-        </main>
+        <div className="cp-body">
+          <ConnectionBanner
+            connected={connected}
+            lastValidSnapshotAt={lastValidSnapshotAt}
+            snapshotError={snapshotError}
+            now={telemetryNow}
+            stale={telemetryStale}
+          />
+          <ErrorBanner message={actionError} onDismiss={() => setActionError(null)} />
+          <main className={telemetryStale || !connected ? "telemetry-stale" : undefined}>
+            {route.section === "overview" ? (
+              <OverviewSection
+                sparks={liveSparks}
+                deployments={deployments}
+                recipes={cp.recipes}
+                navigate={navigate}
+                loaded={cp.loaded || sparks.length > 0}
+              />
+            ) : null}
+            {route.section === "fleet" ? (
+              <FleetSection sparks={liveSparks} deployments={deployments} recipes={cp.recipes} navigate={navigate} />
+            ) : null}
+            {route.section === "node" ? (
+              activeNode ? (
+                <NodeDetail
+                  spark={activeNode}
+                  allSparks={liveSparks}
+                  recipes={cp.recipes}
+                  deployments={deployments}
+                  temperatureUnit={settings?.temperatureUnit ?? "celsius"}
+                  benchShareImage={settings?.benchShareImage ?? false}
+                  navigate={navigate}
+                  onEdit={() => setEditId(activeNode.id)}
+                  onAddNode={() => setShowAdd(true)}
+                />
+              ) : (
+                <div className="cp-panel">
+                  <div className="cp-empty">
+                    <div className="cp-empty-title">Node not found</div>
+                    <div className="cp-empty-sub">
+                      “{route.nodeId}” is not a registered node. It may have been removed.
+                    </div>
+                    <button type="button" className="cp-btn" style={{ marginTop: 8 }} onClick={() => navigate({ section: "fleet" })}>
+                      ← Back to Fleet
+                    </button>
+                  </div>
+                </div>
+              )
+            ) : null}
+            {route.section === "models" ? (
+              <ModelsSection
+                models={cp.models}
+                recipes={cp.recipes}
+                deployments={deployments}
+                navigate={navigate}
+                onSaved={() => void cp.reload()}
+              />
+            ) : null}
+            {route.section === "model" ? (
+              <ModelDetail
+                modelId={route.modelId}
+                initialTab={route.tab}
+                sparks={liveSparks}
+                navigate={navigate}
+                onDataChanged={() => void cp.reload()}
+              />
+            ) : null}
+            {route.section === "activity" ? <ActivitySection events={cp.activity} /> : null}
+            {route.section === "benchmarks" ? (
+              <BenchmarksSection sparks={liveSparks} recipes={cp.recipes} navigate={navigate} />
+            ) : null}
+            {route.section === "settings" ? (
+              <SettingsSection sparks={liveSparks} navigate={navigate} onSparksChanged={() => void refreshFromApi()} />
+            ) : null}
+          </main>
+        </div>
       </div>
       <HermesUpdateDialog />
       <AddSparkDialog
@@ -395,18 +322,11 @@ function DashboardApp() {
         onSaved={() => {
           void refreshFromApi();
         }}
-        onDeleted={(id) => {
-          if (activeId === id) {
-            const next = displaySparks.find((s) => s.id !== id);
-            navigate(next?.id ?? OVERVIEW_ID);
-          }
+        onDeleted={() => {
+          setEditId(null);
           void refreshFromApi();
+          navigate({ section: "fleet" });
         }}
-      />
-      <SettingsDialog
-        open={showSettings}
-        onClose={() => setShowSettings(false)}
-        onSaved={handleSettingsSaved}
       />
     </div>
   );
