@@ -7,6 +7,7 @@
       "recipeId": "qwen38-tabbyapi-dgx3",
       "nodeIds": ["dgx-3"],
       "desiredState": "unknown",
+      "role": "primary",
       "metadata": { "managedBy": "external" },
       "createdAt": 1790040631825,
       "updatedAt": 1790040631825
@@ -17,6 +18,7 @@
       "recipeId": "v41-tp2-vllm-dgx12",
       "nodeIds": ["dgx-1", "dgx-2"],
       "desiredState": "unknown",
+      "role": "worker",
       "metadata": { "managedBy": "external" },
       "createdAt": 1790041919793,
       "updatedAt": 1790041919793

@@ -51,7 +51,7 @@ export function AppNav({
   stale,
   counts,
   right,
-  workspaceName = "Mia'a AI Lab",
+  workspaceName = "Asad's AI Lab",
   operatorId = "operator",
   onSearch,
 }: AppNavProps) {
