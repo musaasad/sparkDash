@@ -165,3 +165,36 @@ test("archived recipe cannot back a new deployment and renders read-only", () =>
   assert.equal(pub.lifecycleState, "archived");
   assert.equal(pub.archived, true);
 });
+
+const { normalizeRecipe, normalizeDeployment } = await import("../schema.js");
+
+test("F3 normalize drops lifecycleCommands for an external mechanism", () => {
+  const r = normalizeRecipe({
+    id: "x-ext",
+    modelRef: { modelId: "m1" },
+    name: "X",
+    launchMechanism: "external",
+    lifecycleCommands: { start: "a", stop: "b", status: "c" },
+    endpoint: { port: 9010 },
+  });
+  assert.equal(r.launch.mechanism, "external");
+  assert.deepEqual(r.lifecycleCommands, { start: null, stop: null, status: null });
+});
+
+test("F3 external seed recipes carry no lifecycleCommands", () => {
+  const seeds = JSON.parse(
+    fs.readFileSync(new URL("../../seeds/recipes.json", import.meta.url), "utf8")
+  );
+  for (const r of seeds.recipes) {
+    if (r.launch?.mechanism === "external") {
+      assert.equal(r.lifecycleCommands, undefined, `${r.id} must not carry control commands`);
+    }
+  }
+});
+
+test("F9 normalizeDeployment forces desiredState unknown for external managedBy", () => {
+  const dep = normalizeDeployment({ recipeId: "r1", modelId: "m1", nodeIds: ["node-7"], desiredState: "running", metadata: { managedBy: "external" } });
+  assert.equal(dep.desiredState, "unknown");
+  const managed = normalizeDeployment({ recipeId: "r1", modelId: "m1", nodeIds: ["node-7"], desiredState: "running", metadata: { managedBy: "sparkdash" } });
+  assert.equal(managed.desiredState, "running");
+});

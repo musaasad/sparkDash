@@ -144,3 +144,31 @@ test("_loadActive drops stale checkpoints whose recipe lost its deployment bindi
   const svc = new DeploymentService({ recipeRegistry: recipes, deploymentRegistry, auditPath: t.audit, activePath: t.active });
   assert.equal(svc.listStates().length, 0);
 });
+
+test("F1 command-mechanism recipe from the normal path is sparkdash-managed and can begin", () => {
+  const t = tmpStore("f1-managed");
+  const recipes = new RecipeRegistry({ path: t.recipes, getKnownNodeIds: () => ["dgx-3"] });
+  recipes.upsert({
+    id: "cmd-flow", modelId: "m1", name: "Cmd", runtime: "vllm", topology: "single",
+    nodeIds: ["dgx-3"], modelPath: "/m", workdir: "/m", apiPort: 8890,
+    launchMechanism: "command", metadata: { managedBy: "sparkdash" },
+  });
+  const svc = new DeploymentService({ recipeRegistry: recipes, auditPath: t.audit, activePath: t.active });
+  assert.equal(svc.getState("cmd-flow").managedBy, "sparkdash");
+  const state = svc.begin("cmd-flow", "start");
+  assert.equal(state.dryRun, true);
+  svc.cancelAll();
+});
+
+test("F1 external-mechanism recipe is observe-only and mutations 409", () => {
+  const t = tmpStore("f1-ext");
+  const recipes = new RecipeRegistry({ path: t.recipes, getKnownNodeIds: () => ["dgx-3"] });
+  recipes.upsert({
+    id: "ext-flow", modelId: "m1", name: "Ext", runtime: "vllm", topology: "single",
+    nodeIds: ["dgx-3"], modelPath: "/m", workdir: "/m", apiPort: 8891,
+    launchMechanism: "external", metadata: { managedBy: "external" },
+  });
+  const svc = new DeploymentService({ recipeRegistry: recipes, auditPath: t.audit, activePath: t.active });
+  assert.equal(svc.getState("ext-flow").managedBy, "external");
+  assert.throws(() => svc.begin("ext-flow", "start"), /externally managed/);
+});

@@ -41,14 +41,22 @@ export function extractOpenAIModelIds(body) {
 
 export class RuntimeProvider {
   /**
-   * @param {{runtimes: string[], label?: string, launchable?: boolean}} opts
+   * @param {{runtimes: string[], label?: string, launchable?: boolean,
+   *   processTerms?: string[]}} opts
    *   `runtimes` = every runtime key this provider serves (first = canonical).
+   *   `processTerms` = pgrep substrings that identify this runtime's process.
    */
-  constructor({ runtimes, label = null, launchable = true }) {
+  constructor({ runtimes, label = null, launchable = true, processTerms = [] }) {
     this.runtimes = runtimes;
     this.runtime = runtimes[0];
     this.label = label ?? this.runtime;
     this.launchable = launchable;
+    this.processTerms = processTerms;
+  }
+
+  /** pgrep alternation pattern for the read-only process evidence probe. */
+  get pgrepPattern() {
+    return this.processTerms.join("|");
   }
 
   /** @param {{backendType?:string|null, ownedBy?:string|null, serverIsOpenAI?:boolean|null, port?:number|null}} signals */

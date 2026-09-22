@@ -7,6 +7,7 @@
  * the current one are clickable so a user can jump back and fix an earlier
  * answer; forward jumps are the owner's call via `onSelect`.
  */
+import { CheckIcon } from "./icons";
 export interface StepperStep {
   id: string;
   label: string;
@@ -41,7 +42,7 @@ export function Stepper({
               onClick={clickable ? () => onSelect?.(i) : undefined}
             >
               <span className="cp-step-num" aria-hidden="true">
-                {i < current ? "✓" : i + 1}
+                {i < current ? <CheckIcon size={14} /> : i + 1}
               </span>
               <span className="cp-step-label">{s.label}</span>
             </button>

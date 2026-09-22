@@ -237,26 +237,28 @@ describe("TP2 polish helpers", () => {
     expect(modelGlyph("  ")).toBe("??");
   });
 
-  it("maps each runtime id to its human manage-via label", () => {
-    expect(runtimeLabel("vllm")).toBe("vLLM");
-    expect(runtimeLabel("tabbyapi-exl3")).toBe("TabbyAPI");
-    expect(runtimeLabel("sglang")).toBe("SGLang");
+  it("maps each runtime id to its registry label, raw-id for unknown", () => {
+    const labels = { vllm: "vLLM", "tabbyapi-exl3": "TabbyAPI", sglang: "SGLang" };
+    expect(runtimeLabel("vllm", labels)).toBe("vLLM");
+    expect(runtimeLabel("tabbyapi-exl3", labels)).toBe("TabbyAPI");
+    expect(runtimeLabel("sglang", labels)).toBe("SGLang");
     expect(runtimeLabel("llama.cpp")).toBe("llama.cpp");
-    expect(runtimeLabel("custom")).toBe("its launcher");
+    expect(runtimeLabel("custom", labels)).toBe("its launcher");
     expect(runtimeLabel(null)).toBe("its launcher");
   });
 
   it("builds a read-only external connect view only for external deployments", () => {
     const node = spark({ id: "a", name: "Spark A", lanIp: "10.0.0.5" });
+    const labels = { "tabbyapi-exl3": "TabbyAPI", vllm: "vLLM" };
     const external = { ...dep("r1", "running"), managedBy: "external" as const, apiPort: 8889, nodeIds: ["a"] };
-    const view = externalConnectView(external, recipe({ runtime: "tabbyapi-exl3", env: [{ name: "KEY", secret: true, hasValue: true }] }), [node]);
+    const view = externalConnectView(external, recipe({ runtime: "tabbyapi-exl3", env: [{ name: "KEY", secret: true, hasValue: true }] }), [node], labels);
     expect(view?.endpoint).toBe("http://10.0.0.5:8889/v1");
     expect(view?.hasKey).toBe(true);
     expect(view?.note).toContain("TabbyAPI");
     expect(externalConnectView(dep("r1", "running"), null, [node])).toBeNull();
 
     // The note must follow the recipe runtime, not hardcode TabbyAPI.
-    const vllmNote = externalConnectView(external, recipe({ runtime: "vllm" }), [node]);
+    const vllmNote = externalConnectView(external, recipe({ runtime: "vllm" }), [node], labels);
     expect(vllmNote?.note).toContain("manage via vLLM");
     expect(vllmNote?.note).not.toContain("TabbyAPI");
 

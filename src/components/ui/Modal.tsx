@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { CloseIcon } from "./icons";
 
 /**
  * Centered 440px confirm/mutation modal: title, one consequence sentence,
@@ -14,6 +15,8 @@ export function Modal({
   info,
   confirmLabel,
   cancelLabel = "Cancel",
+  discardLabel,
+  onDiscard,
   tone = "primary",
   busy = false,
   onConfirm,
@@ -30,6 +33,9 @@ export function Modal({
   info?: ReactNode;
   confirmLabel: string;
   cancelLabel?: string;
+  /** Optional third action: throw away unsaved changes. */
+  discardLabel?: string;
+  onDiscard?: () => void;
   tone?: "primary" | "danger";
   busy?: boolean;
   onConfirm: () => void;
@@ -62,7 +68,7 @@ export function Modal({
         <div className="cp-modal-head">
           <h2 className="cp-modal-title">{title}</h2>
           <button type="button" className="cp-btn ghost icon" aria-label="Close" onClick={onClose}>
-            ✕
+            <CloseIcon />
           </button>
         </div>
         <p className="cp-modal-consequence">{consequence}</p>
@@ -73,6 +79,11 @@ export function Modal({
           <button type="button" className="cp-btn ghost" onClick={onClose} disabled={busy}>
             {cancelLabel}
           </button>
+          {onDiscard ? (
+            <button type="button" className="cp-btn ghost" onClick={onDiscard} disabled={busy}>
+              {discardLabel ?? "Discard"}
+            </button>
+          ) : null}
           <button
             ref={confirmRef}
             type="button"

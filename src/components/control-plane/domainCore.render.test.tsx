@@ -2,10 +2,18 @@
  * WS-1 proof (2): invented model/recipe names render generically from entities —
  * no hard-coded model/runtime/port knowledge in the component.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ModelsSection } from "./ModelsSection";
 import type { ModelEntry, RecipePublic, DeploymentStatus, SparkSnapshot } from "../../api/types";
-import { render, cleanupRenders } from "../../testing/render";
+import { render, flush, cleanupRenders } from "../../testing/render";
+
+vi.mock("../../api/client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../api/client")>();
+  return {
+    ...actual,
+    fetchRuntimes: vi.fn(async () => ({ runtimes: [{ id: "sglang", label: "SGLang", launchable: true }] })),
+  };
+});
 
 const MODELS: ModelEntry[] = [
   {
@@ -86,7 +94,7 @@ function spark(id: string): SparkSnapshot {
 }
 
 describe("generic invented-entity rendering", () => {
-  it("renders invented model + recipe + pp3 node cluster + lifecycle badge", () => {
+  it("renders invented model + recipe + pp3 node cluster + lifecycle badge", async () => {
     cleanupRenders();
     const { container } = render(
       <ModelsSection
@@ -98,6 +106,7 @@ describe("generic invented-entity rendering", () => {
         onSaved={() => {}}
       />
     );
+    await flush();
 
     const row = container.querySelector(".cp-deploy-row");
     expect(row).not.toBeNull();

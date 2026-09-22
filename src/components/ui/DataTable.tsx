@@ -1,4 +1,5 @@
 import { Fragment, type KeyboardEvent, type ReactNode } from "react";
+import { CaretDownIcon, CaretUpIcon, CopyIcon } from "./icons";
 
 export interface Column<T> {
   key: string;
@@ -98,7 +99,7 @@ export function DataTable<T>({
                           data-sorted={isSorted ? (sortDir === "asc" ? "asc" : "desc") : undefined}
                           style={{ opacity: isSorted ? 1 : 0 }}
                         >
-                          {isSorted && sortDir === "desc" ? "▼" : "▲"}
+                          {isSorted && sortDir === "desc" ? <CaretDownIcon size={12} /> : <CaretUpIcon size={12} />}
                         </span>
                       </button>
                     ) : (
@@ -191,7 +192,7 @@ export function CopyId({ value, className = "" }: { value: string; className?: s
     >
       <span className="cp-id-text">{truncateMiddle(value)}</span>
       <span className="cp-id-copy" aria-hidden="true">
-        ⧉
+        <CopyIcon size={12} />
       </span>
     </button>
   );

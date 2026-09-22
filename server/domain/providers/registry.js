@@ -63,6 +63,28 @@ export function modelsPath(runtime, signals) {
   return providerFor(runtime).modelsPath(signals);
 }
 
+/**
+ * READ-ONLY process evidence command: one pgrep over every provider's terms.
+ * Single source for discovery.js + controlPlane.js (no duplicated literal).
+ */
+export function processEvidenceCmd() {
+  const terms = [...new Set(ALL.flatMap((p) => p.processTerms).filter(Boolean))];
+  return `pgrep -f '${terms.join("|")}' >/dev/null 2>&1 && echo up || echo down`;
+}
+
+/**
+ * Candidate read-only probe paths: OpenAI `/v1/models` first, then every
+ * provider's non-default modelsPath (e.g. llama.cpp `/slots`). De-duplicated.
+ */
+export function probePaths() {
+  const paths = ["/v1/models"];
+  for (const p of ALL) {
+    const mp = p.modelsPath({});
+    if (mp && !paths.includes(mp)) paths.push(mp);
+  }
+  return paths;
+}
+
 export function servedModelIds(runtime, body) {
   return providerFor(runtime).servedModelIds(body);
 }

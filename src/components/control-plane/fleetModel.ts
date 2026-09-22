@@ -456,21 +456,20 @@ export function familyGroups(models: readonly ModelEntry[], deployments: readonl
 export interface ExternalConnect {
   endpoint: string;
   hasKey: boolean;
+  /** Masked prefix…suffix of the stored secret key, when the API exposes one. */
+  keyHint?: string | null;
+  keyName?: string | null;
   nodeNames: string[];
   note: string;
 }
 
-/** Human runtime name for externally-managed copy (custom → its launcher). */
-const RUNTIME_LABELS: Record<string, string> = {
-  vllm: "vLLM",
-  "tabbyapi-exl3": "TabbyAPI",
-  sglang: "SGLang",
-  "llama.cpp": "llama.cpp",
-};
-
-export function runtimeLabel(runtime: string | null | undefined): string {
+/** Human runtime name from registry labels (custom → its launcher, unknown → raw id). */
+export function runtimeLabel(
+  runtime: string | null | undefined,
+  labels?: Record<string, string> | null
+): string {
   if (!runtime || runtime === "custom") return "its launcher";
-  return RUNTIME_LABELS[runtime] ?? runtime;
+  return labels?.[runtime] ?? runtime;
 }
 
 /**
@@ -480,16 +479,20 @@ export function runtimeLabel(runtime: string | null | undefined): string {
 export function externalConnectView(
   d: DeploymentStatus,
   recipe: RecipePublic | null,
-  sparks: SparkSnapshot[]
+  sparks: SparkSnapshot[],
+  labels?: Record<string, string> | null
 ): ExternalConnect | null {
   if (d.managedBy !== "external") return null;
   const node = sparks.find((s) => d.nodeIds.includes(s.id));
   const host = node?.lanIp ?? d.nodeIds[0] ?? "localhost";
+  const secretEnv = recipe?.env.find((e) => e.secret && (e.hasValue ?? !!e.value)) ?? null;
   return {
     endpoint: `http://${host}:${d.apiPort}/v1`,
-    hasKey: !!recipe?.env.some((e) => e.secret && (e.hasValue ?? !!e.value)),
+    hasKey: !!secretEnv,
+    keyHint: secretEnv?.hint ?? null,
+    keyName: secretEnv?.name ?? null,
     nodeNames: d.nodeIds.map((id) => sparks.find((s) => s.id === id)?.name ?? id),
-    note: `Launched outside SparkDash — manage via ${runtimeLabel(recipe?.runtime)}`,
+    note: `Launched outside SparkDash — manage via ${runtimeLabel(recipe?.runtime, labels)}`,
   };
 }
 

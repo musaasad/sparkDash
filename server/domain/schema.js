@@ -176,6 +176,13 @@ export function normalizeRecipe(body = {}, prev = null) {
     stop: lcSrc?.stop ?? prev?.lifecycleCommands?.stop ?? null,
     status: lcSrc?.status ?? prev?.lifecycleCommands?.status ?? null,
   };
+  // Guard: an EXTERNAL runtime is launched outside SparkDash, so any inherited
+  // lifecycle command must be dropped — else it looks controllable.
+  if (mechanism === "external") {
+    lifecycleCommands.start = null;
+    lifecycleCommands.stop = null;
+    lifecycleCommands.status = null;
+  }
 
   const topology = normalizeTopology(body);
 
@@ -250,16 +257,21 @@ export function normalizeModel(body = {}, prev = null) {
 
 /** Normalize a deployment binding body. */
 export function normalizeDeployment(body = {}, prev = null) {
+  const metadata = body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata) ? body.metadata : prev?.metadata ?? {};
+  const managedBy = metadata.managedBy === "external" ? "external" : metadata.managedBy ?? null;
+  let desiredState = ["running", "stopped", "unknown"].includes(body.desiredState)
+    ? body.desiredState
+    : prev?.desiredState ?? "unknown";
+  // An external runtime has no SparkDash intent → desired must stay 'unknown'.
+  if (managedBy === "external") desiredState = "unknown";
   return {
     id: body.id ?? prev?.id,
     schemaVersion: 2,
     modelId: body.modelId ?? prev?.modelId,
     recipeId: body.recipeId ?? prev?.recipeId,
     nodeIds: Array.isArray(body.nodeIds) ? [...new Set(body.nodeIds)] : [...(prev?.nodeIds || [])],
-    desiredState: ["running", "stopped", "unknown"].includes(body.desiredState)
-      ? body.desiredState
-      : prev?.desiredState ?? "unknown",
-    metadata: body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata) ? body.metadata : prev?.metadata ?? {},
+    desiredState,
+    metadata,
     createdAt: body.createdAt ?? prev?.createdAt ?? Date.now(),
     updatedAt: body.updatedAt ?? Date.now(),
   };
@@ -316,6 +328,11 @@ export function validateRecipeV2(recipe) {
     );
   if (!LAUNCH_MECHANISMS.includes(recipe?.launch?.mechanism))
     errors.push(`launch.mechanism must be one of: ${LAUNCH_MECHANISMS.join(", ")}`);
+  if (recipe?.launch?.mechanism === "external") {
+    const lc = recipe?.lifecycleCommands || {};
+    if (lc.start || lc.stop || lc.status)
+      errors.push("external mechanism must not carry lifecycleCommands (normalizer nulls them)");
+  }
   if (recipe?.launch?.workdir != null && recipe.launch.workdir !== "" && !isValidPosixPath(recipe.launch.workdir))
     errors.push("launch.workdir must be an absolute POSIX path without .. or shell metacharacters");
   if (recipe?.launch?.executable != null && !isValidNoteText(String(recipe.launch.executable)))

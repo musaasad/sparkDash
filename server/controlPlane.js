@@ -19,13 +19,14 @@ import { configuredToken, extractBearer, authenticate } from "./auth.js";
 import { modelRegistry } from "./models/ModelRegistry.js";
 import { recipeRegistry } from "./recipes/RecipeRegistry.js";
 import { deploymentRegistry } from "./domain/deploymentRegistry.js";
+import { normalizeRecipe } from "./domain/schema.js";
 import { runMigrations } from "./domain/migrate.js";
 import { DeploymentService } from "./deployments/DeploymentService.js";
 import { LiveConsoleManager } from "./collectors/LiveConsole.js";
 import { ActivityLog } from "./activity/ActivityLog.js";
 import { createRateLimiter } from "./validate.js";
 import { probeEndpoint, probeUrl } from "./deployments/deploymentStatus.js";
-import { detectRuntime, healthClassify, providerFor, RUNTIME_TYPES } from "./domain/providers/registry.js";
+import { detectRuntime, healthClassify, providerFor, RUNTIME_TYPES, processEvidenceCmd } from "./domain/providers/registry.js";
 import { DiscoveryService } from "./domain/discovery.js";
 import { sshExec } from "./collectors/ssh.js";
 import { llmProbeHost } from "./collectors/llmHost.js";
@@ -388,6 +389,19 @@ export function createControlPlane(deps) {
     res.json({ recipe: recipeRegistry.toPublic(recipe) });
   });
 
+  // Validate an UNSAVED recipe body (draft) — lets the wizard dry-run before
+  // any entity is persisted, so cancelling leaves no orphan draft.
+  app.post("/api/recipes/validate", (req, res) => {
+    try {
+      const body = req.body || {};
+      const recipe = normalizeRecipe(body);
+      const result = recipeRegistry.validate(recipe, { nodeIds: body.nodeIds });
+      res.json({ ok: result.ok, errors: result.errors, warnings: result.warnings });
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message });
+    }
+  });
+
   app.post("/api/recipes/:id/validate", (req, res) => {
     const result = recipeRegistry.validate(req.params.id, { nodeIds: req.body?.nodeIds });
     if (!result) return res.status(404).json({ error: "recipe not found" });
@@ -468,7 +482,17 @@ export function createControlPlane(deps) {
         });
       const known = new Set(sparkRegistry.sparkIds);
       for (const n of nodes) if (!known.has(n)) return res.status(400).json({ error: `unknown node id: ${n}` });
-      const dep = deploymentRegistry.create({ modelId, recipeId, nodeIds: nodes, desiredState });
+      const managedBy =
+        recipe.launch?.mechanism === "external" || recipe.metadata?.managedBy === "external"
+          ? "external"
+          : "sparkdash";
+      const dep = deploymentRegistry.create({
+        modelId,
+        recipeId,
+        nodeIds: nodes,
+        desiredState: managedBy === "external" ? "unknown" : desiredState,
+        metadata: { managedBy },
+      });
       activity.push({
         kind: "lifecycle",
         subject: dep.id,
@@ -605,7 +629,7 @@ export function createControlPlane(deps) {
       const spark = sparkRegistry.getSpark(dep.nodeIds?.[0]);
       if (!spark) continue;
       discoveryInFlight.add(dep.id);
-      sshExec(spark, "pgrep -f 'tabbyapi|vllm|sglang|llama' >/dev/null 2>&1 && echo up || echo down", {
+      sshExec(spark, processEvidenceCmd(), {
         timeoutMs: 6000,
       })
         .then((out) => discoveredCache.set(dep.id, { at: Date.now(), value: /\bup\b/.test(out) }))

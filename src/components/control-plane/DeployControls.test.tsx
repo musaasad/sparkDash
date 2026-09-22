@@ -60,6 +60,8 @@ describe("DeployControls lifecycle separation", () => {
     expect(modal.textContent).toContain("recipe is untouched");
     expect(modal.textContent).toContain("simulated");
     expect(modal.querySelector(".cp-modal-diagram")).not.toBeNull();
+    // Transitional stop uses the accent primary, never danger-solid.
+    expect(modal.querySelector(".cp-modal-foot button:last-child")?.className).toContain("primary");
     confirmModal();
     await flush();
     expect(deploymentAction).toHaveBeenCalledWith("dep-1", "stop");
@@ -72,6 +74,8 @@ describe("DeployControls lifecycle separation", () => {
     expect(modal.textContent).toContain("BINDING only");
     expect(modal.textContent).toContain("weight file");
     expect(modal.querySelector(".cp-modal-diagram")).toBeNull();
+    // Terminal remove binding keeps danger-solid.
+    expect(modal.querySelector(".cp-modal-foot button:last-child")?.className).toContain("danger-solid");
     confirmModal();
     await flush();
     expect(deleteDeployment).toHaveBeenCalledWith("dep-1");

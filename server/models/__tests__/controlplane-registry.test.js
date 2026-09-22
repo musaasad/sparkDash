@@ -104,6 +104,8 @@ test("clone copies without exposing secret; new id required", () => {
   recipes.upsert(VALID_RECIPE);
   const clone = recipes.clone(VALID_RECIPE.id, "qwen38-copy", { apiPort: 8890 });
   assert.equal(clone.id, "qwen38-copy");
-  assert.equal(recipes.get("qwen38-copy").env.find((e) => e.name === "API_TOKEN").value, "super-secret");
+  // Duplicate re-points secretRefs but does NOT copy values → distinct missing state.
+  assert.equal(recipes.get("qwen38-copy").env.find((e) => e.name === "API_TOKEN").value, null);
+  assert.equal(recipes.get("qwen38-copy").metadata.secretsMissing, true);
   assert.throws(() => recipes.clone(VALID_RECIPE.id, "bad id"), /lowercase slug/);
 });

@@ -3,6 +3,7 @@ import { useConsoleSources } from "../../hooks/useConsole";
 import { getDeployment, useDeployments } from "../../hooks/domainStore";
 import { EmptyState } from "../ui/Status";
 import { TabStrip } from "../ui/DataTable";
+import { MarkerIcon, PlayIcon } from "../ui/icons";
 import type { ConsoleLine, ConsoleTelemetryRow } from "../../api/types";
 import {
   ALL_WINDOW,
@@ -278,7 +279,7 @@ export function LiveConsole({ recipeId, logDir, initialReqId }: LiveConsoleProps
               setLiveOn(true);
             }}
           >
-            ▶ Resume follow{follow.unseen ? ` (${follow.unseen})` : ""}
+            <PlayIcon size={10} /> Resume follow{follow.unseen ? ` (${follow.unseen})` : ""}
           </button>
         )}
       </div>
@@ -333,7 +334,11 @@ export function LiveConsole({ recipeId, logDir, initialReqId }: LiveConsoleProps
       {/* Row grid ─────────────────────────────────────────────── */}
       <div className="cp-lc-pos">
         <div className="cp-lc-scroll" id="lc-sources" ref={scrollRef} onScroll={onScroll} role="log" aria-live="off">
-          {startMarker ? <div className="cp-lc-marker">▤ start of range</div> : null}
+          {startMarker ? (
+            <div className="cp-lc-marker">
+              <MarkerIcon size={12} /> start of range
+            </div>
+          ) : null}
 
           {filtered.length === 0 ? (
             <div className="cp-lc-empty">
@@ -379,7 +384,11 @@ export function LiveConsole({ recipeId, logDir, initialReqId }: LiveConsoleProps
             ))
           )}
 
-          {endMarker ? <div className="cp-lc-marker">▤ end of range</div> : null}
+          {endMarker ? (
+            <div className="cp-lc-marker">
+              <MarkerIcon size={12} /> end of range
+            </div>
+          ) : null}
         </div>
 
         {!follow.following ? (

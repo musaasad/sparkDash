@@ -14,7 +14,9 @@ vi.mock("../../api/client", () => ({
   upsertRecipe: vi.fn(),
   duplicateRecipe: vi.fn(),
   validateRecipe: vi.fn(),
+  validateDraftRecipe: vi.fn(),
   createDeployment: vi.fn(),
+  archiveModel: vi.fn(),
   fetchRuntimes: vi.fn(),
 }));
 
@@ -22,6 +24,7 @@ const client = await import("../../api/client");
 const upsertModel = vi.mocked(client.upsertModel);
 const upsertRecipe = vi.mocked(client.upsertRecipe);
 const validateRecipe = vi.mocked(client.validateRecipe);
+const validateDraftRecipe = vi.mocked(client.validateDraftRecipe);
 const createDeployment = vi.mocked(client.createDeployment);
 
 const spark = { id: "n1", name: "Node One", online: true } as SparkSnapshot;
@@ -52,6 +55,13 @@ function pickSelect(container: HTMLElement, selector: string, value: string) {
   });
 }
 
+/** Spec §7: creation opens a template picker first — leave it via "from scratch". */
+function startScratch(container: HTMLElement) {
+  const btn = [...container.querySelectorAll<HTMLButtonElement>(".cp-template-scratch")][0];
+  expect(btn).not.toBeUndefined();
+  act(() => btn.click());
+}
+
 /** Advance until the final save button appears, awaiting async validate steps. */
 async function advanceToSave() {
   for (let i = 0; i < 14; i++) {
@@ -75,6 +85,14 @@ beforeEach(() => {
   upsertModel.mockResolvedValue({ model: { id: "w-model" } as ModelEntry });
   upsertRecipe.mockResolvedValue({ recipe: { id: "w-recipe" } as RecipePublic });
   validateRecipe.mockResolvedValue({ ok: true, errors: [], warnings: [] });
+  validateDraftRecipe.mockResolvedValue({ ok: true, errors: [], warnings: [] });
+  vi.mocked(client.archiveModel).mockResolvedValue({ archived: true });
+  vi.mocked(client.fetchRuntimes).mockResolvedValue({
+    runtimes: [
+      { id: "vllm", label: "vLLM", launchable: true },
+      { id: "tabbyapi-exl3", label: "TabbyAPI", launchable: true },
+    ],
+  } as never);
   createDeployment.mockResolvedValue({ deployment: {} as never, runtime: {} as never });
 });
 
@@ -83,6 +101,9 @@ describe("ModelWizard", () => {
     const { container } = render(
       <ModelWizard models={[]} recipes={[]} sparks={[spark]} navigate={() => {}} onSaved={() => {}} onCancel={() => {}} />
     );
+    // Picker is the entry surface; templates exist, scratch continues to the form.
+    expect(container.querySelectorAll(".cp-template-card").length).toBeGreaterThan(0);
+    startScratch(container);
     expect(container.querySelectorAll(".cp-step")).toHaveLength(8);
     // Step 1 shows the common model fields but the weight-variant fields only
     // after opening the Advanced disclosure.
@@ -97,6 +118,7 @@ describe("ModelWizard", () => {
     const { container } = render(
       <ModelWizard models={[]} recipes={[]} sparks={[spark]} navigate={() => {}} onSaved={() => {}} onCancel={() => {}} />
     );
+    startScratch(container);
     clickText(container, "Continue");
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("Model name is required");
   });
@@ -107,6 +129,8 @@ describe("ModelWizard", () => {
     const { container } = render(
       <ModelWizard models={[]} recipes={[]} sparks={[spark]} navigate={navigate} onSaved={onSaved} onCancel={() => {}} />
     );
+
+    startScratch(container);
 
     // 1 Model
     type(container, "#w-model-name", "Qwen Flash");
@@ -128,8 +152,8 @@ describe("ModelWizard", () => {
     clickText(container, "Continue");
     await flush();
 
-    // 6 Validate
-    expect(validateRecipe).toHaveBeenCalled();
+    // 6 Validate — unsaved-body dry validate (no entity yet)
+    expect(validateDraftRecipe).toHaveBeenCalled();
     clickText(container, "Continue");
 
     // 7 Review

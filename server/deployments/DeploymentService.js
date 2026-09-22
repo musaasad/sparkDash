@@ -168,14 +168,21 @@ export class DeploymentService {
   }
 
   _baseState(id, dep, recipe) {
-    const managedBy = dep?.metadata?.managedBy === "sparkdash" || recipe?.metadata?.managedBy === "sparkdash" ? "sparkdash" : "external";
+    // Ownership follows the launch MECHANISM (the authoritative signal): only an
+    // external mechanism is observe-only. Legacy rows without a mechanism fall
+    // back to declared metadata so pre-existing external seeds stay external.
+    const mechanism = recipe?.launch?.mechanism ?? dep?.metadata?.mechanism ?? null;
     const declared =
+      dep?.metadata?.managedBy ?? recipe?.metadata?.managedBy ?? null;
+    const managedBy =
+      mechanism === "external" || declared === "external" ? "external" : "sparkdash";
+    const declaredDesired =
       dep?.desiredState && dep.desiredState !== "unknown"
         ? dep.desiredState
         : recipe?.metadata?.desired ?? dep?.desiredState;
     const desired =
-      declared === "running" || declared === "stopped"
-        ? declared
+      declaredDesired === "running" || declaredDesired === "stopped"
+        ? declaredDesired
         : managedBy === "external"
           ? "unknown"
           : "stopped";

@@ -7,19 +7,13 @@ import type {
   RecipeValidateResponse,
   SparkSnapshot,
 } from "../../api/types";
-import { upsertRecipe, validateRecipe } from "../../api/client";
+import { upsertRecipe, validateDraftRecipe } from "../../api/client";
 import { Field, TextInput, Select, TextArea, FormSection, AdvancedDisclosure, FormFooter } from "../ui/form";
+import { Modal } from "../ui/Modal";
+import { CloseIcon } from "../ui/icons";
 import { LifecycleBadge, Chip } from "../ui/Status";
 import { Stepper as RecipeStepper } from "../ui/Stepper";
-
-/** Fallback runtime ids — the live list comes from the WS-3 registry. */
-export const RUNTIME_FALLBACK: { id: RecipeRuntime; label: string }[] = [
-  { id: "tabbyapi-exl3", label: "TabbyAPI" },
-  { id: "vllm", label: "vLLM" },
-  { id: "sglang", label: "SGLang" },
-  { id: "llama.cpp", label: "llama.cpp" },
-  { id: "custom", label: "Custom" },
-];
+import { useRuntimeOptions } from "./runtimeLabels";
 
 /** v2 topology modes → default parallelism (chip-picker over the mode, not a slug). */
 export const TOPOLOGY_MODES: { id: TopologyMode; label: string; nodes: number }[] = [
@@ -171,6 +165,8 @@ export function recipeBodyFromDraft(draft: RecipeDraft, modelId: string, weightI
     tags: draft.tags.split(",").map((t) => t.trim()).filter(Boolean),
     notes: draft.notes,
     nodeIds: draft.nodeIds,
+    // Ownership follows mechanism: external is observe-only, else SparkDash-managed.
+    metadata: { managedBy: draft.mechanism === "external" ? "external" : "sparkdash" },
   };
 }
 
@@ -204,7 +200,7 @@ interface RecipeEditorProps {
   modelId: string;
   existing?: RecipePublic | null;
   sparks: SparkSnapshot[];
-  /** Runtime chips from the WS-3 registry (falls back to RUNTIME_FALLBACK). */
+  /** Runtime chips from the WS-3 registry (falls back to the registry hook). */
   runtimes?: { id: RecipeRuntime; label: string }[];
   onSaved: () => void;
   onCancel: () => void;
@@ -228,12 +224,25 @@ export function RecipeEditor({ modelId, existing, sparks, runtimes, onSaved, onC
   const [warnings, setWarnings] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [validating, setValidating] = useState(false);
+  const [cancelOpen, setCancelOpen] = useState(false);
   const [draft, setDraft] = useState<RecipeDraft>(() => (existing ? draftFromRecipe(existing) : emptyRecipeDraft(modelId)));
 
   const readOnly = Boolean(existing?.archived) || existing?.lifecycleState === "archived";
+  // Dirty guard (spec §6): any edit from the initial draft.
+  const initialDraft = useMemo(
+    () => JSON.stringify(existing ? draftFromRecipe(existing) : emptyRecipeDraft(modelId)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
+  const dirty = JSON.stringify(draft) !== initialDraft;
   const set = <K extends keyof RecipeDraft>(k: K, v: RecipeDraft[K]) => setDraft((d) => ({ ...d, [k]: v }));
   const range = topologyNodeRange(draft);
-  const runtimesList = runtimes?.length ? runtimes : RUNTIME_FALLBACK;
+  const registryOptions = useRuntimeOptions();
+  const runtimesList = useMemo<{ id: string; label: string }[]>(() => {
+    if (runtimes?.length) return runtimes;
+    if (registryOptions.length) return registryOptions;
+    return [{ id: draft.runtime, label: draft.runtime }];
+  }, [runtimes, registryOptions, draft.runtime]);
 
   const nodeOptions = useMemo(() => sparks.map((s) => ({ id: s.id, name: s.name, online: s.online })), [sparks]);
 
@@ -268,9 +277,12 @@ export function RecipeEditor({ modelId, existing, sparks, runtimes, onSaved, onC
         setErrors(local);
         return;
       }
-      const saved = await persist();
-      if (!saved) return;
-      const res: RecipeValidateResponse = await validateRecipe(saved.id, draft.nodeIds);
+      // Validate the UNSAVED body — no entities are materialised here, so
+      // cancelling leaves nothing behind. Save persists atomically.
+      const res: RecipeValidateResponse = await validateDraftRecipe(
+        recipeBodyFromDraft(draft, modelId),
+        draft.nodeIds
+      );
       setWarnings(res.warnings);
       setErrors(res.errors);
     } catch (err) {
@@ -280,19 +292,21 @@ export function RecipeEditor({ modelId, existing, sparks, runtimes, onSaved, onC
     }
   }
 
-  async function save() {
+  async function save(): Promise<boolean> {
     const local = validateRecipeDraft(draft, "identity").concat(validateRecipeDraft(draft, "runtime"));
     setErrors(local);
     if (local.length) {
       setStep(0);
-      return;
+      return false;
     }
     setSaving(true);
     try {
       await persist();
       onSaved();
+      return true;
     } catch (err) {
       setErrors([err instanceof Error ? err.message : String(err)]);
+      return false;
     } finally {
       setSaving(false);
     }
@@ -366,7 +380,7 @@ export function RecipeEditor({ modelId, existing, sparks, runtimes, onSaved, onC
                     type="button"
                     role="radio"
                     aria-checked={draft.runtime === r.id}
-                    className={`cp-btn ${draft.runtime === r.id ? "primary" : ""}`}
+                    className={`cp-pick ${draft.runtime === r.id ? "is-selected" : ""}`}
                     disabled={readOnly}
                     onClick={() => set("runtime", r.id)}
                   >
@@ -447,7 +461,7 @@ export function RecipeEditor({ modelId, existing, sparks, runtimes, onSaved, onC
                   <button
                     key={n.id}
                     type="button"
-                    className={`cp-btn ${draft.nodeIds.includes(n.id) ? "primary" : ""}`}
+                    className={`cp-pick ${draft.nodeIds.includes(n.id) ? "is-selected" : ""}`}
                     disabled={readOnly}
                     onClick={() => toggleNode(n.id)}
                     aria-pressed={draft.nodeIds.includes(n.id)}
@@ -512,7 +526,7 @@ export function RecipeEditor({ modelId, existing, sparks, runtimes, onSaved, onC
                   onChange={(e) => setDraft((d) => ({ ...d, flags: d.flags.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)) }))}
                 />
                 <button type="button" className="cp-btn ghost" disabled={readOnly} onClick={() => setDraft((d) => ({ ...d, flags: d.flags.filter((_, j) => j !== i) }))}>
-                  ✕
+                  <CloseIcon size={12} />
                 </button>
               </div>
             ))}
@@ -538,7 +552,7 @@ export function RecipeEditor({ modelId, existing, sparks, runtimes, onSaved, onC
                   secret
                 </label>
                 <button type="button" className="cp-btn ghost" disabled={readOnly} onClick={() => setDraft((d) => ({ ...d, env: d.env.filter((_, j) => j !== i) }))}>
-                  ✕
+                  <CloseIcon size={12} />
                 </button>
               </div>
             ))}
@@ -590,7 +604,13 @@ export function RecipeEditor({ modelId, existing, sparks, runtimes, onSaved, onC
         </div>
       ) : null}
 
-      <FormFooter onCancel={onCancel} cancelLabel={readOnly ? "Close" : "Cancel"}>
+      <FormFooter
+        onCancel={() => {
+          if (dirty && !readOnly) setCancelOpen(true);
+          else onCancel();
+        }}
+        cancelLabel={readOnly ? "Close" : "Cancel"}
+      >
         {step > 0 ? (
           <button type="button" className="cp-btn" onClick={() => setStep((s) => s - 1)}>
             Back
@@ -601,11 +621,43 @@ export function RecipeEditor({ modelId, existing, sparks, runtimes, onSaved, onC
             Continue
           </button>
         ) : (
-          <button type="button" className="cp-btn primary" onClick={save} disabled={saving || readOnly}>
+          <button
+            type="button"
+            className="cp-btn primary"
+            onClick={() => {
+              void save().then((ok) => {
+                if (ok) onCancel();
+              });
+            }}
+            disabled={saving || readOnly}
+          >
             {saving ? "Saving…" : existing ? "Save recipe" : "Create recipe"}
           </button>
         )}
       </FormFooter>
+
+      {/* Dirty-state guard: leaving the editor with unsaved edits. */}
+      <Modal
+        open={cancelOpen}
+        title="Discard recipe edits?"
+        consequence="The editor has unsaved fields. Saving writes the recipe; discarding drops the edits."
+        confirmLabel="Save"
+        discardLabel="Discard"
+        cancelLabel="Cancel"
+        busy={saving}
+        onConfirm={async () => {
+          const ok = await save();
+          if (ok) {
+            setCancelOpen(false);
+            onCancel();
+          }
+        }}
+        onDiscard={() => {
+          setCancelOpen(false);
+          onCancel();
+        }}
+        onClose={() => setCancelOpen(false)}
+      />
     </div>
   );
 }

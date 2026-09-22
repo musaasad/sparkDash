@@ -1,10 +1,14 @@
 import { useMemo, useState } from "react";
 import type { ModelEntry, RecipePublic, RecipeRuntime, SparkSnapshot } from "../../api/types";
 import type { Route } from "../../hooks/router";
-import { upsertModel, upsertRecipe, duplicateRecipe, validateRecipe, createDeployment } from "../../api/client";
+import { upsertModel, upsertRecipe, duplicateRecipe, validateRecipe, validateDraftRecipe, createDeployment, archiveModel } from "../../api/client";
 import { Field, TextInput, TextArea, Select, FormSection, AdvancedDisclosure, FormFooter } from "../ui/form";
+import { Modal } from "../ui/Modal";
+import { CloseIcon } from "../ui/icons";
+import { TemplatePicker, type TemplatePickerItem } from "../ui/TemplatePicker";
 import { Stepper } from "../ui/Stepper";
 import { Chip, LifecycleBadge, StatusDot } from "../ui/Status";
+import { BoltIcon, MemoryIcon, NetworkIcon, ExternalManagedIcon } from "../ui/icons";
 import {
   RecipeEditor,
   emptyRecipeDraft,
@@ -13,9 +17,9 @@ import {
   topologyNodeRange,
   draftFromRecipe,
   slugify,
-  RUNTIME_FALLBACK,
   type RecipeDraft,
 } from "./RecipeEditor";
+import { useRuntimeOptions } from "./runtimeLabels";
 
 const STEPS = [
   { id: "model", label: "Model" },
@@ -26,6 +30,46 @@ const STEPS = [
   { id: "validate", label: "Validate" },
   { id: "review", label: "Review" },
   { id: "save", label: "Save" },
+];
+
+/** Spec §7 template picker seed — every field stays editable after a pick. */
+const MODEL_TEMPLATES: TemplatePickerItem[] = [
+  {
+    id: "vllm-openai",
+    name: "vLLM · OpenAI serve",
+    description: "Command launch, OpenAI-compatible endpoint, 32k context.",
+    icon: <BoltIcon size={20} />,
+  },
+  {
+    id: "tabbyapi-exl3",
+    name: "TabbyAPI · EXL3",
+    description: "Quantized EXL3 serving with a proven recipe shape.",
+    icon: <MemoryIcon size={20} />,
+  },
+  {
+    id: "sglang",
+    name: "SGLang server",
+    description: "High-throughput serving with structured runtime flags.",
+    icon: <NetworkIcon size={20} />,
+  },
+  {
+    id: "external",
+    name: "External / observed",
+    description: "Launched outside SparkDash; binding only, controls stay disabled.",
+    icon: <ExternalManagedIcon size={20} />,
+  },
+  {
+    id: "vllm-tp",
+    name: "vLLM · tensor-parallel",
+    description: "Multi-node TP topology with node bounds pre-set.",
+    icon: <BoltIcon size={20} />,
+  },
+  {
+    id: "vllm-dp",
+    name: "vLLM · data-parallel",
+    description: "Replica DP topology across the fleet.",
+    icon: <NetworkIcon size={20} />,
+  },
 ];
 
 interface WizardModel {
@@ -68,6 +112,8 @@ export function ModelWizard({
   const [busy, setBusy] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [onPicker, setOnPicker] = useState(!initialModelId);
 
   const [modelMode, setModelMode] = useState<"existing" | "new">(initialModelId ? "existing" : "new");
   const [modelId, setModelId] = useState(initialModelId ?? "");
@@ -83,8 +129,17 @@ export function ModelWizard({
   const [savedRecipeId, setSavedRecipeId] = useState<string | null>(null);
 
   const isinstance = models.filter((m) => !m.archived);
-  const runtimesList = runtimes?.length ? runtimes : RUNTIME_FALLBACK;
+  const registryOptions = useRuntimeOptions();
+  const runtimesList = runtimes?.length ? runtimes : registryOptions;
   const range = topologyNodeRange(draft);
+
+  // Dirty guard (spec §6): any user edit from the initial state.
+  const initialSnapshot = useMemo(
+    () => JSON.stringify({ modelMode, model, recipeMode, srcRecipeId, dupId, draft }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
+  const dirty = JSON.stringify({ modelMode, model, recipeMode, srcRecipeId, dupId, draft }) !== initialSnapshot;
 
   const modelForRecipes = modelMode === "existing" ? modelId : model.id || slugify(model.name);
   const recipesForModel = useMemo(
@@ -110,6 +165,20 @@ export function ModelWizard({
       if (d.nodeIds.length >= range.max) return { ...d, nodeIds: [...d.nodeIds.slice(1), id] };
       return { ...d, nodeIds: [...d.nodeIds, id] };
     });
+  }
+
+  /** Seed the draft from a picked template (still fully editable). */
+  function applyTemplate(id: string) {
+    const preset = ({
+      "vllm-openai": { runtime: "vllm", mechanism: "command", apiProtocol: "openai", contextLength: "32768" },
+      "tabbyapi-exl3": { runtime: "tabbyapi-exl3", quantization: "EXL3 4.0bpw", contextLength: "16384" },
+      sglang: { runtime: "sglang", mechanism: "command", contextLength: "32768" },
+      external: { runtime: "vllm", mechanism: "external", apiProtocol: "openai" },
+      "vllm-tp": { runtime: "vllm", topoMode: "tp", parallelism: "2", minNodes: "2", maxNodes: "2" },
+      "vllm-dp": { runtime: "vllm", topoMode: "dp", parallelism: "2", minNodes: "2", maxNodes: "4" },
+    } as Record<string, Partial<RecipeDraft>>)[id];
+    if (preset) setDraft((d) => ({ ...d, ...preset }));
+    setOnPicker(false);
   }
 
   function validateStep(): string[] {
@@ -141,48 +210,44 @@ export function ModelWizard({
     return e;
   }
 
-  /** Create/associate the config entities the wizard needs before validating. */
-  async function ensureEntities(): Promise<{ modelId: string; recipeId: string } | null> {
-    let mid = savedModelId;
-    if (!mid) {
-      const created = await upsertModel({
-        id: model.id.trim(),
-        name: model.name.trim(),
-        family: model.family || null,
-        weightPaths: {
-          ...(model.weightPath ? { default: model.weightPath } : {}),
-          ...Object.fromEntries(model.variants.filter((v) => v.id && v.path).map((v) => [v.id, v.path])),
-        },
-      });
-      mid = created.model.id;
-      setSavedModelId(mid);
-    }
-
-    let rid = savedRecipeId;
-    if (!rid) {
-      if (recipeMode === "existing") {
-        rid = srcRecipeId;
-      } else if (recipeMode === "duplicate") {
-        const newId = (dupId.trim() || `${srcRecipeId}-copy`).trim();
-        const res = await duplicateRecipe(srcRecipeId, newId);
-        rid = res.recipe.id;
-      } else {
-        const res = await upsertRecipe(recipeBodyFromDraft(draft, mid));
-        rid = res.recipe.id;
-      }
-      setSavedRecipeId(rid);
-    }
-    return { modelId: mid, recipeId: rid! };
+  /** The recipe write body implied by the current draft (nothing persisted). */
+  function draftRecipeBody(): Record<string, unknown> {
+    const mid = modelMode === "existing" ? modelId : model.id || slugify(model.name);
+    return recipeBodyFromDraft(draft, mid);
   }
 
+  /**
+   * Validate the intended UNSAVED body. No entity is created here, so cancelling
+   * after Validate leaves no orphan draft model/recipe. Save persists atomically.
+   */
   async function runValidate(): Promise<boolean> {
     setBusy(true);
     setErrors([]);
     setWarnings([]);
     try {
-      const ids = await ensureEntities();
-      if (!ids) return false;
-      const res = await validateRecipe(ids.recipeId, draft.nodeIds);
+      if (recipeMode === "existing") {
+        if (!srcRecipeId) {
+          setErrors(["Pick an existing recipe."]);
+          return false;
+        }
+        const res = await validateRecipe(srcRecipeId, draft.nodeIds);
+        setWarnings(res.warnings);
+        setErrors(res.errors);
+        return res.ok;
+      }
+      let body: Record<string, unknown>;
+      if (recipeMode === "duplicate") {
+        const src = recipes.find((r) => r.id === srcRecipeId);
+        if (!src) {
+          setErrors(["Pick a recipe to duplicate."]);
+          return false;
+        }
+        body = recipeBodyFromDraft(draftFromRecipe(src), modelForRecipes);
+        if (dupId.trim()) body.id = dupId.trim();
+      } else {
+        body = draftRecipeBody();
+      }
+      const res = await validateDraftRecipe(body, draft.nodeIds);
       setWarnings(res.warnings);
       setErrors(res.errors);
       return res.ok;
@@ -206,30 +271,102 @@ export function ModelWizard({
     setStep(target);
   }
 
-  async function save() {
+  async function save(): Promise<boolean> {
     setBusy(true);
     setErrors([]);
     try {
-      const ids = await ensureEntities();
-      if (!ids) return;
-      const check = await validateRecipe(ids.recipeId, draft.nodeIds);
+      let mid = savedModelId;
+      let createdModel = false;
+      if (!mid) {
+        if (modelMode === "existing") {
+          mid = modelId;
+        } else {
+          const created = await upsertModel({
+            id: model.id.trim(),
+            name: model.name.trim(),
+            family: model.family || null,
+            weightPaths: {
+              ...(model.weightPath ? { default: model.weightPath } : {}),
+              ...Object.fromEntries(model.variants.filter((v) => v.id && v.path).map((v) => [v.id, v.path])),
+            },
+          });
+          mid = created.model.id;
+          createdModel = true;
+          setSavedModelId(mid);
+        }
+      }
+
+      let rid = savedRecipeId;
+      try {
+        if (!rid) {
+          if (recipeMode === "existing") {
+            rid = srcRecipeId;
+          } else if (recipeMode === "duplicate") {
+            const newId = (dupId.trim() || `${srcRecipeId}-copy`).trim();
+            const res = await duplicateRecipe(srcRecipeId, newId);
+            rid = res.recipe.id;
+          } else {
+            const res = await upsertRecipe(recipeBodyFromDraft(draft, mid));
+            rid = res.recipe.id;
+          }
+          setSavedRecipeId(rid);
+        }
+      } catch (err) {
+        // Never leave an orphan model behind when the recipe write fails.
+        if (createdModel && mid) await archiveModel(mid, true);
+        throw err;
+      }
+
+      const check = await validateRecipe(rid, draft.nodeIds);
       if (!check.ok) {
         setErrors(check.errors);
         setWarnings(check.warnings);
         setStep(5);
-        return;
+        return false;
       }
-      await createDeployment({ modelId: ids.modelId, recipeId: ids.recipeId, nodeIds: draft.nodeIds, desiredState });
+      await createDeployment({
+        modelId: mid,
+        recipeId: rid,
+        nodeIds: draft.nodeIds,
+        desiredState,
+        metadata: { managedBy: wantsExternal ? "external" : "sparkdash" },
+      });
       onSaved();
-      navigate({ section: "model", modelId: ids.modelId });
+      navigate({ section: "model", modelId: mid });
+      return true;
     } catch (err) {
       setErrors([err instanceof Error ? err.message : String(err)]);
+      return false;
     } finally {
       setBusy(false);
     }
   }
 
   const activeRecipe = externalRecipe;
+
+  // Spec §7: creation opens a template picker before the blank form.
+  if (onPicker) {
+    return (
+      <div className="cp-panel">
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+          <span style={{ fontSize: 14, fontWeight: 600 }}>Guided add model</span>
+          <Chip tone="accent">config only · dry-run</Chip>
+        </div>
+        <p className="muted" style={{ fontSize: 12, margin: "0 0 12px", maxWidth: 560 }}>
+          Start from a proven shape, or from scratch. Save writes CONFIG entities only — no process is started or stopped.
+        </p>
+        <TemplatePicker
+          title="Start from a template"
+          templates={MODEL_TEMPLATES}
+          onPick={applyTemplate}
+          onScratch={() => setOnPicker(false)}
+        />
+        <FormFooter onCancel={onCancel} cancelLabel="Cancel wizard">
+          <span className="muted" style={{ fontSize: 12 }}>Pick a template or start blank.</span>
+        </FormFooter>
+      </div>
+    );
+  }
 
   return (
     <div className="cp-panel">
@@ -266,10 +403,10 @@ export function ModelWizard({
       {step === 0 ? (
         <>
           <div role="radiogroup" aria-label="Model source" style={{ display: "flex", gap: 6, marginBottom: 14 }}>
-            <button type="button" role="radio" aria-checked={modelMode === "existing"} className={`cp-btn ${modelMode === "existing" ? "primary" : ""}`} onClick={() => setModelMode("existing")}>
+            <button type="button" role="radio" aria-checked={modelMode === "existing"} className={`cp-pick ${modelMode === "existing" ? "is-selected" : ""}`} onClick={() => setModelMode("existing")}>
               Existing model
             </button>
-            <button type="button" role="radio" aria-checked={modelMode === "new"} className={`cp-btn ${modelMode === "new" ? "primary" : ""}`} onClick={() => setModelMode("new")}>
+            <button type="button" role="radio" aria-checked={modelMode === "new"} className={`cp-pick ${modelMode === "new" ? "is-selected" : ""}`} onClick={() => setModelMode("new")}>
               Create new
             </button>
           </div>
@@ -318,7 +455,7 @@ export function ModelWizard({
                       <TextInput mono placeholder="variant id" value={v.id} onChange={(e) => setModel((m) => ({ ...m, variants: m.variants.map((x, j) => (j === i ? { ...x, id: e.target.value } : x)) }))} />
                       <TextInput mono placeholder="/abs/path" value={v.path} onChange={(e) => setModel((m) => ({ ...m, variants: m.variants.map((x, j) => (j === i ? { ...x, path: e.target.value } : x)) }))} />
                       <button type="button" className="cp-btn ghost" onClick={() => setModel((m) => ({ ...m, variants: m.variants.filter((_, j) => j !== i) }))}>
-                        ✕
+                        <CloseIcon size={12} />
                       </button>
                     </div>
                   ))}
@@ -336,19 +473,19 @@ export function ModelWizard({
       {step === 1 ? (
         <>
           <div role="radiogroup" aria-label="Recipe source" style={{ display: "flex", gap: 6, marginBottom: 14 }}>
-            <button type="button" role="radio" aria-checked={recipeMode === "new"} className={`cp-btn ${recipeMode === "new" ? "primary" : ""}`} onClick={() => setRecipeMode("new")}>
+            <button type="button" role="radio" aria-checked={recipeMode === "new"} className={`cp-pick ${recipeMode === "new" ? "is-selected" : ""}`} onClick={() => setRecipeMode("new")}>
               Create new
             </button>
             <button
               type="button"
               role="radio"
               aria-checked={recipeMode === "duplicate"}
-              className={`cp-btn ${recipeMode === "duplicate" ? "primary" : ""}`}
+              className={`cp-pick ${recipeMode === "duplicate" ? "is-selected" : ""}`}
               onClick={() => setRecipeMode("duplicate")}
             >
               Duplicate proven
             </button>
-            <button type="button" role="radio" aria-checked={recipeMode === "existing"} className={`cp-btn ${recipeMode === "existing" ? "primary" : ""}`} onClick={() => setRecipeMode("existing")}>
+            <button type="button" role="radio" aria-checked={recipeMode === "existing"} className={`cp-pick ${recipeMode === "existing" ? "is-selected" : ""}`} onClick={() => setRecipeMode("existing")}>
               Use existing
             </button>
           </div>
@@ -406,7 +543,7 @@ export function ModelWizard({
                         type="button"
                         role="radio"
                         aria-checked={draft.runtime === r.id}
-                        className={`cp-btn ${draft.runtime === r.id ? "primary" : ""}`}
+                        className={`cp-pick ${draft.runtime === r.id ? "is-selected" : ""}`}
                         onClick={() => set("runtime", r.id)}
                       >
                         {r.label}
@@ -435,7 +572,7 @@ export function ModelWizard({
                         secret
                       </label>
                       <button type="button" className="cp-btn ghost" onClick={() => setDraft((d) => ({ ...d, env: d.env.filter((_, j) => j !== i) }))}>
-                        ✕
+                        <CloseIcon size={12} />
                       </button>
                     </div>
                   ))}
@@ -537,7 +674,7 @@ export function ModelWizard({
                 <button
                   key={n.id}
                   type="button"
-                  className={`cp-btn ${draft.nodeIds.includes(n.id) ? "primary" : ""}`}
+                  className={`cp-pick ${draft.nodeIds.includes(n.id) ? "is-selected" : ""}`}
                   onClick={() => toggleNode(n.id)}
                   aria-pressed={draft.nodeIds.includes(n.id)}
                 >
@@ -636,7 +773,13 @@ export function ModelWizard({
         </div>
       ) : null}
 
-      <FormFooter onCancel={onCancel} cancelLabel="Cancel wizard">
+      <FormFooter
+        onCancel={() => {
+          if (dirty) setCancelOpen(true);
+          else onCancel();
+        }}
+        cancelLabel="Cancel wizard"
+      >
         {step > 0 ? (
           <button type="button" className="cp-btn" onClick={() => setStep((s) => s - 1)}>
             Back
@@ -647,11 +790,43 @@ export function ModelWizard({
             {busy ? "Working…" : "Continue"}
           </button>
         ) : (
-          <button type="button" className="cp-btn primary" onClick={save} disabled={busy}>
+          <button
+            type="button"
+            className="cp-btn primary"
+            onClick={() => {
+              void save().then((ok) => {
+                if (ok) onCancel();
+              });
+            }}
+            disabled={busy}
+          >
             {busy ? "Saving…" : "Create model + recipe + deployment"}
           </button>
         )}
       </FormFooter>
+
+      {/* Dirty-state guard: leaving the wizard with unsaved edits. */}
+      <Modal
+        open={cancelOpen}
+        title="Discard this wizard?"
+        consequence="The wizard has unsaved config edits. Saving writes the model, recipe and binding; discarding drops them."
+        confirmLabel="Save"
+        discardLabel="Discard"
+        cancelLabel="Cancel"
+        busy={busy}
+        onConfirm={async () => {
+          const ok = await save();
+          if (ok) {
+            setCancelOpen(false);
+            onCancel();
+          }
+        }}
+        onDiscard={() => {
+          setCancelOpen(false);
+          onCancel();
+        }}
+        onClose={() => setCancelOpen(false)}
+      />
     </div>
   );
 }

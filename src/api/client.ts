@@ -529,6 +529,12 @@ export function validateRecipe(id: string, nodeIds?: string[]): Promise<RecipeVa
   });
 }
 
+/** Validate an UNSAVED recipe body — no entity is persisted. */
+export function validateDraftRecipe(body: unknown, nodeIds?: string[]): Promise<RecipeValidateResponse> {
+  const payload = body && typeof body === "object" ? { ...(body as Record<string, unknown>), nodeIds } : { nodeIds };
+  return apiFetch("/api/recipes/validate", { method: "POST", body: JSON.stringify(payload) });
+}
+
 export function recipeLifecycle(id: string, to: RecipeLifecycleState, note?: string): Promise<{ recipe: RecipePublic }> {
   return apiFetch(`/api/recipes/${encodeURIComponent(id)}/lifecycle`, {
     method: "POST",
@@ -546,6 +552,7 @@ export function createDeployment(body: {
   recipeId: string;
   nodeIds: string[];
   desiredState?: DeploymentDesired;
+  metadata?: Record<string, unknown>;
 }): Promise<{ deployment: DeploymentBinding; runtime: DeploymentStatus }> {
   return apiFetch("/api/deployments", { method: "POST", body: JSON.stringify(body) });
 }

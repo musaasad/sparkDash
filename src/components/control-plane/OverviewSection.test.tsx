@@ -46,13 +46,27 @@ describe("Overview health verdict", () => {
     expect(container.querySelectorAll(".cp-alert")).toHaveLength(1);
   });
 
-  it("restates a time window on windowed sections", () => {
+  it("gives each section a real, independently filtering window picker", () => {
     cleanupRenders();
     const { container } = render(<OverviewSection sparks={[spark()]} deployments={[]} recipes={[]} navigate={() => {}} loaded />);
     expect(container.textContent).toContain("Compute nodes");
-    expect(container.textContent).toContain("Last 15m");
     expect(container.textContent).toContain("Runtime activity");
-    expect(container.textContent).toContain("Last 5 events");
+    const nodeWindow = container.querySelector<HTMLElement>('[aria-label="Node window"]');
+    const activityWindow = container.querySelector<HTMLElement>('[aria-label="Activity window"]');
+    expect(nodeWindow).not.toBeNull();
+    expect(activityWindow).not.toBeNull();
+    const act24 = [...activityWindow!.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Last 24h")!;
+    act(() => act24.click());
+    // Activity window switched; node window keeps its own "Last 15m".
+    expect(act24.getAttribute("aria-pressed")).toBe("true");
+    expect(nodeWindow!.querySelector('[aria-pressed="true"]')?.textContent).toBe("Last 15m");
+  });
+
+  it("shows a getting-started checklist for a fresh lab", () => {
+    cleanupRenders();
+    const { container } = render(<OverviewSection sparks={[]} deployments={[]} recipes={[]} navigate={() => {}} loaded />);
+    expect(container.querySelector(".cp-getstarted-overline")?.textContent).toContain("GET STARTED");
+    expect(container.querySelectorAll(".cp-getstarted-card")).toHaveLength(4);
   });
 
   it("shows first-paint skeletons matching final geometry while unloaded", () => {

@@ -5,7 +5,7 @@ import { DataTable, CountedTabs, EntityChip, type Column } from "../ui/DataTable
 import { StatusPill, StatusDot, Chip, EmptyState } from "../ui/Status";
 import { SectionBand } from "../ui/SectionBand";
 import { Toolbar, DensityToggle } from "../ui/Toolbar";
-import { NetworkIcon } from "../ui/icons";
+import { KebabIcon, NetworkIcon } from "../ui/icons";
 import { primaryNodes, recipesOnNode, fmtUptime, nodeHealthRail, nodeMatchesRail } from "./fleetModel";
 import { Topology } from "./Topology";
 import { isWorkerSpark } from "../../api/sparkRole";
@@ -133,7 +133,7 @@ export function FleetSection({ sparks, deployments, recipes, navigate, models = 
               navigate({ section: "node", nodeId: n.id });
             }}
           >
-            ⋯
+            <KebabIcon size={14} />
           </button>
         </div>
       ),

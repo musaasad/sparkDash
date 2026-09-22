@@ -947,16 +947,10 @@ export type DeploymentDisplay =
   | "stopping"
   | "available";
 
-export type RecipeRuntime = "tabbyapi-exl3" | "vllm" | "sglang" | "llama.cpp" | "custom";
-export type RecipeTopology =
-  | "single"
-  | "tp2"
-  | "tp3"
-  | "tp4"
-  | "pp2"
-  | "pp3"
-  | "dp2"
-  | "dp3";
+/** Runtime id — config-first: any provider runtime is valid, not an enum. */
+export type RecipeRuntime = string;
+/** Legacy topology slug (`single` | `tp8` | `dp4` | `pp5` | …) from the server. */
+export type RecipeTopology = `${TopologyMode}${number}` | "single" | (string & {});
 /** v2 structured topology mode (recipe.topology.mode). */
 export type TopologyMode = "single" | "tp" | "pp" | "dp";
 /** Recipe lifecycle badge — flows through the API for read-only rendering. */
@@ -1054,6 +1048,8 @@ export interface RecipeEnvPublic {
   /** Stable pointer into the encrypted secrets store (present for secret entries). */
   secretRef?: string | null;
   hasValue?: boolean;
+  /** Non-leaking masked hint (prefix…suffix) for secret entries. */
+  hint?: string | null;
 }
 
 /** Env entry sent on write (secret values included by the client). */

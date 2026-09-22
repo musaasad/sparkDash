@@ -32,9 +32,11 @@ import {
   modelsPath,
   servedModelIds,
   renderLaunchCommand,
+  processEvidenceCmd,
+  probePaths,
 } from "./providers/registry.js";
 
-const PGREP_CMD = "pgrep -f 'tabbyapi|vllm|sglang|llama' >/dev/null 2>&1 && echo up || echo down";
+const PGREP_CMD = processEvidenceCmd();
 const DEFAULT_TTL_MS = 60_000;
 
 const slug = (s) =>
@@ -115,20 +117,24 @@ export class DiscoveryService {
       if (!(dep.nodeIds || []).includes(rec.nodeId)) continue;
       const recipe = this.recipeRegistry.get(dep.recipeId);
       const depPort = Number(dep.apiPort ?? recipe?.endpoint?.port);
-      if (depPort !== Number(rec.port)) continue;
+      const portMatches = depPort === Number(rec.port);
       const servedMatches =
         rec.servedModelIds.length === 0 ||
         rec.servedModelIds.some(
           (id) => id === dep.servedModelId || id === recipe?.metadata?.servedModelId
         );
+      // A binding is adopted if the served model matches on the node even when
+      // the recorded port drifted from the discovered port.
       if (!servedMatches) continue;
+      if (!portMatches && !rec.servedModelIds.length) continue;
       return {
         alreadyAdopted: true,
         matchedModelId: dep.modelId ?? recipe?.modelRef?.modelId ?? null,
         matchedRecipeId: dep.recipeId ?? null,
+        portDrift: !portMatches,
       };
     }
-    return { alreadyAdopted: false, matchedModelId: null, matchedRecipeId: null };
+    return { alreadyAdopted: false, matchedModelId: null, matchedRecipeId: null, portDrift: false };
   }
 
   /** Public view: discovered runtimes with live correlation + adoption state. */
@@ -163,14 +169,24 @@ export class DiscoveryService {
     const host = llmProbeHost(spark);
     if (!host) return null;
 
-    const url = `http://${host}:${port}/v1/models`;
-    let res;
-    try {
-      res = await this.fetchImpl(url, { signal: AbortSignal.timeout(3000) });
-    } catch {
-      return null; // offline / refused — degrade gracefully, no fabricated entry
+    const paths = probePaths();
+    let res = null;
+    let usedPath = paths[0];
+    for (const p of paths) {
+      let attempt = null;
+      try {
+        attempt = await this.fetchImpl(`http://${host}:${port}${p}`, {
+          signal: AbortSignal.timeout(3000),
+        });
+      } catch {
+        attempt = null; // offline / refused — try the next provider path
+      }
+      if (!attempt) continue;
+      res = attempt;
+      usedPath = p;
+      if (attempt.ok) break; // first answering path that lists models wins
     }
-    if (!res) return null;
+    if (!res) return null; // nothing answered anywhere — degrade gracefully
 
     let body = null;
     if (res.ok) {
@@ -306,10 +322,17 @@ export class DiscoveryService {
         err.status = 400;
         throw err;
       }
-      // Attach the node binding hint only when it fits the recipe topology.
+      // Reconcile the recipe onto the DISCOVERED endpoint: sync the port when it
+      // has drifted and attach the node binding hint only when topology allows,
+      // so the runtime stops re-surfacing as un-adopted.
       const maxNodes = recipe.topology?.maxNodes ?? 1;
-      if (!(recipe.nodeIds || []).includes(rec.nodeId) && (recipe.nodeIds || []).length < maxNodes) {
-        recipe.nodeIds = [...(recipe.nodeIds || []), rec.nodeId];
+      const addNode =
+        !(recipe.nodeIds || []).includes(rec.nodeId) &&
+        (recipe.nodeIds || []).length < maxNodes;
+      const portDrift = Number(recipe.endpoint?.port) !== Number(rec.port);
+      if (portDrift || addNode) {
+        if (portDrift) recipe.endpoint = { ...recipe.endpoint, port: rec.port };
+        if (addNode) recipe.nodeIds = [...(recipe.nodeIds || []), rec.nodeId];
         this.recipeRegistry.upsert(recipe, { skipNodeCheck: true });
       }
     } else {
@@ -317,6 +340,17 @@ export class DiscoveryService {
       const draft = body.recipeDraft && typeof body.recipeDraft === "object" ? body.recipeDraft : {};
       const modelId = slug(draft.modelId || modelName);
       const modelPath = draft.modelPath || `/${slug(servedId || modelId)}`;
+      const runtime = rec.runtime;
+      const recipeId = slug(draft.id || `${modelName}-${runtime}`);
+      // Validate port availability BEFORE creating the model, else a recipe 409
+      // would leave an orphan model behind.
+      this.recipeRegistry._assertNoPortConflict({
+        id: recipeId,
+        endpoint: { port: rec.port },
+        nodeIds,
+        archived: false,
+      });
+
       model = this.modelRegistry.upsert({
         id: modelId,
         name: modelName,
@@ -324,34 +358,37 @@ export class DiscoveryService {
         weightPaths: { default: modelPath },
         tags: ["adopted-from-discovery"],
       });
+      try {
+        recipe = this.recipeRegistry.upsert({
+          id: recipeId,
+          modelId,
+          name: draft.name || `${modelName} (${rec.runtime})`,
+          runtime,
+          topology: draft.topology || "single",
+          nodeIds,
+          modelPath,
+          workdir: draft.workdir || "/models",
+          logDir: draft.logDir ?? null,
+          apiPort: rec.port,
+          healthPath: draft.healthPath || "/v1/models",
+          contextLength: draft.contextLength ?? null,
+          launcher:
+            draft.launcher ||
+            renderLaunchCommand({ engine: { runtime }, modelPath, endpoint: { port: rec.port } }),
+          launchMechanism: "external",
+          logSource: draft.logSource ?? null,
+          metadata: { managedBy: "external", servedModelId: servedId, adoptedFrom: provenance },
+          provenance,
+          lifecycleState: "draft",
+        });
+      } catch (err) {
+        // Roll the model back so a recipe failure never orphans it.
+        this.modelRegistry.remove(modelId);
+        throw err;
+      }
       // Record adoption provenance on the model (in-memory + persisted on save).
       model.provenance = provenance;
       model.metadata = { ...(model.metadata || {}), adoptedFrom: provenance };
-
-      const runtime = rec.runtime;
-      const recipeId = slug(draft.id || `${modelName}-${runtime}`);
-      recipe = this.recipeRegistry.upsert({
-        id: recipeId,
-        modelId,
-        name: draft.name || `${modelName} (${rec.runtime})`,
-        runtime,
-        topology: draft.topology || "single",
-        nodeIds,
-        modelPath,
-        workdir: draft.workdir || "/models",
-        logDir: draft.logDir ?? null,
-        apiPort: rec.port,
-        healthPath: draft.healthPath || "/v1/models",
-        contextLength: draft.contextLength ?? null,
-        launcher:
-          draft.launcher ||
-          renderLaunchCommand({ engine: { runtime }, modelPath, endpoint: { port: rec.port } }),
-        launchMechanism: "external",
-        logSource: draft.logSource ?? null,
-        metadata: { managedBy: "external", servedModelId: servedId, adoptedFrom: provenance },
-        provenance,
-        lifecycleState: "draft",
-      });
     }
 
     const dep = this.deploymentRegistry.create({
@@ -379,7 +416,8 @@ export class DiscoveryService {
       ok: true,
       dryRun: true,
       model,
-      recipe,
+      // Redacted public view: secret env entries never leak the plaintext value.
+      recipe: this.recipeRegistry.toPublic(recipe),
       deployment: dep,
       provenance,
       note: "config-only — the discovered process is untouched (never started/stopped/signalled)",

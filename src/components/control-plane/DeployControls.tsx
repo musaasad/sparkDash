@@ -3,6 +3,7 @@ import type { DeploymentStatus, RecipePublic } from "../../api/types";
 import { deleteDeployment, deploymentAction } from "../../api/client";
 import { StatusPill } from "../ui/Status";
 import { Modal } from "../ui/Modal";
+import { ExternalManagedIcon, ManagedIcon } from "../ui/icons";
 
 interface DeployControlsProps {
   recipe: RecipePublic;
@@ -108,9 +109,9 @@ export function DeployControls({ recipe, deployment, onUpdated }: DeployControls
           </button>
         </div>
       </div>
-      <div style={{ fontSize: 11, color: external ? "var(--color-warning)" : "var(--color-muted)" }}>
-        {external ? "⦿ " : "◐ "}
-        {reason}
+      <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: external ? "var(--color-warning)" : "var(--color-muted)" }}>
+        {external ? <ExternalManagedIcon size={12} /> : <ManagedIcon size={12} />}
+        <span>{reason}</span>
       </div>
       {error ? (
         <div className="cp-field-error" role="alert">
@@ -139,7 +140,7 @@ export function DeployControls({ recipe, deployment, onUpdated }: DeployControls
         }
         info={confirm === "remove" ? "Re-create the binding any time; nothing is archived." : undefined}
         confirmLabel={confirm === "stop" ? "Stop" : confirm === "restart" ? "Restart" : "Remove binding"}
-        tone="danger"
+        tone={confirm === "remove" ? "danger" : "primary"}
         busy={busy != null}
         onClose={() => setConfirm(null)}
         onConfirm={() => {

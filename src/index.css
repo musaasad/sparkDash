@@ -3471,7 +3471,7 @@ html {
   cursor: pointer;
 }
 .cp-lc-src + .cp-lc-src { border-left: none; }
-.cp-lc-src.is-active { background: var(--color-accent); border-color: var(--color-accent); color: #1a1200; font-weight: 600; }
+.cp-lc-src.is-active { background: var(--color-accent); border-color: var(--color-accent); color: var(--color-accent-text); font-weight: 600; }
 .cp-lc-search { flex: 1; min-width: 180px; padding: 4px 9px; font-size: 12px; }
 .cp-lc-window { display: flex; gap: 2px; }
 .cp-lc-chip {
@@ -3566,7 +3566,7 @@ html {
 .cp-lc-raw .hl-level { color: var(--color-warning); font-weight: 600; }
 .cp-lc-raw .hl-num { color: var(--color-accent); }
 .cp-lc-raw .hl-key { color: var(--color-muted); }
-.cp-lc-marker { padding: 3px 10px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--color-muted); background: color-mix(in srgb, var(--color-border) 35%, transparent); }
+.cp-lc-marker { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--color-muted); background: color-mix(in srgb, var(--color-border) 35%, transparent); }
 .cp-lc-empty { padding: 26px 16px; }
 .cp-lc-sticky { position: absolute; left: 50%; transform: translateX(-50%); bottom: 14px; z-index: 3; }
 .cp-lc-rawpane { border-top: 1px solid var(--color-border); font-size: 11px; }
@@ -3897,16 +3897,16 @@ html {
   width: 36px;
   height: 20px;
   border-radius: 999px;
-  border: 1px solid var(--color-border);
-  background: var(--color-surface);
+  border: 1px solid var(--toggle-track-off);
+  background: var(--toggle-track-off);
   padding: 2px;
   display: inline-flex;
   align-items: center;
   cursor: pointer;
 }
-.cp-toggle.is-on { background: var(--color-accent); border-color: var(--color-accent); }
-.cp-toggle-dot { width: 14px; height: 14px; border-radius: 999px; background: var(--color-muted); transition: transform 120ms ease; }
-.cp-toggle.is-on .cp-toggle-dot { background: #1a1200; transform: translateX(16px); }
+.cp-toggle.is-on { background: var(--toggle-track-on); border-color: var(--toggle-track-on); }
+.cp-toggle-dot { width: 14px; height: 14px; border-radius: 999px; background: var(--toggle-dot); transition: transform 120ms ease; }
+.cp-toggle.is-on .cp-toggle-dot { transform: translateX(16px); }
 
 .cp-radio-group { display: grid; grid-template-columns: repeat(2, minmax(140px, 1fr)); gap: 8px; }
 .cp-radio-card {
@@ -4184,6 +4184,94 @@ html {
 .cp-btn.ghost { border-color: transparent; background: transparent; color: var(--color-muted-strong); }
 .cp-btn.ghost:hover:not(:disabled) { background: var(--color-surface-hover); color: var(--color-text); }
 .cp-btn:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: 1px; }
+
+/* ─── Picker-selected style: the ONE selected state for radiogroups and
+   multi-select chips. Reserves .cp-btn.primary for the single view action.
+   1px accent border + selected bg + textPrimary, mirroring .cp-radio-card. */
+.cp-pick {
+  height: var(--control-h);
+  padding: 0 12px;
+  border-radius: var(--radius-control);
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid var(--color-border-strong);
+  background: transparent;
+  color: var(--color-text);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.cp-pick:hover:not(.is-selected) { border-color: var(--color-accent); }
+.cp-pick.is-selected { border-color: var(--color-accent); background: var(--color-selected); color: var(--color-text-strong); }
+.cp-pick:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: 1px; }
+
+/* ─── Node rail: cp text rail replacing the legacy pill-nav ─── */
+.cp-node-rail { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; }
+.cp-node-tab {
+  height: var(--control-h);
+  padding: 0 12px;
+  border-radius: var(--radius-control);
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--color-muted-strong);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+.cp-node-tab:hover:not(.is-active) { background: var(--color-surface-hover); color: var(--color-text); }
+.cp-node-tab.is-active { background: var(--color-selected); color: var(--color-text); font-weight: 600; }
+.cp-node-tab.is-active svg { color: var(--color-accent); }
+.cp-node-add {
+  height: 28px; width: 28px; margin-left: 2px;
+  border: none; border-radius: var(--radius-control);
+  background: transparent; color: var(--color-muted-strong);
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.cp-node-add:hover { background: var(--color-surface-hover); color: var(--color-accent); }
+
+/* ─── Template picker (spec §7): creation opens a picker first ─── */
+.cp-picker-layout { display: grid; grid-template-columns: minmax(0, 1fr) 240px; gap: var(--space-4); }
+.cp-picker-title { font-size: 13px; font-weight: 600; margin-bottom: var(--space-2); }
+.cp-picker-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
+.cp-template-card {
+  display: flex; flex-direction: column; gap: 4px; text-align: left;
+  padding: var(--space-3); border: 1px solid var(--color-border);
+  border-radius: var(--radius-card); background: var(--color-surface); cursor: pointer;
+}
+.cp-template-card:hover { border-color: var(--color-accent); background: var(--color-selected); }
+.cp-template-card:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: 1px; }
+.cp-template-icon { color: var(--color-accent); display: inline-flex; }
+.cp-template-name { font-size: 13px; font-weight: 600; color: var(--color-text); }
+.cp-template-desc { font-size: 12px; color: var(--color-muted); line-height: 1.35; }
+.cp-picker-showall { align-self: flex-start; margin-top: var(--space-2); border: none; background: none; padding: 0; font-size: 12px; font-weight: 500; color: var(--color-accent-strong); cursor: pointer; }
+.cp-picker-rail { display: flex; flex-direction: column; gap: var(--space-2); border-left: 1px solid var(--color-border); padding-left: var(--space-4); }
+.cp-template-scratch {
+  height: var(--control-h); padding: 0 12px; text-align: left;
+  border: 1px solid var(--color-border-strong); border-radius: var(--radius-control);
+  background: transparent; color: var(--color-text); font-size: 13px; font-weight: 500;
+}
+.cp-template-scratch:hover { border-color: var(--color-accent); background: var(--color-surface-hover); }
+
+/* ─── Getting-started checklist (spec §7/§8, fresh lab only) ─── */
+.cp-getstarted { display: flex; flex-direction: column; gap: var(--space-3); }
+.cp-getstarted-overline { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--color-muted); }
+.cp-getstarted-head { display: flex; align-items: baseline; gap: 12px; }
+.cp-getstarted-title { font-size: 36px; font-weight: 600; line-height: 1.25; margin: 0; }
+.cp-getstarted-count { font-size: 12px; font-weight: 500; color: var(--color-muted); }
+.cp-getstarted-cards { display: flex; gap: var(--space-3); overflow-x: auto; padding-bottom: 4px; }
+.cp-getstarted-card {
+  position: relative; flex: 0 0 280px; text-align: left;
+  padding: var(--space-3); border: 1px solid var(--color-border);
+  border-radius: var(--radius-card); background: var(--color-surface); cursor: pointer;
+}
+.cp-getstarted-card:hover { border-color: var(--color-accent); }
+.cp-getstarted-card.is-done { border-color: color-mix(in srgb, var(--color-success) 45%, var(--color-border)); background: color-mix(in srgb, var(--color-success) 10%, transparent); }
+.cp-getstarted-check { display: inline-flex; height: 16px; color: var(--color-success); }
+.cp-getstarted-card-title { display: block; margin-top: 4px; font-size: 13px; font-weight: 600; }
+.cp-getstarted-arrow { position: absolute; right: var(--space-3); bottom: var(--space-3); color: var(--color-muted); }
 
 /* ─── Toolbar row2 utilities + density + columns ────────── */
 .cp-toolbar { min-height: var(--toolbar-h); margin-bottom: var(--space-3); }

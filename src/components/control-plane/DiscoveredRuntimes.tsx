@@ -14,6 +14,7 @@ import { Modal } from "../ui/Modal";
 import { Field, TextInput } from "../ui/form";
 import { SearchIcon } from "../ui/icons";
 import { runtimeLabel } from "./fleetModel";
+import { useRuntimeLabels } from "./runtimeLabels";
 
 /** Observed probe vocabulary → fixed display vocabulary for the health pill. */
 function healthDisplay(h: DeploymentObserved) {
@@ -54,6 +55,7 @@ export function DiscoveredRuntimes({ sparks, nodeId, recipes = [], onSaved }: Di
   const [step, setStep] = useState<Step>("form");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const runtimeLabels = useRuntimeLabels();
 
   useEffect(() => {
     let alive = true;
@@ -148,7 +150,7 @@ export function DiscoveredRuntimes({ sparks, nodeId, recipes = [], onSaved }: Di
               <span className="cp-deploy-id mono">{d.endpoint}</span>
             </div>
             <div className="cp-deploy-meta">
-              <Chip tone="accent">{runtimeLabel(d.runtime)}</Chip>
+              <Chip tone="accent">{runtimeLabel(d.runtime, runtimeLabels)}</Chip>
               {d.processEvidence ? <Chip>process seen</Chip> : null}
             </div>
             <div className="cp-deploy-nodes">
@@ -202,7 +204,7 @@ export function DiscoveredRuntimes({ sparks, nodeId, recipes = [], onSaved }: Di
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <div className="cp-kv">
               <dt>runtime</dt>
-              <dd>{runtimeLabel(target?.runtime)}</dd>
+              <dd>{runtimeLabel(target?.runtime, runtimeLabels)}</dd>
               <dt>node / port</dt>
               <dd className="mono">
                 {target?.nodeId} :{target?.port}
@@ -283,7 +285,7 @@ export function DiscoveredRuntimes({ sparks, nodeId, recipes = [], onSaved }: Di
                   <dd className="mono">{createRecipeId}</dd>
                   <dt>recipe runtime / port</dt>
                   <dd className="mono">
-                    {runtimeLabel(target?.runtime)} · {target?.port}
+                    {runtimeLabel(target?.runtime, runtimeLabels)} · {target?.port}
                   </dd>
                   <dt>topology</dt>
                   <dd>single (node {target?.nodeId})</dd>
@@ -302,7 +304,7 @@ export function DiscoveredRuntimes({ sparks, nodeId, recipes = [], onSaved }: Di
             <dt>{mode === "create" ? "create model" : "associate model"}</dt>
             <dd>{mode === "create" ? `${modelName} (${createModelId})` : models.find((m) => m.id === modelId)?.name ?? modelId}</dd>
             <dt>{mode === "create" ? "create recipe" : "associate recipe"}</dt>
-            <dd>{mode === "create" ? `${createRecipeId} · ${runtimeLabel(target?.runtime)}` : matchedRecipes.find((r) => r.id === recipeId)?.name ?? recipeId}</dd>
+            <dd>{mode === "create" ? `${createRecipeId} · ${runtimeLabel(target?.runtime, runtimeLabels)}` : matchedRecipes.find((r) => r.id === recipeId)?.name ?? recipeId}</dd>
             <dt>create deployment</dt>
             <dd className="mono">{target?.nodeId} :{target?.port}</dd>
             <dt>desired state</dt>

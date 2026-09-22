@@ -180,3 +180,25 @@ test("adopt rejects unknown discovery id and mismatched recipe", async () => {
   });
   assert.throws(() => h.disc.adopt(rec.id, { mode: "associate", modelId: "m2", recipeId: "r1" }), /does not reference/);
 });
+
+test("F2 adopt response carries a redacted recipe — no plaintext secret value", async () => {
+  const h = harness();
+  await h.disc.scan();
+  await settle();
+  const rec = h.disc.list()[0];
+
+  h.models.upsert({ id: "m1", name: "M1", weightPaths: { default: "/m1" } });
+  h.recipes.upsert({
+    id: "r1", modelId: "m1", name: "R1", runtime: "vllm", topology: "single",
+    nodeIds: ["n1"], modelPath: "/m1", workdir: "/w", apiPort: 8888,
+    env: [{ name: "API_KEY", value: "sk-plaintext-123", secret: true }],
+  });
+
+  const result = h.disc.adopt(rec.id, { mode: "associate", modelId: "m1", recipeId: "r1" });
+  const entry = result.recipe.env.find((e) => e.name === "API_KEY");
+  assert.ok(entry, "secret entry survives in the redacted view");
+  assert.equal(entry.secret, true);
+  assert.equal("value" in entry, false, "plaintext value must not cross the API");
+  assert.equal(entry.hasValue, true);
+  assert.ok(entry.secretRef);
+});

@@ -12,11 +12,14 @@ import { render, flush, cleanupRenders } from "../../testing/render";
 vi.mock("../../api/client", () => ({
   upsertRecipe: vi.fn(),
   validateRecipe: vi.fn(),
+  validateDraftRecipe: vi.fn(),
+  fetchRuntimes: vi.fn(),
 }));
 
 const client = await import("../../api/client");
 const upsertRecipe = vi.mocked(client.upsertRecipe);
 const validateRecipe = vi.mocked(client.validateRecipe);
+const validateDraftRecipe = vi.mocked(client.validateDraftRecipe);
 
 const spark = { id: "n1", name: "Node One", online: true } as SparkSnapshot;
 
@@ -53,6 +56,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   upsertRecipe.mockResolvedValue({ recipe: { id: "r1" } as RecipePublic });
   validateRecipe.mockResolvedValue({ ok: true, errors: [], warnings: ["heads up"] });
+  validateDraftRecipe.mockResolvedValue({ ok: true, errors: [], warnings: ["heads up"] });
+  vi.mocked(client.fetchRuntimes).mockResolvedValue({
+    runtimes: [
+      { id: "tabbyapi-exl3", label: "TabbyAPI", launchable: true },
+      { id: "vllm", label: "vLLM", launchable: true },
+    ],
+  } as never);
 });
 
 describe("RecipeEditor structured v2", () => {
@@ -95,7 +105,9 @@ describe("RecipeEditor structured v2", () => {
     clickText(container, "Continue");
     clickText(container, "Validate (dry-run)");
     await flush();
-    expect(validateRecipe).toHaveBeenCalledWith("r1", ["n1"]);
+    // Unsaved-body validation — no entity is materialised by Validate.
+    expect(validateDraftRecipe).toHaveBeenCalled();
+    expect(validateDraftRecipe.mock.calls[0][0]).toMatchObject({ id: "r1" });
     expect(container.textContent).toContain("heads up");
   });
 

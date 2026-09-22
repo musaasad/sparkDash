@@ -85,6 +85,21 @@ describe("SettingsSection section-scoped save", () => {
     expect(container.querySelectorAll('[role="radiogroup"][aria-label="Theme"] .cp-radio-card')).toHaveLength(4);
     expect(container.querySelector(".icon-circle")).toBeNull();
   });
+
+  it("guards a section switch behind a Save/Discard/Cancel modal when dirty", async () => {
+    const { container } = await mount();
+    act(() => container.querySelector<HTMLButtonElement>(".cp-toggle")!.click());
+    act(() => railButton(container, "Access").click());
+
+    const modal = document.querySelector(".cp-modal");
+    expect(modal?.textContent).toContain("Unsaved changes");
+    const discard = [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Discard")!;
+    act(() => discard.click());
+
+    // Discarded edits drop, and the switch proceeds to Access.
+    expect(document.querySelector(".cp-modal")).toBeNull();
+    expect(container.querySelector("#set-poll")).not.toBeNull();
+  });
 });
 
 describe("SettingsSection danger zone", () => {

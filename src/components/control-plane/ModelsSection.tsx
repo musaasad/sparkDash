@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import type { ModelEntry, RecipePublic, RecipeRuntime, DeploymentStatus, SparkSnapshot, ActivityEvent } from "../../api/types";
+import type { ModelEntry, RecipePublic, DeploymentStatus, SparkSnapshot, ActivityEvent } from "../../api/types";
 import type { Route } from "../../hooks/router";
 import { DataTable, sortRows, CountedTabs, CopyId, type Column } from "../ui/DataTable";
 import { StatusPill, StatusDot, Chip, EmptyState, LifecycleBadge, SkeletonRows } from "../ui/Status";
 import { SectionBand } from "../ui/SectionBand";
 import { Toolbar, DensityToggle } from "../ui/Toolbar";
 import { ColumnsPopover } from "../ui/ColumnsPopover";
-import { BotIcon, PanelIcon } from "../ui/icons";
-import { fetchActivity, fetchRuntimes } from "../../api/client";
+import { BotIcon, KebabIcon, PanelIcon } from "../ui/icons";
+import { fetchActivity } from "../../api/client";
 import { ModelWizard } from "./ModelWizard";
 import {
   deploymentViews,
@@ -24,6 +24,7 @@ import {
 } from "./fleetModel";
 import { ExternalConnectPanel } from "./ModelDetail";
 import { DiscoveredRuntimes } from "./DiscoveredRuntimes";
+import { useRuntimeLabels, useRuntimeOptions } from "./runtimeLabels";
 
 interface ModelsProps {
   models: ModelEntry[];
@@ -37,13 +38,14 @@ interface ModelsProps {
   activity?: ActivityEvent[];
 }
 
-function provenanceOf(v: DeploymentView): string {
-  return v.deployment.managedBy === "external" ? "external" : `managed · ${runtimeLabel(v.runtime)}`;
+function provenanceOf(v: DeploymentView, labels: Record<string, string>): string {
+  return v.deployment.managedBy === "external" ? "external" : `managed · ${runtimeLabel(v.runtime, labels)}`;
 }
 
 export function ModelsSection({ models, recipes, deployments, navigate, onSaved, sparks = [], activity }: ModelsProps) {
   const [wizard, setWizard] = useState(false);
-  const [providerRuntimes, setProviderRuntimes] = useState<{ id: RecipeRuntime; label: string }[]>([]);
+  const runtimeLabels = useRuntimeLabels();
+  const providerRuntimes = useRuntimeOptions();
   const [sortKey, setSortKey] = useState<string | null>("name");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [tab, setTab] = useState("all");
@@ -146,12 +148,6 @@ export function ModelsSection({ models, recipes, deployments, navigate, onSaved,
   const groups = useMemo(() => familyGroups(active, deployments), [active, deployments]);
   const shownColumns = useMemo(() => catalogColumns.filter((c) => visibleCols.has(c.key)), [catalogColumns, visibleCols]);
 
-  useEffect(() => {
-    fetchRuntimes()
-      .then((r) => setProviderRuntimes(r.runtimes))
-      .catch(() => {});
-  }, []);
-
   function toggleOpen(key: string) {
     setOpen((prev) => {
       const next = new Set(prev);
@@ -180,7 +176,7 @@ export function ModelsSection({ models, recipes, deployments, navigate, onSaved,
             <option value="all">All runtimes</option>
             {runtimes.map((r) => (
               <option key={r} value={r}>
-                {runtimeLabel(r)}
+                {runtimeLabel(r, runtimeLabels)}
               </option>
             ))}
           </select>
@@ -214,13 +210,11 @@ export function ModelsSection({ models, recipes, deployments, navigate, onSaved,
           </>
         }
         primary={
-          <button
-            type="button"
-            className={`cp-btn ${wizard ? "ghost" : "primary"}`}
-            onClick={() => setWizard((a) => !a)}
-          >
-            {wizard ? "Cancel" : "+ Add model"}
-          </button>
+          wizard ? null : (
+            <button type="button" className="cp-btn primary" onClick={() => setWizard(true)}>
+              + Add model
+            </button>
+          )
         }
       />
 
@@ -280,7 +274,7 @@ export function ModelsSection({ models, recipes, deployments, navigate, onSaved,
 
                     <div className="cp-deploy-meta">
                       <span className="muted" style={{ fontSize: 10 }} title={v.deployment.managedBy === "external" ? "Launched outside SparkDash" : undefined}>
-                        {v.deployment.updatedAt ? fmtAgeFromISO(new Date(v.deployment.updatedAt).toISOString(), now) : "—"} · {provenanceOf(v)}
+                        {v.deployment.updatedAt ? fmtAgeFromISO(new Date(v.deployment.updatedAt).toISOString(), now) : "—"} · {provenanceOf(v, runtimeLabels)}
                       </span>
                       {v.contextLength ? <Chip tone="mono">{Math.round(v.contextLength / 1000)}k ctx</Chip> : null}
                     </div>
@@ -354,7 +348,7 @@ export function ModelsSection({ models, recipes, deployments, navigate, onSaved,
                             navigate({ section: "model", modelId: v.rawModelId });
                           }}
                         >
-                          ⋯
+                          <KebabIcon size={14} />
                         </button>
                       )}
                     </div>

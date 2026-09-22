@@ -117,17 +117,37 @@ export class DeploymentRegistry {
   }
 
   /** Ensure a binding exists for a recipe's legacy nodeIds (seed/idempotent). */
-  ensureForRecipe(recipe, { managedBy = "external" } = {}) {
+  ensureForRecipe(recipe, { managedBy = null } = {}) {
     if (!recipe?.nodeIds?.length) return null;
     const id = `dep-${recipe.id}`;
-    if (this._deployments.has(id)) return this._deployments.get(id);
+    const managed =
+      managedBy ||
+      (recipe.launch?.mechanism === "external" || recipe.metadata?.managedBy === "external"
+        ? "external"
+        : "sparkdash");
+    if (this._deployments.has(id)) {
+      // Reconcile ownership/desired on an existing binding.
+      const dep = this._deployments.get(id);
+      if (dep.metadata?.managedBy !== managed) {
+        dep.metadata = { ...(dep.metadata || {}), managedBy: managed };
+        if (managed === "external") dep.desiredState = "unknown";
+        dep.updatedAt = Date.now();
+        this._save();
+      }
+      return dep;
+    }
     return this.create({
       id,
       modelId: recipe.modelRef?.modelId,
       recipeId: recipe.id,
       nodeIds: recipe.nodeIds,
-      desiredState: recipe.metadata?.desired === "running" ? "running" : "unknown",
-      metadata: { managedBy },
+      desiredState:
+        managed === "external"
+          ? "unknown"
+          : recipe.metadata?.desired === "running"
+            ? "running"
+            : "stopped",
+      metadata: { managedBy: managed },
     });
   }
 }

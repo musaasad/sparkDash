@@ -2,14 +2,15 @@ import { useEffect, useMemo, useState } from "react";
 import type { SparkSnapshot, RecipePublic, DeploymentStatus } from "../../api/types";
 import type { Route } from "../../hooks/router";
 import { SparkPage } from "../SparkPage/SparkPage";
-import { SparkTabs } from "../SparkTabs";
 import { StatusPill, StatusDot, Chip, EmptyState } from "../ui/Status";
 import { TabStrip } from "../ui/DataTable";
+import { CopyIcon, GridIcon, PlusIcon } from "../ui/icons";
 import { Breadcrumb } from "../ui/Breadcrumb";
 import { PageHeader } from "../ui/PageHeader";
 import { TimeSeriesChart, RangePicker, type Series } from "../ui/TimeSeriesChart";
 import { useTimedMetricsHistory } from "../../hooks/metricsStore";
 import { recipesOnNode, relativeAge, externalConnectView, runtimeLabel } from "./fleetModel";
+import { useRuntimeLabels } from "./runtimeLabels";
 import { LiveConsole } from "./LiveConsole";
 import { ExternalConnectPanel } from "./ModelDetail";
 import { DiscoveredRuntimes } from "./DiscoveredRuntimes";
@@ -58,6 +59,7 @@ export function NodeDetail({
   onAddNode,
   onSaved = () => {},
 }: NodeDetailProps) {
+  const runtimeLabels = useRuntimeLabels();
   const [tab, setTab] = useState<Tab>("Overview");
   const [windowMs, setWindowMs] = useState(30 * 60_000);
   const [now, setNow] = useState(() => Date.now());
@@ -98,7 +100,7 @@ export function NodeDetail({
             <button type="button" className="cp-chip mono cp-host" title="Copy host address" onClick={() => copyText(spark.lanIp ?? spark.id)}>
               {spark.lanIp ?? spark.id}
               <span className="muted" aria-hidden="true">
-                ⧉
+                <CopyIcon size={12} />
               </span>
             </button>
             <StatusPill status={spark.online ? "online" : "offline"} />
@@ -125,14 +127,34 @@ export function NodeDetail({
         </div>
       ) : null}
 
-      {/* Node sub-nav — proven tab strip, demoted from primary navigation */}
-      <SparkTabs
-        sparks={allSparks}
-        activeId={spark.id}
-        onSelect={(id) => navigate({ section: "node", nodeId: id })}
-        onAdd={onAddNode}
-        onEdit={() => onEdit()}
-      />
+      {/* Node sub-nav — cp text rail, not the legacy pill-nav */}
+      <nav className="cp-node-rail" aria-label="Sparks">
+        <button
+          type="button"
+          className="cp-node-tab"
+          onClick={() => navigate({ section: "overview" })}
+        >
+          <GridIcon size={14} />
+          Overview
+        </button>
+        {allSparks.map((s) => (
+          <button
+            key={s.id}
+            type="button"
+            className={`cp-node-tab${s.id === spark.id ? " is-active" : ""}`}
+            aria-current={s.id === spark.id ? "page" : undefined}
+            title={s.name}
+            onClick={() => navigate({ section: "node", nodeId: s.id })}
+            onDoubleClick={() => onEdit()}
+          >
+            <StatusDot status={s.online ? "online" : "offline"} />
+            {s.name}
+          </button>
+        ))}
+        <button type="button" className="cp-node-add" aria-label="Add Spark/GPU Host" title="Add Spark/GPU Host" onClick={onAddNode}>
+          <PlusIcon size={14} />
+        </button>
+      </nav>
 
       <TabStrip tabs={TABS} active={tab} onSelect={setTab} ariaLabel="Node sections" panelId="node-panel" />
 
@@ -257,7 +279,7 @@ export function NodeDetail({
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {deps.map((d) => {
                 const recipe = recipes.find((r) => r.id === d.recipeId) ?? null;
-                const connect = recipe ? externalConnectView(d, recipe, [spark]) : null;
+                const connect = recipe ? externalConnectView(d, recipe, [spark], runtimeLabels) : null;
                 return (
                   <div key={d.recipeId}>
                     <div
@@ -357,7 +379,11 @@ export function NodeDetail({
 }
 
 /** Convenience: external connect panel for a deployment row in this node. */
-export function nodeConnectPanel(view: { deployment: DeploymentStatus; nodes: SparkSnapshot[] } | null, recipe: RecipePublic | null) {
+export function nodeConnectPanel(
+  view: { deployment: DeploymentStatus; nodes: SparkSnapshot[] } | null,
+  recipe: RecipePublic | null,
+  labels?: Record<string, string> | null
+) {
   if (!view || view.deployment.managedBy !== "external") return null;
   return (
     <ExternalConnectPanel
@@ -365,7 +391,7 @@ export function nodeConnectPanel(view: { deployment: DeploymentStatus; nodes: Sp
         endpoint: `http://${view.nodes[0]?.lanIp ?? view.deployment.nodeIds[0] ?? "localhost"}:${view.deployment.apiPort}/v1`,
         hasKey: !!recipe?.env.some((e) => e.secret && (e.hasValue ?? !!e.value)),
         nodeNames: view.nodes.map((n) => n.name),
-        note: `Launched outside SparkDash — manage via ${runtimeLabel(recipe?.runtime)}`,
+        note: `Launched outside SparkDash — manage via ${runtimeLabel(recipe?.runtime, labels)}`,
       }}
       recipe={recipe}
     />

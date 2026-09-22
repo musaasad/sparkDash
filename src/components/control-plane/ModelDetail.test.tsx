@@ -187,4 +187,22 @@ describe("ModelDetail IA", () => {
     expect(deploy?.disabled).toBe(true);
     expect(container.textContent).toContain("View");
   });
+
+  it("folds legacy deep-link tabs into the four spec surfaces", async () => {
+    for (const [legacy, expected] of [["performance", "Benchmarks"], ["configuration", "Recipes"], ["history", "Overview"]] as const) {
+      cleanupRenders();
+      const { container } = render(
+        <ModelDetail modelId="m1" initialTab={legacy} sparks={[spark]} navigate={() => {}} onDataChanged={() => {}} />
+      );
+      await flush();
+      expect(container.querySelector(".cp-tab.is-active")?.textContent).toBe(expected);
+      expect([...container.querySelectorAll(".cp-tab")].map((t) => t.textContent)).toEqual([
+        "Overview",
+        "Recipes",
+        "Deployments",
+        "Live Console",
+        "Benchmarks",
+      ]);
+    }
+  });
 });

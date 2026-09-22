@@ -8,9 +8,10 @@ vi.mock("../../api/client", () => ({
   fetchDiscovery: vi.fn(),
   fetchModels: vi.fn(),
   adoptDiscovered: vi.fn(),
+  fetchRuntimes: vi.fn(),
 }));
 
-const { fetchDiscovery, fetchModels, adoptDiscovered } = await import("../../api/client");
+const { fetchDiscovery, fetchModels, adoptDiscovered, fetchRuntimes } = await import("../../api/client");
 const discovery = vi.mocked(fetchDiscovery);
 const models = vi.mocked(fetchModels);
 const adopt = vi.mocked(adoptDiscovered);
@@ -44,6 +45,9 @@ beforeEach(() => {
   adopt.mockReset();
   models.mockResolvedValue({ models: [{ id: "m1", name: "M One", archived: false } as never] });
   adopt.mockResolvedValue({} as never);
+  vi.mocked(fetchRuntimes).mockResolvedValue({
+    runtimes: [{ id: "vllm", label: "vLLM", launchable: true }],
+  } as never);
 });
 
 describe("DiscoveredRuntimes", () => {

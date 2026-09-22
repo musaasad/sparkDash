@@ -22,6 +22,14 @@ import { saveRecipeEnv, loadRecipeEnv } from "../secretsStore.js";
 
 const MAX_RECIPES = 1024;
 
+/** Non-leaking secret hint: first 3 and last 4 characters. */
+function maskHint(value) {
+  if (value == null || value === "") return null;
+  const s = String(value);
+  if (s.length <= 8) return `${s.slice(0, 2)}…`;
+  return `${s.slice(0, 3)}…${s.slice(-4)}`;
+}
+
 export class RecipeRegistry {
   /** @param {{ path?: string, getKnownNodeIds?: () => string[] }} [opts] */
   constructor(opts = {}) {
@@ -100,7 +108,7 @@ export class RecipeRegistry {
     if (!recipe) return recipe;
     const env = (recipe.launch?.env || []).map((e) =>
       e.secretRef
-        ? { name: e.name, secret: true, hasValue: e.value != null && e.value !== "", secretRef: e.secretRef }
+        ? { name: e.name, secret: true, hasValue: e.value != null && e.value !== "", secretRef: e.secretRef, hint: maskHint(e.value) }
         : { name: e.name, value: e.value ?? "", secret: false }
     );
     const modelId = recipe.modelRef?.modelId ?? null;
@@ -122,6 +130,7 @@ export class RecipeRegistry {
       launcher: recipe.launch.command ?? null,
       modelPath: weightPath,
       archived: Boolean(recipe.archived || recipe.lifecycleState === "archived"),
+      secretsMissing: Boolean(recipe.metadata?.secretsMissing),
     };
   }
 
@@ -260,10 +269,14 @@ export class RecipeRegistry {
     body.provenance = { sourceRecipeId: src.id };
     body.createdAt = null;
     body.updatedAt = null;
-    // Re-point secret refs at the new id so they resolve independently.
+    // Re-point secret refs at the new id so they resolve independently. Values
+    // are NOT copied → flag the copy as missing secrets until they are re-entered.
     body.launch.env = (body.launch.env || []).map((e) =>
-      e.secretRef ? { ...e, secretRef: `recipe:${newId}:${e.name}` } : { ...e }
+      e.secretRef ? { ...e, secretRef: `recipe:${newId}:${e.name}`, value: null } : { ...e }
     );
+    if (body.launch.env.some((e) => e.secretRef)) {
+      body.metadata = { ...(body.metadata || {}), secretsMissing: true };
+    }
     body.archived = false;
     return this.upsert(body);
   }
@@ -306,6 +319,19 @@ export class RecipeRegistry {
         const err = new Error(`cannot validate: ${check.errors.join("; ")}`);
         err.status = 400;
         throw err;
+      }
+      // A duplicated recipe re-points secretRefs without copying values — a
+      // re-entered value is required before it may be marked validated.
+      if (recipe.metadata?.secretsMissing) {
+        const missing = (recipe.launch?.env || []).filter((e) => e.secretRef && !e.value);
+        if (missing.length) {
+          const err = new Error(
+            `secret values missing after duplicate — re-enter: ${missing.map((e) => e.name).join(", ")}`
+          );
+          err.status = 409;
+          throw err;
+        }
+        delete recipe.metadata.secretsMissing;
       }
     }
     applyTransition(recipe, to, opts);

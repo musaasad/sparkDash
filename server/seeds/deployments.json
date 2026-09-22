@@ -16,7 +16,7 @@
       "modelId": "deepseek-v41-flash",
       "recipeId": "v41-tp2-vllm-dgx12",
       "nodeIds": ["dgx-1", "dgx-2"],
-      "desiredState": "running",
+      "desiredState": "unknown",
       "metadata": { "managedBy": "external" },
       "createdAt": 1790041919793,
       "updatedAt": 1790041919793

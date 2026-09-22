@@ -63,6 +63,14 @@ describe("NodeDetail", () => {
     expect(tabs).toEqual(["Overview", "GPUs", "Models", "Logs", "Settings"]);
   });
 
+  it("uses the cp node rail instead of the legacy pill-nav", () => {
+    cleanupRenders();
+    const { container } = render(<NodeDetail {...props()} />);
+    expect(container.querySelector(".cp-node-rail")).not.toBeNull();
+    expect(container.querySelector(".pill-nav")).toBeNull();
+    expect(container.querySelector(".cp-node-tab.is-active")?.textContent).toContain("DGX 2");
+  });
+
   it("switches to the Models tab showing the node deployment row", () => {
     cleanupRenders();
     const { container } = render(<NodeDetail {...props()} />);

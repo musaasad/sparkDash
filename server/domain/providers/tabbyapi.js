@@ -7,7 +7,7 @@ import { RuntimeProvider } from "./base.js";
  */
 export class TabbyApiProvider extends RuntimeProvider {
   constructor() {
-    super({ runtimes: ["tabbyapi-exl3"], label: "TabbyAPI", launchable: true });
+    super({ runtimes: ["tabbyapi-exl3"], label: "TabbyAPI", launchable: true, processTerms: ["tabbyapi"] });
   }
 
   detect(signals) {

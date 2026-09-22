@@ -5,12 +5,14 @@
 
 interface IconProps {
   className?: string;
+  /** Square pixel size; defaults to 14. */
+  size?: number;
 }
 
-function baseProps(className?: string) {
+function baseProps(className?: string, size = 14) {
   return {
-    width: 14,
-    height: 14,
+    width: size,
+    height: size,
     viewBox: "0 0 24 24",
     fill: "none",
     stroke: "currentColor",
@@ -22,35 +24,35 @@ function baseProps(className?: string) {
   };
 }
 
-export function PanelIcon({ className }: IconProps) {
+export function PanelIcon({ className, size }: IconProps) {
   return (
-    <svg {...baseProps(className)}>
+    <svg {...baseProps(className, size)}>
       <rect x="3" y="4" width="18" height="16" rx="2" />
       <line x1="9" y1="4" x2="9" y2="20" />
     </svg>
   );
 }
 
-export function SearchIcon({ className }: IconProps) {
+export function SearchIcon({ className, size }: IconProps) {
   return (
-    <svg {...baseProps(className)}>
+    <svg {...baseProps(className, size)}>
       <circle cx="11" cy="11" r="7" />
       <line x1="16.5" y1="16.5" x2="21" y2="21" />
     </svg>
   );
 }
 
-export function ActivityIcon({ className }: IconProps) {
+export function ActivityIcon({ className, size }: IconProps) {
   return (
-    <svg {...baseProps(className)}>
+    <svg {...baseProps(className, size)}>
       <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
     </svg>
   );
 }
 
-export function DiskIcon({ className }: IconProps) {
+export function DiskIcon({ className, size }: IconProps) {
   return (
-    <svg {...baseProps(className)}>
+    <svg {...baseProps(className, size)}>
       <ellipse cx="12" cy="5" rx="9" ry="3" />
       <path d="M21 5v6c0 1.66-4 3-9 3s-9-1.34-9-3V5" />
       <path d="M21 11v6c0 1.66-4 3-9 3s-9-1.34-9-3v-6" />
@@ -58,9 +60,9 @@ export function DiskIcon({ className }: IconProps) {
   );
 }
 
-export function NetworkIcon({ className }: IconProps) {
+export function NetworkIcon({ className, size }: IconProps) {
   return (
-    <svg {...baseProps(className)}>
+    <svg {...baseProps(className, size)}>
       <path d="M5 12.55a11 11 0 0 1 14.08 0" />
       <path d="M1.42 9a16 16 0 0 1 21.16 0" />
       <path d="M8.53 16.11a6 6 0 0 1 6.95 0" />
@@ -69,9 +71,9 @@ export function NetworkIcon({ className }: IconProps) {
   );
 }
 
-export function BotIcon({ className }: IconProps) {
+export function BotIcon({ className, size }: IconProps) {
   return (
-    <svg {...baseProps(className)}>
+    <svg {...baseProps(className, size)}>
       <rect x="4" y="8" width="16" height="12" rx="2" />
       <path d="M12 8V4M9 2h6" />
       <circle cx="9" cy="14" r="1.2" fill="currentColor" stroke="none" />
@@ -82,18 +84,18 @@ export function BotIcon({ className }: IconProps) {
 }
 
 /** Chevron pointing down; rotate -90° when a section is collapsed. */
-export function ChevronDownIcon({ className }: IconProps) {
+export function ChevronDownIcon({ className, size }: IconProps) {
   return (
-    <svg {...baseProps(className)}>
+    <svg {...baseProps(className, size)}>
       <path d="M6 9l6 6 6-6" />
     </svg>
   );
 }
 
 /** External link (open ComfyUI). */
-export function ExternalLinkIcon({ className }: IconProps) {
+export function ExternalLinkIcon({ className, size }: IconProps) {
   return (
-    <svg {...baseProps(className)}>
+    <svg {...baseProps(className, size)}>
       <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
       <path d="M15 3h6v6" />
       <path d="M10 14L21 3" />
@@ -102,9 +104,9 @@ export function ExternalLinkIcon({ className }: IconProps) {
 }
 
 /** ComfyUI / image-workflow service. */
-export function ComfyIcon({ className }: IconProps) {
+export function ComfyIcon({ className, size }: IconProps) {
   return (
-    <svg {...baseProps(className)}>
+    <svg {...baseProps(className, size)}>
       <rect x="3" y="5" width="18" height="14" rx="2" />
       <circle cx="9" cy="11" r="2" />
       <path d="M3 16l5-4 3 2 4-5 6 7" />
@@ -112,9 +114,9 @@ export function ComfyIcon({ className }: IconProps) {
   );
 }
 
-export function GearIcon({ className = "" }: { className?: string }) {
+export function GearIcon({ className = "", size }: IconProps) {
   return (
-    <svg {...baseProps(className)}>
+    <svg {...baseProps(className, size)}>
       <circle cx="12" cy="12" r="3" />
       <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
@@ -122,27 +124,27 @@ export function GearIcon({ className = "" }: { className?: string }) {
   );
 }
 
-export function SunIcon({ className = "" }: { className?: string }) {
+export function SunIcon({ className = "", size }: IconProps) {
   return (
-    <svg {...baseProps(className)}>
+    <svg {...baseProps(className, size)}>
       <circle cx="12" cy="12" r="4" />
       <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
     </svg>
   );
 }
 
-export function MoonIcon({ className = "" }: { className?: string }) {
+export function MoonIcon({ className = "", size }: IconProps) {
   return (
-    <svg {...baseProps(className)}>
+    <svg {...baseProps(className, size)}>
       <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
     </svg>
   );
 }
 
 /** Smaller sun with fewer rays — for light theme distinction. */
-export function SunDimIcon({ className = "" }: { className?: string }) {
+export function SunDimIcon({ className = "", size }: IconProps) {
   return (
-    <svg {...baseProps(className)}>
+    <svg {...baseProps(className, size)}>
       <circle cx="12" cy="12" r="4" />
       <path d="M12 2v2M12 22v2M2 12h2M22 12h2" />
     </svg>
@@ -150,35 +152,35 @@ export function SunDimIcon({ className = "" }: { className?: string }) {
 }
 
 /** Moon with a tiny star — for OLED theme. */
-export function MoonStarIcon({ className = "" }: { className?: string }) {
+export function MoonStarIcon({ className = "", size }: IconProps) {
   return (
-    <svg {...baseProps(className)}>
+    <svg {...baseProps(className, size)}>
       <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
       <path d="M17 5l.5 1 1 .5-1 .5-.5 1-.5-1-1-.5 1-.5z" />
     </svg>
   );
 }
 
-export function EditIcon({ className = "" }: { className?: string }) {
+export function EditIcon({ className = "", size }: IconProps) {
   return (
-    <svg {...baseProps(className)}>
+    <svg {...baseProps(className, size)}>
       <path d="M12 20h9" />
       <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
     </svg>
   );
 }
 
-export function PlusIcon({ className = "" }: { className?: string }) {
+export function PlusIcon({ className = "", size }: IconProps) {
   return (
-    <svg {...baseProps(className)}>
+    <svg {...baseProps(className, size)}>
       <path d="M12 5v14M5 12h14" />
     </svg>
   );
 }
 
-export function GridIcon({ className = "" }: { className?: string }) {
+export function GridIcon({ className = "", size }: IconProps) {
   return (
-    <svg {...baseProps(className)}>
+    <svg {...baseProps(className, size)}>
       <rect x="3" y="3" width="7" height="7" rx="1" />
       <rect x="14" y="3" width="7" height="7" rx="1" />
       <rect x="3" y="14" width="7" height="7" rx="1" />
@@ -187,35 +189,35 @@ export function GridIcon({ className = "" }: { className?: string }) {
   );
 }
 
-export function MemoryIcon({ className = "" }: { className?: string }) {
+export function MemoryIcon({ className = "", size }: IconProps) {
   return (
-    <svg {...baseProps(className)}>
+    <svg {...baseProps(className, size)}>
       <rect x="2" y="6" width="20" height="12" rx="2" />
       <path d="M6 12h4M14 12h4" />
     </svg>
   );
 }
 
-export function BoltIcon({ className = "" }: { className?: string }) {
+export function BoltIcon({ className = "", size }: IconProps) {
   return (
-    <svg {...baseProps(className)}>
+    <svg {...baseProps(className, size)}>
       <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
     </svg>
   );
 }
 
-export function RotateIcon({ className = "" }: { className?: string }) {
+export function RotateIcon({ className = "", size }: IconProps) {
   return (
-    <svg {...baseProps(className)}>
+    <svg {...baseProps(className, size)}>
       <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
     </svg>
   );
 }
 
 /** Power symbol — used for graceful shutdown. */
-export function PowerOffIcon({ className = "" }: { className?: string }) {
+export function PowerOffIcon({ className = "", size }: IconProps) {
   return (
-    <svg {...baseProps(className)}>
+    <svg {...baseProps(className, size)}>
       <path d="M18.36 6.64a9 9 0 1 1-12.73 0" />
       <line x1="12" y1="2" x2="12" y2="12" />
     </svg>
@@ -223,9 +225,9 @@ export function PowerOffIcon({ className = "" }: { className?: string }) {
 }
 
 /** Circle-i — for short help / tooltips. */
-export function InfoIcon({ className = "" }: { className?: string }) {
+export function InfoIcon({ className = "", size }: IconProps) {
   return (
-    <svg {...baseProps(className)}>
+    <svg {...baseProps(className, size)}>
       <circle cx="12" cy="12" r="10" />
       <line x1="12" y1="16" x2="12" y2="12" />
       <line x1="12" y1="8" x2="12.01" y2="8" />
@@ -234,9 +236,9 @@ export function InfoIcon({ className = "" }: { className?: string }) {
 }
 
 /** Sun burst — used for Wake-on-LAN (distinct from PowerOffIcon). */
-export function PowerOnIcon({ className = "" }: { className?: string }) {
+export function PowerOnIcon({ className = "", size }: IconProps) {
   return (
-    <svg {...baseProps(className)}>
+    <svg {...baseProps(className, size)}>
       <circle cx="12" cy="12" r="4" />
       <line x1="12" y1="2" x2="12" y2="5" />
       <line x1="12" y1="19" x2="12" y2="22" />
@@ -251,7 +253,7 @@ export function PowerOnIcon({ className = "" }: { className?: string }) {
 }
 
 /** Comfortable density: three widely-spaced horizontal rows. */
-export function ComfortableIcon({ className = "" }: { className?: string }) {
+export function ComfortableIcon({ className = "", size }: IconProps) {
   return (
     <svg {...baseProps()}>
       <line x1="4" y1="6" x2="20" y2="6" />
@@ -262,12 +264,153 @@ export function ComfortableIcon({ className = "" }: { className?: string }) {
 }
 
 /** Compact UI: three tightly-spaced horizontal rows. */
-export function CompactIcon({ className = "" }: { className?: string }) {
+export function CompactIcon({ className = "", size }: IconProps) {
   return (
     <svg {...baseProps()}>
       <line x1="4" y1="9" x2="20" y2="9" />
       <line x1="4" y1="12" x2="20" y2="12" />
       <line x1="4" y1="15" x2="20" y2="15" />
+    </svg>
+  );
+}
+
+// ─── Glyph replacements (SVG only, no unicode/emoji) ─────────────────
+
+/** Warning triangle with a bang. */
+export function WarningIcon({ className = "", size }: IconProps) {
+  return (
+    <svg {...baseProps(className, size)}>
+      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+      <line x1="12" y1="9" x2="12" y2="13" />
+      <line x1="12" y1="17" x2="12.01" y2="17" />
+    </svg>
+  );
+}
+
+/** Close / dismiss X. */
+export function CloseIcon({ className = "", size }: IconProps) {
+  return (
+    <svg {...baseProps(className, size)}>
+      <line x1="18" y1="6" x2="6" y2="18" />
+      <line x1="6" y1="6" x2="18" y2="18" />
+    </svg>
+  );
+}
+
+/** Checkmark. */
+export function CheckIcon({ className = "", size }: IconProps) {
+  return (
+    <svg {...baseProps(className, size)}>
+      <path d="M20 6 9 17l-5-5" />
+    </svg>
+  );
+}
+
+/** Sort caret up. */
+export function CaretUpIcon({ className = "", size }: IconProps) {
+  return (
+    <svg {...baseProps(className, size)}>
+      <path d="M6 15l6-6 6 6" />
+    </svg>
+  );
+}
+
+/** Sort caret down. */
+export function CaretDownIcon({ className = "", size }: IconProps) {
+  return (
+    <svg {...baseProps(className, size)}>
+      <path d="M6 9l6 6 6-6" />
+    </svg>
+  );
+}
+
+/** Two overlapping squares — copy affordance. */
+export function CopyIcon({ className = "", size }: IconProps) {
+  return (
+    <svg {...baseProps(className, size)}>
+      <rect x="9" y="9" width="12" height="12" rx="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
+}
+
+/** Horizontal three-dot overflow / kebab. */
+export function KebabIcon({ className = "", size }: IconProps) {
+  return (
+    <svg {...baseProps(className, size)} strokeWidth={2.4}>
+      <circle cx="12" cy="12" r="1" fill="currentColor" />
+      <circle cx="5" cy="12" r="1" fill="currentColor" />
+      <circle cx="19" cy="12" r="1" fill="currentColor" />
+    </svg>
+  );
+}
+
+/** Play triangle — resume. */
+export function PlayIcon({ className = "", size }: IconProps) {
+  return (
+    <svg {...baseProps(className, size)}>
+      <path d="M6 4l14 8-14 8z" />
+    </svg>
+  );
+}
+
+/** Range marker banner. */
+export function MarkerIcon({ className = "", size }: IconProps) {
+  return (
+    <svg {...baseProps(className, size)}>
+      <path d="M4 5h11l5 3-5 3H4z" />
+      <line x1="4" y1="5" x2="4" y2="19" />
+    </svg>
+  );
+}
+
+/** Half-filled circle — SparkDash-managed lifecycle. */
+export function ManagedIcon({ className = "", size }: IconProps) {
+  return (
+    <svg {...baseProps(className, size)}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+/** Ringed dot — externally launched / observed. */
+export function ExternalManagedIcon({ className = "", size }: IconProps) {
+  return (
+    <svg {...baseProps(className, size)}>
+      <circle cx="12" cy="12" r="9" />
+      <circle cx="12" cy="12" r="3" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+/** Left-panel layout — settings general. */
+export function LayoutIcon({ className = "", size }: IconProps) {
+  return (
+    <svg {...baseProps(className, size)}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <line x1="9" y1="4" x2="9" y2="20" />
+      <line x1="5" y1="8" x2="7" y2="8" />
+    </svg>
+  );
+}
+
+/** Two-way swap arrows — access. */
+export function SwapIcon({ className = "", size }: IconProps) {
+  return (
+    <svg {...baseProps(className, size)}>
+      <path d="M7 4v14M7 4 4 7M7 18l3-3" />
+      <path d="M17 20V6M17 20l3-3M17 6l-3 3" />
+    </svg>
+  );
+}
+
+/** Ringed inner dot — limits. */
+export function CircleDotIcon({ className = "", size }: IconProps) {
+  return (
+    <svg {...baseProps(className, size)}>
+      <circle cx="12" cy="12" r="9" />
+      <circle cx="12" cy="12" r="3.5" />
     </svg>
   );
 }

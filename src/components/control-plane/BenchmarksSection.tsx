@@ -6,7 +6,8 @@ import { DataTable, CountedTabs, type Column } from "../ui/DataTable";
 import { Chip, StatusPill, SkeletonRows } from "../ui/Status";
 import { TimeSeriesChart } from "../ui/TimeSeriesChart";
 import { SectionBand } from "../ui/SectionBand";
-import { BoltIcon } from "../ui/icons";
+import { BoltIcon, KebabIcon, ActivityIcon, NetworkIcon } from "../ui/icons";
+import { TemplatePicker, type TemplatePickerItem } from "../ui/TemplatePicker";
 import { relativeAge } from "./fleetModel";
 import {
   anchorTiles,
@@ -40,6 +41,13 @@ const STATUS_DISPLAY: Record<string, string> = {
   cancelled: "stopped",
 };
 
+/** Spec §7: suite creation runs through the same template picker. */
+const BENCH_TEMPLATES: TemplatePickerItem[] = [
+  { id: "decode-conc", name: "Decode · concurrency sweep", description: "tok/s versus concurrency at a fixed context.", icon: <BoltIcon size={20} /> },
+  { id: "prefill-ctx", name: "Prefill · context sweep", description: "TTFT across growing prompt sizes.", icon: <ActivityIcon size={20} /> },
+  { id: "decode-ctx", name: "Decode · long-context", description: "Steady-state throughput at long context.", icon: <NetworkIcon size={20} /> },
+];
+
 /**
  * Benchmark history across the fleet. Comparison only pairs runs whose kind,
  * recipe and workload shape match. All metrics come from stored job results.
@@ -50,6 +58,8 @@ export function BenchmarksSection({ sparks, recipes, navigate }: BenchmarksProps
   const [kind, setKind] = useState<"all" | BenchKind>("all");
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
+  const [suiteCreating, setSuiteCreating] = useState(false);
+  const [suites, setSuites] = useState<{ id: string; name: string; kind: BenchKind; at: number }[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -114,6 +124,13 @@ export function BenchmarksSection({ sparks, recipes, navigate }: BenchmarksProps
       return next;
     });
 
+  /** Local (dry-run) suite creation — nothing is scheduled server-side yet. */
+  function createSuite(name: string, suiteKind: BenchKind) {
+    const id = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || `suite-${Date.now()}`;
+    setSuites((prev) => [{ id, name, kind: suiteKind, at: Date.now() }, ...prev]);
+    setSuiteCreating(false);
+  }
+
   const columns: Column<BenchEntry>[] = [
     {
       key: "status",
@@ -170,7 +187,7 @@ export function BenchmarksSection({ sparks, recipes, navigate }: BenchmarksProps
               toggleExpand(r.key);
             }}
           >
-            ⋯
+            <KebabIcon size={14} />
           </button>
         </span>
       ),
@@ -208,8 +225,43 @@ export function BenchmarksSection({ sparks, recipes, navigate }: BenchmarksProps
               Clear
             </button>
           ) : null}
+          <button
+            type="button"
+            className={`cp-btn ${suiteCreating ? "ghost" : "primary"}`}
+            onClick={() => setSuiteCreating((v) => !v)}
+          >
+            {suiteCreating ? "Cancel" : "+ New suite"}
+          </button>
         </div>
       </div>
+
+      {suiteCreating ? (
+        <TemplatePicker
+          title="Start a benchmark suite from a template"
+          templates={BENCH_TEMPLATES}
+          onPick={(id) => {
+            const t = BENCH_TEMPLATES.find((x) => x.id === id);
+            createSuite(t?.name ?? id, t?.id.startsWith("prefill") ? "prefill" : "decode");
+          }}
+          onScratch={() => createSuite(`Suite ${suites.length + 1}`, kind === "prefill" ? "prefill" : "decode")}
+        />
+      ) : null}
+
+      {suites.length > 0 ? (
+        <div className="cp-section-block">
+          <SectionBand icon={<ActivityIcon />} title="Suites" count={suites.length} />
+          <div className="cp-picker-grid">
+            {suites.map((s) => (
+              <div key={s.id} className="cp-template-card">
+                <span className="cp-template-name">{s.name}</span>
+                <span className="cp-template-desc">
+                  {s.kind} suite · created {relativeAge(s.at)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       <SectionBand icon={<BoltIcon />} title="Fleet runs" count={filtered.length} />
 

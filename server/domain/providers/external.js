@@ -10,7 +10,7 @@ import { RuntimeProvider, normalizeServedId } from "./base.js";
  */
 export class ExternalProvider extends RuntimeProvider {
   constructor() {
-    super({ runtimes: ["custom", "llama.cpp"], label: "External", launchable: false });
+    super({ runtimes: ["custom", "llama.cpp"], label: "External", launchable: false, processTerms: ["llama"] });
   }
 
   detect(signals) {

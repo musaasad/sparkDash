@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import type { SparkSnapshot, Settings } from "../../api/types";
 import type { Route } from "../../hooks/router";
 import { fetchDeployments, fetchSettings, updateSettings } from "../../api/client";
 import { getDeployments, subscribeDomain } from "../../hooks/domainStore";
 import { DataTable, type Column } from "../ui/DataTable";
 import { Chip, EmptyState, StatusPill } from "../ui/Status";
+import { Modal } from "../ui/Modal";
+import { LayoutIcon, SwapIcon, CopyIcon, MarkerIcon, CircleDotIcon, WarningIcon } from "../ui/icons";
 import { SettingRow, RadioCard, useDirtyState, useTypeToConfirm, validateIntRange, validatePort } from "../ui/form";
 import { AddSparkDialog } from "../AddSparkDialog";
 import { EditSparkDialog } from "../EditSparkDialog";
@@ -19,6 +21,11 @@ interface SettingsProps {
   activityLatestSeq?: number;
   /** Real local dry-run clear: hides loaded activity up to the newest seq. */
   onClearActivity?: (newestSeq: number) => void;
+  /** Notifies the shell so route changes can also run the dirty guard. */
+  onDirtyChange?: (dirty: boolean) => void;
+  /** Shell-owned imperative handles so route-change save/discard is possible. */
+  saveRef?: { current: (() => Promise<boolean>) | null };
+  discardRef?: { current: (() => void) | null };
 }
 
 type SectionKey = "general" | "access" | "integrations" | "runtimes" | "limits" | "danger";
@@ -26,12 +33,12 @@ type SectionKey = "general" | "access" | "integrations" | "runtimes" | "limits" 
 const THEME_KEY = "sparkdash-theme";
 type Theme = "white" | "light" | "dark" | "oled";
 
-const SECTIONS: Array<{ key: SectionKey; label: string; danger?: boolean; icon?: string }> = [
-  { key: "general", label: "General", icon: "◧" },
-  { key: "access", label: "Access", icon: "⇄" },
-  { key: "integrations", label: "Integrations", icon: "⧉" },
-  { key: "runtimes", label: "Runtimes", icon: "▤" },
-  { key: "limits", label: "Limits", icon: "◍" },
+const SECTIONS: Array<{ key: SectionKey; label: string; danger?: boolean; icon?: ReactNode }> = [
+  { key: "general", label: "General", icon: <LayoutIcon size={16} /> },
+  { key: "access", label: "Access", icon: <SwapIcon size={16} /> },
+  { key: "integrations", label: "Integrations", icon: <CopyIcon size={16} /> },
+  { key: "runtimes", label: "Runtimes", icon: <MarkerIcon size={16} /> },
+  { key: "limits", label: "Limits", icon: <CircleDotIcon size={16} /> },
   { key: "danger", label: "Danger Zone", danger: true },
 ];
 
@@ -56,12 +63,13 @@ function readTheme(): Theme {
  * Danger Zone last. Validation is inline adjacent to the field; Save is
  * section-scoped and stays disabled until the section is dirty and valid.
  */
-export function SettingsSection({ sparks, navigate, onSparksChanged, activityLatestSeq = 0, onClearActivity }: SettingsProps) {
+export function SettingsSection({ sparks, navigate, onSparksChanged, activityLatestSeq = 0, onClearActivity, onDirtyChange, saveRef, discardRef }: SettingsProps) {
   const [addOpen, setAddOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [serverOpen, setServerOpen] = useState(false);
   const [dryRun, setDryRun] = useState<boolean | null>(null);
   const [section, setSection] = useState<SectionKey>("general");
+  const [pendingSection, setPendingSection] = useState<SectionKey | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -70,6 +78,7 @@ export function SettingsSection({ sparks, navigate, onSparksChanged, activityLat
   const [activityCleared, setActivityCleared] = useState(false);
 
   const form = useDirtyState<Settings | null>(null);
+  const baseline = useRef<Settings | null>(null);
   const activityConfirm = useTypeToConfirm("activity");
   const benchConfirm = useTypeToConfirm("benchmarks");
 
@@ -78,7 +87,10 @@ export function SettingsSection({ sparks, navigate, onSparksChanged, activityLat
       .then((r) => setDryRun(r.dryRun))
       .catch(() => setDryRun(null));
     fetchSettings()
-      .then((s) => form.reset(s))
+      .then((s) => {
+        baseline.current = s;
+        form.reset(s);
+      })
       .catch((err: Error) => setSaveError(err.message));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -110,22 +122,41 @@ export function SettingsSection({ sparks, navigate, onSparksChanged, activityLat
   const sectionInvalid = sectionKeys.some((k) => errors[k]);
   const canSave = form.dirty && sectionKeys.length > 0 && !sectionInvalid && !saving;
 
-  const saveSection = async () => {
-    if (!settings || !canSave) return;
+  const saveSection = async (): Promise<boolean> => {
+    if (!settings || !canSave) return false;
     const patch: Partial<Settings> = {};
     for (const k of sectionKeys) (patch as Record<string, unknown>)[k] = settings[k];
     setSaving(true);
     setSaveError(null);
     try {
       const saved = await updateSettings(patch);
+      baseline.current = saved;
       form.reset(saved);
       setToast(`${SECTIONS.find((s) => s.key === section)?.label} saved`);
+      return true;
     } catch (err: unknown) {
       setSaveError(err instanceof Error ? err.message : String(err));
+      return false;
     } finally {
       setSaving(false);
     }
   };
+
+  const discardDirty = () => {
+    if (baseline.current) form.reset(baseline.current);
+  };
+
+  // Publish dirty state + imperative handles to the shell guard.
+  useEffect(() => {
+    onDirtyChange?.(form.dirty);
+    if (saveRef) saveRef.current = saveSection;
+    if (discardRef) discardRef.current = discardDirty;
+  });
+
+  function selectSection(next: SectionKey) {
+    if (form.dirty && next !== section) setPendingSection(next);
+    else setSection(next);
+  }
 
   const columns: Column<SparkSnapshot>[] = [
     {
@@ -176,11 +207,11 @@ export function SettingsSection({ sparks, navigate, onSparksChanged, activityLat
               type="button"
               className={`cp-setting-nav${section === s.key ? " is-active" : ""}${s.danger ? " danger" : ""}`}
               aria-current={section === s.key}
-              onClick={() => setSection(s.key)}
+              onClick={() => selectSection(s.key)}
             >
               {s.danger ? (
                 <span className="cp-danger-icon" aria-hidden="true">
-                  ⚠
+                  <WarningIcon size={14} />
                 </span>
               ) : (
                 <span className="cp-setting-nav-icon" aria-hidden="true">
@@ -459,7 +490,7 @@ export function SettingsSection({ sparks, navigate, onSparksChanged, activityLat
 
               <div className="cp-danger-block">
                 <div className="cp-danger-head">
-                  <span className="cp-danger-icon" aria-hidden="true">⚠</span>
+                  <span className="cp-danger-icon" aria-hidden="true"><WarningIcon size={14} /></span>
                   <span className="cp-danger-title">Clear activity history</span>
                   <Chip tone="mono">dry-run</Chip>
                 </div>
@@ -494,7 +525,7 @@ export function SettingsSection({ sparks, navigate, onSparksChanged, activityLat
 
               <div className="cp-danger-block">
                 <div className="cp-danger-head">
-                  <span className="cp-danger-icon" aria-hidden="true">⚠</span>
+                  <span className="cp-danger-icon" aria-hidden="true"><WarningIcon size={14} /></span>
                   <span className="cp-danger-title">Clear benchmark history</span>
                   <Chip tone="mono">dry-run</Chip>
                 </div>
@@ -529,6 +560,30 @@ export function SettingsSection({ sparks, navigate, onSparksChanged, activityLat
           ) : null}
         </section>
       </div>
+
+      {/* Unsaved-changes guard (spec §6): required before a section switch. */}
+      <Modal
+        open={pendingSection != null}
+        title="Unsaved changes"
+        consequence="This section has edits that are not saved yet. Save them, or discard and continue."
+        confirmLabel="Save & continue"
+        discardLabel="Discard"
+        cancelLabel="Cancel"
+        busy={saving}
+        onConfirm={async () => {
+          const next = pendingSection;
+          const ok = form.dirty ? await saveSection() : true;
+          setPendingSection(null);
+          if (ok && next) setSection(next);
+        }}
+        onDiscard={() => {
+          const next = pendingSection;
+          discardDirty();
+          setPendingSection(null);
+          if (next) setSection(next);
+        }}
+        onClose={() => setPendingSection(null)}
+      />
 
       {toast ? (
         <div className="cp-toast" role="status">

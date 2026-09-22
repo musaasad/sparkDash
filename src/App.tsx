@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useSnapshot } from "./hooks/useSnapshot";
 import { useAppRoute } from "./hooks/useRoute";
 import { useControlPlaneRoute } from "./hooks/router";
@@ -25,6 +25,7 @@ import { ModelDetail } from "./components/control-plane/ModelDetail";
 import { ActivitySection } from "./components/control-plane/ActivitySection";
 import { BenchmarksSection } from "./components/control-plane/BenchmarksSection";
 import { SettingsSection } from "./components/control-plane/SettingsSection";
+import { Modal } from "./components/ui/Modal";
 import type { Settings, SparkSnapshot } from "./api/types";
 
 function placeholderSnapshot(
@@ -173,6 +174,23 @@ function DashboardApp() {
   const telemetryStale =
     lastValidSnapshotAt != null && telemetryNow - lastValidSnapshotAt > staleAfterMs;
 
+  // Dirty-state guard for Settings: leaving the section while unsaved prompts.
+  const [settingsDirty, setSettingsDirty] = useState(false);
+  const [pendingRoute, setPendingRoute] = useState<typeof route | null>(null);
+  const settingsSaveRef = useRef<(() => Promise<boolean>) | null>(null);
+  const settingsDiscardRef = useRef<(() => void) | null>(null);
+
+  const guardNavigate = useCallback(
+    (next: typeof route) => {
+      if (settingsDirty && route.section === "settings" && next.section !== "settings") {
+        setPendingRoute(next);
+        return;
+      }
+      navigate(next);
+    },
+    [settingsDirty, route.section, navigate]
+  );
+
   useEffect(() => {
     if (lastValidSnapshotAt == null) return;
     setTelemetryNow(Date.now());
@@ -274,7 +292,7 @@ function DashboardApp() {
       <div className="cp-shell">
         <AppNav
           route={route}
-          navigate={navigate}
+          navigate={guardNavigate}
           connected={connected}
           stale={telemetryStale}
           right={<ThemeSwitch />}
@@ -301,7 +319,7 @@ function DashboardApp() {
             <main className={telemetryStale || !connected ? "telemetry-stale" : undefined}>
               {pageMeta ? (
                 <div>
-                  <Breadcrumb items={crumbs} navigate={navigate} />
+                  <Breadcrumb items={crumbs} navigate={guardNavigate} />
                   <PageHeader title={pageMeta.title} subtitle={pageMeta.subtitle} />
                 </div>
               ) : null}
@@ -310,7 +328,7 @@ function DashboardApp() {
                   sparks={liveSparks}
                   deployments={deployments}
                   recipes={cp.recipes}
-                  navigate={navigate}
+                  navigate={guardNavigate}
                   loaded={cp.loaded || sparks.length > 0}
                   models={cp.models}
                   activity={cp.activity}
@@ -318,7 +336,7 @@ function DashboardApp() {
                 />
               ) : null}
               {route.section === "fleet" ? (
-                <FleetSection sparks={liveSparks} deployments={deployments} recipes={cp.recipes} models={cp.models} navigate={navigate} />
+                <FleetSection sparks={liveSparks} deployments={deployments} recipes={cp.recipes} models={cp.models} navigate={guardNavigate} />
               ) : null}
               {route.section === "node" ? (
                 activeNode ? (
@@ -329,7 +347,7 @@ function DashboardApp() {
                     deployments={deployments}
                     temperatureUnit={settings?.temperatureUnit ?? "celsius"}
                     benchShareImage={settings?.benchShareImage ?? false}
-                    navigate={navigate}
+                    navigate={guardNavigate}
                     onEdit={() => setEditId(activeNode.id)}
                     onAddNode={() => setShowAdd(true)}
                     onSaved={() => void cp.reload()}
@@ -355,7 +373,7 @@ function DashboardApp() {
                   deployments={deployments}
                   sparks={liveSparks}
                   activity={cp.activity}
-                  navigate={navigate}
+                  navigate={guardNavigate}
                   onSaved={() => void cp.reload()}
                 />
               ) : null}
@@ -365,7 +383,7 @@ function DashboardApp() {
                   initialTab={route.tab}
                   initialReqId={route.reqId}
                   sparks={liveSparks}
-                  navigate={navigate}
+                  navigate={guardNavigate}
                   onDataChanged={() => void cp.reload()}
                 />
               ) : null}
@@ -384,21 +402,47 @@ function DashboardApp() {
                 />
               ) : null}
               {route.section === "benchmarks" ? (
-                <BenchmarksSection sparks={liveSparks} recipes={cp.recipes} navigate={navigate} />
+                <BenchmarksSection sparks={liveSparks} recipes={cp.recipes} navigate={guardNavigate} />
               ) : null}
               {route.section === "settings" ? (
                 <SettingsSection
                   sparks={liveSparks}
-                  navigate={navigate}
+                  navigate={guardNavigate}
                   onSparksChanged={() => void refreshFromApi()}
                   activityLatestSeq={cp.activity.reduce((m, e) => Math.max(m, e.seq), 0)}
                   onClearActivity={setActivityClearedUpTo}
+                  onDirtyChange={setSettingsDirty}
+                  saveRef={settingsSaveRef}
+                  discardRef={settingsDiscardRef}
                 />
               ) : null}
             </main>
           </div>
         </div>
       </div>
+
+      {/* Route-change dirty guard (spec §6) — Save / Discard / Cancel. */}
+      <Modal
+        open={pendingRoute != null}
+        title="Unsaved changes"
+        consequence="Settings has unsaved edits. Save them before leaving, or discard and continue."
+        confirmLabel="Save & leave"
+        discardLabel="Discard"
+        cancelLabel="Cancel"
+        onConfirm={async () => {
+          const next = pendingRoute;
+          const ok = (await settingsSaveRef.current?.()) ?? true;
+          setPendingRoute(null);
+          if (ok && next) navigate(next);
+        }}
+        onDiscard={() => {
+          const next = pendingRoute;
+          settingsDiscardRef.current?.();
+          setPendingRoute(null);
+          if (next) navigate(next);
+        }}
+        onClose={() => setPendingRoute(null)}
+      />
       <HermesUpdateDialog />
       <AddSparkDialog
         open={showAdd}

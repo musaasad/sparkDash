@@ -3,7 +3,7 @@ import { RuntimeProvider } from "./base.js";
 /** SGLang — OpenAI-compatible; native server_info/model_info endpoints. */
 export class SglangProvider extends RuntimeProvider {
   constructor() {
-    super({ runtimes: ["sglang"], label: "SGLang", launchable: true });
+    super({ runtimes: ["sglang"], label: "SGLang", launchable: true, processTerms: ["sglang"] });
   }
 
   detect(signals) {

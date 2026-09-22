@@ -40,11 +40,6 @@
       "healthProbe": { "kind": "http", "path": "/v1/models", "expectUp": [200, 401, 403] },
       "discovery": { "strategy": "process" },
       "logSource": { "kind": "file", "path": "/home/musaasad/tabbyAPI/logs" },
-      "lifecycleCommands": {
-        "start": "taskset -c 5-9,15-19 python main.py &",
-        "stop": "pkill -f main.py",
-        "status": "pgrep -f tabbyapi"
-      },
       "tags": ["tabbyapi", "exl3", "single"],
       "metadata": { "managedBy": "external", "venv": "/home/musaasad/exllamav3/.venv" },
       "lifecycleState": "proven",
@@ -92,11 +87,6 @@
       "healthProbe": { "kind": "http", "path": "/v1/models", "expectUp": [200, 401, 403] },
       "discovery": { "strategy": "process" },
       "logSource": { "kind": "docker", "path": null },
-      "lifecycleCommands": {
-        "start": "docker start vllm-tp2",
-        "stop": "docker stop vllm-tp2",
-        "status": "docker ps --filter name=vllm-tp2"
-      },
       "tags": ["vllm", "tp2", "distributed"],
       "metadata": {
         "managedBy": "external",
