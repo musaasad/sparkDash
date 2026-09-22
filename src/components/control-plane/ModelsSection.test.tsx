@@ -1,8 +1,29 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { ModelsSection } from "./ModelsSection";
 import type { ModelEntry, RecipePublic, DeploymentStatus, SparkSnapshot, ActivityEvent } from "../../api/types";
 import { render, cleanupRenders } from "../../testing/render";
+
+// Hermetic: never touch the live :5556 API. `useRuntimeOptions` reads the
+// runtime registry and the section falls back to fetchActivity.
+vi.mock("../../api/client", () => ({
+  fetchActivity: vi.fn(async () => ({ events: [] })),
+  fetchRuntimes: vi.fn(async () => ({ runtimes: [] })),
+  fetchModels: vi.fn(async () => ({ models: [] })),
+  fetchRecipes: vi.fn(async () => ({ recipes: [] })),
+  fetchDeployments: vi.fn(async () => ({ deployments: [] })),
+  upsertModel: vi.fn(async () => ({ model: { id: "m" } })),
+  upsertRecipe: vi.fn(async () => ({ recipe: { id: "r" } })),
+  duplicateRecipe: vi.fn(async () => ({ recipe: { id: "r" } })),
+  validateRecipe: vi.fn(async () => ({ ok: true, errors: [], warnings: [] })),
+  validateDraftRecipe: vi.fn(async () => ({ ok: true, errors: [], warnings: [] })),
+  createDeployment: vi.fn(async () => ({})),
+  archiveModel: vi.fn(async () => ({})),
+  fetchDiscovery: vi.fn(async () => ({ discovered: [], readOnly: true })),
+  adoptDiscovered: vi.fn(async () => ({})),
+  probeDiscoveryEndpoint: vi.fn(),
+  probeDiscoveryCapabilities: vi.fn(),
+}));
 
 function model(over: Partial<ModelEntry> = {}): ModelEntry {
   return { id: "m1", name: "Qwen Flash", family: "Qwen", notes: "", archived: false, createdAt: 0, updatedAt: 0, ...over };

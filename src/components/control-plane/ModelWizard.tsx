@@ -114,10 +114,28 @@ function seedDraft(seed?: DiscoveredSeed): RecipeDraft {
   return merged;
 }
 
-/** Initial model identity from a seed (slug id + derived weight path). */
+/**
+ * Fields a discovery probe cannot reliably know. They stay BLANK + UNKNOWN
+ * (editable) — SparkDash never guesses a family or fabricates a weight path.
+ */
+const SEED_UNKNOWN_FIELDS = ["family", "weightPath"] as const;
+
+/** Seed provenance with the never-guessed fields forced to UNKNOWN. */
+function seedProv(seed?: DiscoveredSeed): Record<string, SeedProvenance> {
+  if (!seed) return {};
+  const p: Record<string, SeedProvenance> = { ...seed.provenance };
+  for (const k of SEED_UNKNOWN_FIELDS) if (!p[k]) p[k] = "unknown";
+  return p;
+}
+
+/**
+ * Initial model identity from a seed. Name/id come from the discovered model id,
+ * but family and weight path stay blank/UNKNOWN — an external endpoint does not
+ * reliably expose them, so a plausible-looking guess is worse than a blank.
+ */
 function seedModel(seed?: DiscoveredSeed): WizardModel {
   const name = seed?.modelId ?? "";
-  return { id: name ? slugify(name) : "", name, family: "", weightPath: name ? `/${slugify(name)}` : "", variants: [] };
+  return { id: name ? slugify(name) : "", name, family: "", weightPath: "", variants: [] };
 }
 
 interface ModelWizardProps {
@@ -179,7 +197,7 @@ export function ModelWizard({
   });
 
   /** Provenance per discovered field (drives inline badges). */
-  const [prov, setProv] = useState<Record<string, SeedProvenance>>(() => seed?.provenance ?? {});
+  const [prov, setProv] = useState<Record<string, SeedProvenance>>(() => seedProv(seed));
   /** Fields the operator explicitly confirmed from UNKNOWN → user supplied. */
   const [cleared, setCleared] = useState<ReadonlySet<string>>(new Set());
   const [capabilities, setCapabilities] = useState(seed?.capabilities ?? null);
@@ -247,7 +265,7 @@ export function ModelWizard({
       d.nodeIds = sparks.filter((sp) => sp.lanIp === s.host).map((sp) => sp.id).slice(0, topologyNodeRange(d).max);
       return d;
     });
-    setProv(s.provenance);
+    setProv(seedProv(s));
     setCapabilities(s.capabilities);
     setSeedOrigin(s.endpoint);
   }
@@ -565,11 +583,17 @@ export function ModelWizard({
                 <Field label="id" htmlFor="w-model-id" hint="Lowercase slug">
                   <TextInput id="w-model-id" mono value={model.id} onChange={(e) => setModel((m) => ({ ...m, id: e.target.value }))} />
                 </Field>
-                <Field label="Family" htmlFor="w-model-fam" hint="Optional">
-                  <TextInput id="w-model-fam" value={model.family} placeholder="Qwen" onChange={(e) => setModel((m) => ({ ...m, family: e.target.value }))} />
+                <Field label="Family" htmlFor="w-model-fam" hint="Optional; left UNKNOWN unless discovery is sure">
+                  <div className="cp-discover-field">
+                    <TextInput id="w-model-fam" style={{ flex: 1 }} value={model.family} placeholder="Qwen" onChange={(e) => setModel((m) => ({ ...m, family: e.target.value }))} />
+                    <ProvenanceBadge value={provOf("family")} onConfirm={() => confirm("family")} />
+                  </div>
                 </Field>
-                <Field label="Weight path" htmlFor="w-model-path" hint="Absolute POSIX path; weights are never moved">
-                  <TextInput id="w-model-path" mono value={model.weightPath} onChange={(e) => setModel((m) => ({ ...m, weightPath: e.target.value }))} />
+                <Field label="Weight path" htmlFor="w-model-path" hint="Absolute POSIX path; blank when unknown — weights are never moved">
+                  <div className="cp-discover-field">
+                    <TextInput id="w-model-path" mono style={{ flex: 1 }} value={model.weightPath} onChange={(e) => setModel((m) => ({ ...m, weightPath: e.target.value }))} />
+                    <ProvenanceBadge value={provOf("weightPath")} onConfirm={() => confirm("weightPath")} />
+                  </div>
                 </Field>
               </FormSection>
               <AdvancedDisclosure label="Advanced — weight variants">

@@ -166,4 +166,19 @@ surface/border/text tokens shift. Light is hand-tuned, never a mechanical invers
 - No breadcrumb-as-title, no missing H1, no global filter replacing per-section local filters, max 3 header actions before overflow.
 - No indefinite silent polling, no unsaved-changes dead ends — banner + timeout escape; dirty-state guard on config pages.
 - No gradients, glow, glass blur, emoji, oversized heroes, AI-template aesthetics (locked design bar).
+
+## 10. Discovery, provenance & capability-probe surface
+Extends §7's guide grammar; server contract is WS-3a (`/api/discovery/probe`, `/api/discovery/probe-capabilities`). No hardcoded hex — tokens only.
+- Endpoint field is a compact host:port mono row with an explicit scheme select; bounded — one typed endpoint, never a LAN sweep. Helper text: "probed read-only, GET /v1/models".
+- Provenance is always visible, never implied: each detected field carries a 3px status dot + muted word (Detected = success, Probed = warning, User = textSecondary, Unknown = neutral). The dot+word rule (§9) applies verbatim.
+- Suggested template renders as a selectable chip prefilled into the picker, with a confidence suffix (`high` = textPrimary, `medium`/`low` = textMuted) and a "Change" ghost link — a suggestion, always overridable.
+- Capability probe is a SEPARATE accent-outline button on the endpoint detail ("Probe capabilities"), never automatic; results are a 5-row hairline definition list of `yes`/`no`/`unknown` mono values, `unknown` = neutral so absence never reads as failure.
+- `credRef` shows as a masked mono chip (`ref name …`), value never echoed; attached state = success dot. Unreachable/401 states use the §4 error/amber mapping, offline = neutral — never red unless terminal.
+- Empty, scanning and unreachable states are one muted sentence each inside the card; spinner only during the single short probe, no indefinite polling.
 - Never encode status by color alone — dot+word pill; red = terminal failure only, amber = transitional/warning, grey = retired/offline.
+
+### 10b. Discovery → wizard seed
+- "Discover running model" is a first-class picker card alongside Template and Manual, and a direct toolbar entry; the wizard stays the SAME 8-step flow (discovery only pre-fills).
+- Seeded values carry the §10 provenance badge inline and stay editable; UNKNOWN gets a "confirm" affordance and is counted in a banner before Save. Suggested template is pre-selected, always overridable.
+- Compute separates PHYSICAL placement (node multi-select + head/coordinator + workers) from DEPLOYMENT topology (explicit TP/PP/DP/EP, blank = unknown). Node count NEVER becomes a degree: >1 node with no degree renders "topology unknown — confirm" via TopologySummary.
+- Review is a clean key-value summary with provenance per important value, ownership stays "External / observed" (discovery ≠ ownership), plus a SAFETY line "CONFIG ONLY — no lifecycle action will occur".

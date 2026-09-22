@@ -10,6 +10,7 @@ import {
   secondaryInstruments,
   stateLabel,
   stateTone,
+  verdictHeadline,
   verdictLabel,
   type StateTone,
 } from "./cockpitModel";
@@ -55,21 +56,46 @@ function view(over: Partial<DeploymentView> = {}): DeploymentView {
 }
 
 describe("lab verdict + summary", () => {
-  it("is nominal when healthy, degrades on warnings, alerts on a hard failure", () => {
+  it("is nominal when fully healthy", () => {
     expect(labVerdict(3, 3, 0, [], ["serving", "idle"])).toBe("nominal");
-    expect(labVerdict(3, 3, 2, [], ["idle"])).toBe("degraded");
-    expect(labVerdict(3, 3, 0, [], ["degraded"])).toBe("alert");
-    expect(labVerdict(2, 3, 0, [], ["idle"])).toBe("alert");
+  });
+
+  it("reads ATTENTION (not DEGRADED) for a warning-only lab — all nodes online, models ready", () => {
+    // one memory warning, every node online, every model ready/idle
+    expect(labVerdict(3, 3, 1, [], ["idle", "ready"])).toBe("attention");
+    expect(labVerdict(3, 3, 2, [], ["idle"])).toBe("attention");
+  });
+
+  it("reads ATTENTION for a lastError with no genuine degradation", () => {
+    const v = view({ deployment: dep("r1", "m1", { display: "running", lastError: "probe slow" }) });
+    expect(labVerdict(3, 3, 0, [v], ["serving"])).toBe("attention");
+  });
+
+  it("degrades ONLY when a model or a node is genuinely degraded/offline", () => {
+    expect(labVerdict(3, 3, 0, [], ["degraded"])).toBe("degraded");
+    expect(labVerdict(3, 3, 0, [], ["offline"])).toBe("degraded");
+    expect(labVerdict(2, 3, 0, [], ["idle"])).toBe("degraded");
+    const v = view({ deployment: dep("r1", "m1", { display: "degraded" }) });
+    expect(labVerdict(3, 3, 0, [v], ["busy"])).toBe("degraded");
   });
 
   it("renders verdict labels", () => {
     expect(verdictLabel("nominal")).toBe("NOMINAL");
-    expect(verdictLabel("alert")).toBe("ALERT");
+    expect(verdictLabel("attention")).toBe("ATTENTION");
+    expect(verdictLabel("degraded")).toBe("DEGRADED");
+  });
+
+  it("words the headline consistently with the pill — warnings, never ALERT/DEGRADED mixing", () => {
+    expect(verdictHeadline("nominal", 0)).toBe("All systems normal");
+    expect(verdictHeadline("attention", 1)).toBe("1 warning to review");
+    expect(verdictHeadline("attention", 2)).toBe("2 warnings to review");
+    expect(verdictHeadline("degraded", 0)).toBe("A model or node is degraded");
+    expect(verdictHeadline("degraded", 2)).toBe("Degraded — 2 warnings to review");
   });
 
   it("builds an all-caps data-driven summary with singular/plural", () => {
-    expect(labSummary(3, 3, 2, 0)).toBe("3 OF 3 NODES ONLINE · 2 MODELS ACTIVE · NO ALERTS");
-    expect(labSummary(1, 1, 1, 1)).toBe("1 OF 1 NODE ONLINE · 1 MODEL ACTIVE · 1 ALERT");
+    expect(labSummary(3, 3, 2, 0)).toBe("3 OF 3 NODES ONLINE · 2 MODELS ACTIVE · NO WARNINGS");
+    expect(labSummary(1, 1, 1, 1)).toBe("1 OF 1 NODE ONLINE · 1 MODEL ACTIVE · 1 WARNING");
   });
 });
 

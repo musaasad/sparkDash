@@ -132,7 +132,7 @@ export interface FabricPosition {
 }
 
 const FABRIC_COL_W = 268;
-const FABRIC_ROW_H = 128;
+const FABRIC_ROW_H = 136;
 
 /**
  * Pure layout for 1..N nodes (data only, no rendering). Rows of ≤2 with the

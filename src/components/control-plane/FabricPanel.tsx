@@ -10,7 +10,8 @@ export interface FabricPanelProps {
 }
 
 const CARD_W = 236;
-const CARD_H = 92;
+/** Tall enough for the full placed-models line to wrap, never clipped. */
+const CARD_H = 118;
 
 const HEALTH_TONE: Record<FabricHealth, string> = {
   ok: "live",

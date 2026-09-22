@@ -21,7 +21,7 @@ import {
 import { useRuntimeLabels, useRuntimeMetrics } from "./runtimeLabels";
 import { FabricPanel } from "./FabricPanel";
 import { DeploymentInstrument } from "./DeploymentInstrument";
-import { labSummary, labVerdict, rankViews, roleOf, stateLabel, stateTone, verdictLabel } from "./cockpitModel";
+import { labSummary, labVerdict, rankViews, roleOf, stateLabel, stateTone, verdictHeadline, verdictLabel } from "./cockpitModel";
 import { useTelemetryHistory, type TelemetryHistory } from "./useTelemetryHistory";
 
 interface OverviewProps {
@@ -101,6 +101,7 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
     () => labSummary(health.nodesOnline, health.nodesTotal, health.modelsRunning, attention.length),
     [health.nodesOnline, health.nodesTotal, health.modelsRunning, attention.length]
   );
+  const headline = useMemo(() => verdictHeadline(verdict, attention.length), [verdict, attention.length]);
 
   // Cluster: active deployments only, primary first; fall back to all when idle.
   const clusterViews = useMemo(() => {
@@ -203,11 +204,7 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
           <span className={`cp-verdict-pill tone-${verdict}`}>{verdictLabel(verdict)}</span>
         </div>
         <div className="cp-verdict-mid">
-          <div className="cp-verdict-text">
-            {attention.length === 0
-              ? "All systems normal"
-              : `${attention.length} issue${attention.length === 1 ? "" : "s"} need${attention.length === 1 ? "s" : ""} attention`}
-          </div>
+          <div className="cp-verdict-text">{headline}</div>
           <div className="cp-verdict-summary mono">{summary}</div>
           <div className="cp-verdict-meta">
             updated {relativeAge(lastUpdated, now)} · auto-refresh {autoRefresh ? "on" : "paused"}

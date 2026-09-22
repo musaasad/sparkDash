@@ -1,8 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { OverviewSection } from "./OverviewSection";
 import type { DeploymentStatus, SparkSnapshot } from "../../api/types";
 import { render, cleanupRenders } from "../../testing/render";
+
+// Hermetic: the runtime registry hook must not hit the live :5556 API.
+vi.mock("../../api/client", () => ({
+  fetchRuntimes: vi.fn(async () => ({ runtimes: [] })),
+  fetchActivity: vi.fn(async () => ({ events: [] })),
+}));
 
 function spark(over: Partial<SparkSnapshot> = {}): SparkSnapshot {
   return {
@@ -35,7 +41,7 @@ describe("Overview health verdict", () => {
     expect(container.querySelector(".cp-verdict")?.textContent).toContain("paused");
   });
 
-  it("reports an issue count and dedupes repeated conditions with an xN badge", () => {
+  it("reads ATTENTION (not DEGRADED) for a warning-only lab, with consistent wording", () => {
     cleanupRenders();
     const hot = spark({
       id: "hot",
@@ -49,10 +55,25 @@ describe("Overview health verdict", () => {
       },
     });
     const { container } = render(<OverviewSection sparks={[hot]} deployments={[]} recipes={[]} navigate={() => {}} loaded />);
-    expect(container.querySelector(".cp-verdict")?.textContent).toContain("1 issue needs attention");
+    // Every node is online — a disk warning is ATTENTION, never a degradation.
+    expect(container.querySelector(".cp-verdict-pill")?.textContent).toBe("ATTENTION");
+    expect(container.querySelector(".cp-verdict")?.classList.contains("is-attention")).toBe(true);
+    expect(container.querySelector(".cp-verdict")?.classList.contains("is-degraded")).toBe(false);
+    // Pill, headline and summary all use the same "warning" wording — no ALERT mixing.
+    expect(container.querySelector(".cp-verdict-text")?.textContent).toContain("1 warning to review");
+    expect(container.querySelector(".cp-verdict-summary")?.textContent).toContain("1 WARNING");
     // Two disks on one node collapse into one digest row carrying ×2.
     expect(container.querySelector(".cp-alerts")?.textContent).toContain("×2");
     expect(container.querySelectorAll(".cp-alert")).toHaveLength(1);
+  });
+
+  it("reads DEGRADED when a node is genuinely offline", () => {
+    cleanupRenders();
+    const { container } = render(
+      <OverviewSection sparks={[spark({ id: "n1", name: "n1", online: false })]} deployments={[]} recipes={[]} navigate={() => {}} loaded />
+    );
+    expect(container.querySelector(".cp-verdict-pill")?.textContent).toBe("DEGRADED");
+    expect(container.querySelector(".cp-verdict")?.classList.contains("is-degraded")).toBe(true);
   });
 
   it("gives each section a real, independently filtering window picker", () => {

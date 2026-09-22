@@ -124,6 +124,33 @@ describe("ModelWizard discovery seed", () => {
     expect(container.querySelector(".cp-prov.unknown")).not.toBeNull();
   });
 
+  it("never guesses Family or Weight path for a discovered external endpoint", () => {
+    // DeepSeek model: discovery carries no family; SparkDash must not borrow
+    // another model's family nor fabricate a weight path from the model id.
+    const { container } = render(
+      <ModelWizard
+        models={[]}
+        recipes={[]}
+        sparks={[n1]}
+        navigate={() => {}}
+        onSaved={() => {}}
+        onCancel={() => {}}
+        seed={seed({ modelId: "deepseek-v4-1-flash-uncensored-exl3", provenance: { modelId: "detected", runtime: "detected", port: "user" } })}
+      />
+    );
+    const fam = container.querySelector<HTMLInputElement>("#w-model-fam")!;
+    const path = container.querySelector<HTMLInputElement>("#w-model-path")!;
+    expect(fam.value).toBe("");
+    expect(path.value).toBe("");
+    // Both stay visibly UNKNOWN / editable with a confirm affordance.
+    expect(fam.parentElement?.querySelector(".cp-prov.unknown")).not.toBeNull();
+    expect(path.parentElement?.querySelector(".cp-prov.unknown")).not.toBeNull();
+    type(container, "#w-model-fam", "DeepSeek");
+    type(container, "#w-model-path", "/models/ds");
+    expect(container.querySelector<HTMLInputElement>("#w-model-fam")!.value).toBe("DeepSeek");
+    expect(container.querySelector<HTMLInputElement>("#w-model-path")!.value).toBe("/models/ds");
+  });
+
   it("pre-selects the suggested template but lets the operator override it", () => {
     const { container } = render(
       <ModelWizard models={[]} recipes={[]} sparks={[n1]} navigate={() => {}} onSaved={() => {}} onCancel={() => {}} seed={seed()} />

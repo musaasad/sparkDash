@@ -4471,8 +4471,8 @@ button.cp-link { background: none; border: none; padding: 0; cursor: pointer; fo
   background: var(--color-surface);
   border-radius: var(--radius-card);
 }
-.cp-verdict.is-degraded { border-left-color: var(--inst-tone-warn); }
-.cp-verdict.is-alert { border-left-color: var(--inst-tone-alert); }
+.cp-verdict.is-attention { border-left-color: var(--inst-tone-warn); }
+.cp-verdict.is-degraded { border-left-color: var(--inst-tone-alert); }
 .cp-verdict-lead { display: flex; flex-direction: column; gap: 6px; min-width: 140px; }
 .cp-verdict-overline { font-size: 24px; font-weight: 700; letter-spacing: 0.16em; line-height: 1; }
 .cp-verdict-pill {
@@ -4484,8 +4484,8 @@ button.cp-link { background: none; border: none; padding: 0; cursor: pointer; fo
 }
 .cp-verdict-pill::before { content: ""; width: 6px; height: 6px; border-radius: 999px; background: currentColor; }
 .cp-verdict-pill.tone-nominal { color: var(--inst-tone-live); }
-.cp-verdict-pill.tone-degraded { color: var(--inst-tone-warn); }
-.cp-verdict-pill.tone-alert { color: var(--inst-tone-alert); }
+.cp-verdict-pill.tone-attention { color: var(--inst-tone-warn); }
+.cp-verdict-pill.tone-degraded { color: var(--inst-tone-alert); }
 .cp-verdict-mid { min-width: 0; }
 .cp-verdict-summary { font-size: 12px; letter-spacing: 0.1em; color: var(--color-muted-strong); margin-top: 2px; }
 .cp-verdict-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
@@ -4638,7 +4638,10 @@ button.cp-link { background: none; border: none; padding: 0; cursor: pointer; fo
   color: var(--color-muted-strong); border: 1px solid var(--color-border);
   border-radius: var(--radius-chip); padding: 1px 5px;
 }
-.cp-fabric-node-models { font-size: 10px; color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cp-fabric-node-models {
+  font-size: 10px; line-height: 1.35; color: var(--color-muted);
+  white-space: normal; overflow-wrap: anywhere;
+}
 .cp-fabric-note { font-size: 11px; color: var(--color-muted); }
 .cp-fabric-empty { font-size: 12px; color: var(--color-muted); }
 

@@ -1,8 +1,24 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { NodeDetail } from "./NodeDetail";
 import type { SparkSnapshot, RecipePublic, DeploymentStatus } from "../../api/types";
 import { render, cleanupRenders } from "../../testing/render";
+
+// Hermetic: the runtime registry + embedded DiscoveredRuntimes must not hit the
+// live :5556 API.
+vi.mock("../../api/client", () => ({
+  fetchRuntimes: vi.fn(async () => ({ runtimes: [] })),
+  fetchActivity: vi.fn(async () => ({ events: [] })),
+  fetchDiscovery: vi.fn(async () => ({ discovered: [], readOnly: true })),
+  fetchModels: vi.fn(async () => ({ models: [] })),
+  fetchRecipes: vi.fn(async () => ({ recipes: [] })),
+  fetchSparks: vi.fn(async () => ({ sparks: [] })),
+  fetchSettings: vi.fn(async () => ({})),
+  fetchModel: vi.fn(),
+  adoptDiscovered: vi.fn(),
+  archiveModel: vi.fn(),
+  restoreModel: vi.fn(),
+}));
 
 function spark(over: Partial<SparkSnapshot> = {}): SparkSnapshot {
   return {

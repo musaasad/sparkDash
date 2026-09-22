@@ -1,7 +1,28 @@
 import { describe, expect, it } from "vitest";
-import type { SparkSnapshot } from "../../api/types";
+import type { DeploymentStatus, RecipePublic, SparkSnapshot } from "../../api/types";
+import type { DeploymentView } from "./fleetModel";
 import { FabricPanel } from "./FabricPanel";
 import { render, cleanupRenders } from "../../testing/render";
+
+function view(modelName: string, nodeId = "n1"): DeploymentView {
+  const d = { recipeId: "r1", modelId: "m1", nodeIds: [nodeId], apiPort: 8889, display: "running" } as DeploymentStatus;
+  return {
+    deployment: d,
+    key: "r1",
+    recipe: null as RecipePublic | null,
+    modelName,
+    rawModelId: d.modelId,
+    nodes: [spark({ id: nodeId })],
+    runtime: "tabbyapi",
+    topology: "single",
+    lifecycleState: null,
+    contextLength: 32000,
+    port: d.apiPort,
+    decodeTps: null,
+    telemetry: null,
+    uptime: null,
+  };
+}
 
 function spark(over: Partial<SparkSnapshot> = {}): SparkSnapshot {
   return {
@@ -73,5 +94,16 @@ describe("FabricPanel honesty", () => {
     const { container } = render(<FabricPanel sparks={[spark({ id: "solo" })]} views={[]} navigate={() => {}} />);
     expect(container.querySelectorAll(".cp-fabric-node")).toHaveLength(1);
     expect(container.querySelectorAll(".cp-fabric-placeholders line")).toHaveLength(0);
+  });
+
+  it("sizes the card so a placed-model name is fully readable, not clipped", () => {
+    cleanupRenders();
+    const longName = "deepseek-v4-1-flash-uncensored-exl3";
+    const { container } = render(<FabricPanel sparks={[spark()]} views={[view(longName)]} navigate={() => {}} />);
+    const card = container.querySelector<HTMLButtonElement>(".cp-fabric-node")!;
+    // Tall enough for the model line to wrap onto two lines and still fit.
+    expect(parseInt(card.style.height, 10)).toBeGreaterThanOrEqual(112);
+    const models = card.querySelector(".cp-fabric-node-models");
+    expect(models?.textContent).toContain(longName);
   });
 });

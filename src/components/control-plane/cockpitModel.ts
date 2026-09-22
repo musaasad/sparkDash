@@ -15,7 +15,12 @@ import type { RuntimeLabelMap } from "./runtimeLabels";
 import type { RuntimeOption } from "./runtimeLabels";
 import { resolveSparkRole } from "../../api/sparkRole";
 
-export type LabVerdict = "nominal" | "degraded" | "alert";
+/**
+ * Honest three-level verdict. DEGRADED is reserved for a GENUINELY degraded /
+ * offline model or node; a warning-only lab (all nodes online, models ready,
+ * a memory warning) is ATTENTION — a warning is NOT a degradation.
+ */
+export type LabVerdict = "nominal" | "attention" | "degraded";
 export type InstrumentRole = "PRIMARY" | "WORKER";
 /** Visual tone of a state pill — colour is a secondary cue, never the only cue. */
 export type StateTone = "live" | "calm" | "warn" | "alert" | "off";
@@ -63,7 +68,11 @@ export function isActiveView(v: DeploymentView): boolean {
   return v.deployment.display !== "stopped";
 }
 
-/** LAB verdict from fleet health + attention + live deployment states. */
+/**
+ * LAB verdict from fleet health + attention + live deployment states.
+ * DEGRADED requires a genuinely degraded/offline MODEL or NODE. A bare warning
+ * (alertCount) never degrades — it reads ATTENTION. Nothing => NOMINAL.
+ */
 export function labVerdict(
   nodesOnline: number,
   nodesTotal: number,
@@ -72,26 +81,39 @@ export function labVerdict(
   states: readonly RuntimeState[]
 ): LabVerdict {
   const offlineNodes = nodesTotal - nodesOnline;
-  const hardFail = states.some((s) => s === "degraded" || s === "offline") || offlineNodes > 0;
-  const alertSeverity = views.some((v) => v.deployment.display === "degraded" || !!v.deployment.lastError);
-  if (hardFail || alertSeverity) return "alert";
-  if (alertCount > 0) return "degraded";
+  const modelOrNodeHardFail =
+    offlineNodes > 0 ||
+    states.some((s) => s === "degraded" || s === "offline") ||
+    views.some((v) => v.deployment.display === "degraded");
+  if (modelOrNodeHardFail) return "degraded";
+  if (alertCount > 0 || views.some((v) => !!v.deployment.lastError)) return "attention";
   return "nominal";
 }
 
 export function verdictLabel(v: LabVerdict): string {
-  return v === "nominal" ? "NOMINAL" : v === "degraded" ? "DEGRADED" : "ALERT";
+  return v === "nominal" ? "NOMINAL" : v === "attention" ? "ATTENTION" : "DEGRADED";
+}
+
+/**
+ * One-line human headline, worded consistently with the pill (never mixing
+ * "ALERT"/"DEGRADED"/"needs attention").
+ */
+export function verdictHeadline(verdict: LabVerdict, warningCount: number): string {
+  if (verdict === "nominal") return "All systems normal";
+  const warnings = `${warningCount} warning${warningCount === 1 ? "" : "s"} to review`;
+  if (verdict === "attention") return warningCount > 0 ? warnings : "Attention needed";
+  return warningCount > 0 ? `Degraded — ${warnings}` : "A model or node is degraded";
 }
 
 /**
  * One-line, ALL-CAPS, fully data-driven summary. Never states a number the
- * data does not carry.
+ * data does not carry. Uses the same "warning" wording as the pill/headline.
  */
 export function labSummary(nodesOnline: number, nodesTotal: number, modelsActive: number, alertCount: number): string {
   const nodes = `${nodesOnline} OF ${nodesTotal} NODE${nodesTotal === 1 ? "" : "S"} ONLINE`;
   const models = `${modelsActive} MODEL${modelsActive === 1 ? "" : "S"} ACTIVE`;
-  const alerts = alertCount === 0 ? "NO ALERTS" : `${alertCount} ALERT${alertCount === 1 ? "" : "S"}`;
-  return `${nodes} · ${models} · ${alerts}`;
+  const warnings = alertCount === 0 ? "NO WARNINGS" : `${alertCount} WARNING${alertCount === 1 ? "" : "S"}`;
+  return `${nodes} · ${models} · ${warnings}`;
 }
 
 /**
