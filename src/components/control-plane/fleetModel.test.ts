@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeFleetHealth, computeFleetAlerts } from "./fleetModel";
+import { computeFleetHealth, computeFleetAlerts, attentionNodeIds, nodeHealthRail, nodeMatchesRail } from "./fleetModel";
 import type { SparkSnapshot, DeploymentStatus } from "../../api/types";
 
 function spark(over: Partial<SparkSnapshot> = {}): SparkSnapshot {
@@ -28,8 +28,34 @@ function spark(over: Partial<SparkSnapshot> = {}): SparkSnapshot {
   } as SparkSnapshot;
 }
 
+const DISPLAY_BY_STATE: Record<DeploymentStatus["state"], DeploymentStatus["display"]> = {
+  available: "available",
+  starting: "starting",
+  loading: "loading",
+  running: "running",
+  stopping: "stopping",
+  stopped: "stopped",
+  error: "degraded",
+};
+
 function dep(recipeId: string, state: DeploymentStatus["state"], modelId = "m"): DeploymentStatus {
-  return { recipeId, modelId, nodeIds: ["n1"], apiPort: 8889, managedBy: "sparkdash", dryRun: true, state, lastOp: null, lastError: null, startedAt: null, updatedAt: 0 };
+  return {
+    recipeId,
+    modelId,
+    nodeIds: ["n1"],
+    apiPort: 8889,
+    managedBy: "sparkdash",
+    dryRun: true,
+    state,
+    desired: state === "running" ? "running" : "stopped",
+    observed: state === "running" ? "running" : "not-detected",
+    discovered: false,
+    display: DISPLAY_BY_STATE[state],
+    lastOp: null,
+    lastError: null,
+    startedAt: null,
+    updatedAt: 0,
+  };
 }
 
 describe("fleetModel", () => {
@@ -147,5 +173,123 @@ describe("council-pass helpers", () => {
     const alerts = computeFleetAlerts([], [d]);
     expect(alerts[0].message).toContain("probe auth failed");
     expect(alerts[0].severity).toBe("warn");
+  });
+});
+
+import { deploymentTabCounts, deploymentMatchesTab, attentionDigest, familyGroups, modelGlyph, externalConnectView, errorLogLines, isErrorRow, runtimeLabel } from "./fleetModel";
+import type { ActivityEvent } from "../../api/types";
+
+describe("TP2 polish helpers", () => {
+  it("counts every deployment status tab in fixed order", () => {
+    const deps = [dep("r1", "running"), dep("r2", "running"), dep("r3", "stopped"), dep("r4", "loading"), dep("r5", "error")];
+    const counts = deploymentTabCounts(deps);
+    expect(counts.map((c) => c.key)).toEqual(["all", "running", "starting", "attention", "stopped"]);
+    expect(counts.find((c) => c.key === "all")?.count).toBe(5);
+    expect(counts.find((c) => c.key === "running")?.count).toBe(2);
+    expect(counts.find((c) => c.key === "attention")?.count).toBe(1);
+  });
+
+  it("matches rows against a tab filter", () => {
+    expect(deploymentMatchesTab(dep("r1", "running"), "all")).toBe(true);
+    expect(deploymentMatchesTab(dep("r1", "running"), "stopped")).toBe(false);
+    expect(deploymentMatchesTab(dep("r1", "running"), "running")).toBe(true);
+    expect(deploymentMatchesTab({ ...dep("r1", "running"), display: "running-external" }, "running")).toBe(true);
+  });
+
+  it("flags error rows for inline expansion", () => {
+    expect(isErrorRow({ ...dep("r1", "error") })).toBe(true);
+    expect(isErrorRow({ ...dep("r1", "running"), lastError: "boom" })).toBe(true);
+    expect(isErrorRow(dep("r1", "running"))).toBe(false);
+  });
+
+  it("collapses the attention digest by condition + resource with an xN count", () => {
+    const sparks = [
+      spark({
+        id: "n",
+        metrics: {
+          ...spark().metrics,
+          storage: [
+            { device: "/dev/a", label: "a", used: 95, total: 100, available: 5, percentage: 95, readSpeed: 0, writeSpeed: 0 },
+            { device: "/dev/b", label: "b", used: 96, total: 100, available: 4, percentage: 96, readSpeed: 0, writeSpeed: 0 },
+          ] as never,
+        },
+      }),
+    ];
+    const digest = attentionDigest(sparks, []);
+    const disk = digest.find((d) => d.id.startsWith("disk:"));
+    expect(disk?.count).toBe(2);
+  });
+
+  it("groups the catalog by family with variant counts", () => {
+    const models: ModelEntry[] = [
+      { id: "a", name: "Alpha One", family: "Alpha", notes: "", archived: false, createdAt: 0, updatedAt: 0 },
+      { id: "b", name: "Alpha Two", family: "Alpha", notes: "", archived: false, createdAt: 0, updatedAt: 0 },
+      { id: "c", name: "Lone", family: null, notes: "", archived: false, createdAt: 0, updatedAt: 0 },
+    ];
+    const groups = familyGroups(models, []);
+    expect(groups.find((g) => g.family === "Alpha")?.variantCount).toBe(2);
+    expect(groups[groups.length - 1].family).toBe("Other");
+  });
+
+  it("derives a deterministic monogram", () => {
+    expect(modelGlyph("Qwen Flash Next")).toBe("QF");
+    expect(modelGlyph("Solo")).toBe("SO");
+    expect(modelGlyph("  ")).toBe("??");
+  });
+
+  it("maps each runtime id to its human manage-via label", () => {
+    expect(runtimeLabel("vllm")).toBe("vLLM");
+    expect(runtimeLabel("tabbyapi-exl3")).toBe("TabbyAPI");
+    expect(runtimeLabel("sglang")).toBe("SGLang");
+    expect(runtimeLabel("llama.cpp")).toBe("llama.cpp");
+    expect(runtimeLabel("custom")).toBe("its launcher");
+    expect(runtimeLabel(null)).toBe("its launcher");
+  });
+
+  it("builds a read-only external connect view only for external deployments", () => {
+    const node = spark({ id: "a", name: "Spark A", lanIp: "10.0.0.5" });
+    const external = { ...dep("r1", "running"), managedBy: "external" as const, apiPort: 8889, nodeIds: ["a"] };
+    const view = externalConnectView(external, recipe({ runtime: "tabbyapi-exl3", env: [{ name: "KEY", secret: true, hasValue: true }] }), [node]);
+    expect(view?.endpoint).toBe("http://10.0.0.5:8889/v1");
+    expect(view?.hasKey).toBe(true);
+    expect(view?.note).toContain("TabbyAPI");
+    expect(externalConnectView(dep("r1", "running"), null, [node])).toBeNull();
+
+    // The note must follow the recipe runtime, not hardcode TabbyAPI.
+    const vllmNote = externalConnectView(external, recipe({ runtime: "vllm" }), [node]);
+    expect(vllmNote?.note).toContain("manage via vLLM");
+    expect(vllmNote?.note).not.toContain("TabbyAPI");
+
+    // A non-secret env var must NOT raise the masked-key affordance.
+    const plain = externalConnectView(external, recipe({ env: [{ name: "PORT", secret: false, value: "8889" }] }), [node]);
+    expect(plain?.hasKey).toBe(false);
+  });
+
+  it("selects the last N activity lines for an error row", () => {
+    const feed: ActivityEvent[] = Array.from({ length: 14 }, (_, i) => ({
+      seq: i, ts: new Date(i).toISOString(), kind: "lifecycle", subject: "r1", summary: `line ${i}`, attribution: null, meta: null,
+    }));
+    const picked = errorLogLines(feed, ["r1"], 10);
+    expect(picked).toHaveLength(10);
+    expect(picked[0].summary).toBe("line 0");
+  });
+
+  it("attention rail matches only genuinely attention nodes and hides when empty", () => {
+    const healthy = spark({ id: "ok", name: "OK" });
+    const offline = spark({ id: "off", name: "Off", online: false });
+    const hot = spark({ id: "hot", name: "Hot", metrics: { ...spark().metrics, gpu: { temperature: 95 } as never } });
+    const degraded = { ...dep("r1", "error"), nodeIds: ["ok"] };
+    const sparks = [healthy, offline, hot];
+
+    const attention = attentionNodeIds(sparks, [degraded]);
+    expect([...attention].sort()).toEqual(["hot", "off", "ok"]);
+    expect(nodeMatchesRail(healthy, "attention", [degraded])).toBe(true);
+    expect(nodeMatchesRail(hot, "attention", [degraded])).toBe(true);
+    expect(nodeMatchesRail(offline, "attention", [degraded])).toBe(true);
+
+    const clean = spark({ id: "clean", name: "Clean" });
+    expect(nodeMatchesRail(clean, "attention", [])).toBe(false);
+    expect(nodeHealthRail([clean], []).map((r) => r.key)).not.toContain("attention");
+    expect(nodeHealthRail(sparks, [degraded]).find((r) => r.key === "attention")?.count).toBe(3);
   });
 });

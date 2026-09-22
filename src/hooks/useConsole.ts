@@ -1,4 +1,4 @@
-import { useEffect, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { cpSend } from "./useSnapshot";
 import {
   useConsoleLines,
@@ -6,6 +6,9 @@ import {
   getConsoleConnectionStable,
   getConsoleConnectionServer,
   subscribeDomain,
+  useConsoleMulti,
+  type SourcedLine,
+  type SourcedTelemetryRow,
 } from "./domainStore";
 import type { ConsoleLine, ConsoleTelemetryRow } from "../api/types";
 
@@ -19,6 +22,7 @@ export function useConsole(recipeId: string | null): {
   telemetry: readonly ConsoleTelemetryRow[];
   connected: boolean;
   reason: string | null;
+  resubscribe: () => void;
 } {
   useEffect(() => {
     if (!recipeId) return;
@@ -36,5 +40,25 @@ export function useConsole(recipeId: string | null): {
     getConsoleConnectionServer
   );
 
-  return { lines, telemetry, connected: conn.connected, reason: conn.reason };
+  const resubscribe = useCallback(() => {
+    if (recipeId) cpSend({ type: "console:subscribe", recipeId });
+  }, [recipeId]);
+
+  return { lines, telemetry, connected: conn.connected, reason: conn.reason, resubscribe };
+}
+
+/**
+ * Multi-source variant — one row stream across several deployment recipes
+ * (the Live Console's per-deployment / "All" source tabs). Rows carry their
+ * owning recipeId so the caller can attribute node + model.
+ */
+export function useConsoleSources(recipeIds: readonly string[]): {
+  lines: readonly SourcedLine[];
+  telemetry: readonly SourcedTelemetryRow[];
+  connected: boolean;
+  reason: string | null;
+  disconnectedRecipeId: string | null;
+  resubscribe: () => void;
+} {
+  return useConsoleMulti(recipeIds);
 }

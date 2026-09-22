@@ -32,6 +32,21 @@ describe("control-plane router", () => {
     expect(parseRoute("/nonsense/xyz")).toEqual({ section: "overview" });
   });
 
+  it("reads a reqId deep-link param from the search string", () => {
+    expect(parseRoute("/activity", "?reqId=42")).toEqual({ section: "activity", reqId: 42 });
+    expect(parseRoute("/models/m1/live-console", "?reqId=#7")).toEqual({ section: "model", modelId: "m1", tab: "live-console", reqId: 7 });
+    expect(parseRoute("/activity", "?reqId=abc")).toEqual({ section: "activity" });
+    expect(parseRoute("/activity", "")).toEqual({ section: "activity" });
+  });
+
+  it("serializes a reqId deep link and round-trips it", () => {
+    const route = { section: "activity" as const, reqId: 42 };
+    const path = routeToPath(route);
+    expect(path).toBe("/activity?reqId=42");
+    const [pathname, search] = path.split("?");
+    expect(parseRoute(pathname, `?${search}`)).toEqual(route);
+  });
+
   it("round-trips paths", () => {
     for (const route of [
       { section: "overview" as const },

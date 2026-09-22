@@ -126,6 +126,8 @@ function DashboardApp() {
   const [actionError, setActionError] = useState<string | null>(null);
   /** Used when WS is down so section data still renders. */
   const [fallbackSparks, setFallbackSparks] = useState<SparkSnapshot[]>([]);
+  /** Local dry-run activity clear cursor shared by Activity + Settings. */
+  const [activityClearedUpTo, setActivityClearedUpTo] = useState<number | null>(null);
   const staleAfterMs = Math.max(10_000, 3 * (refreshInterval ?? 2_000));
   const telemetryStale =
     lastValidSnapshotAt != null && telemetryNow - lastValidSnapshotAt > staleAfterMs;
@@ -252,7 +254,7 @@ function DashboardApp() {
               />
             ) : null}
             {route.section === "fleet" ? (
-              <FleetSection sparks={liveSparks} deployments={deployments} recipes={cp.recipes} navigate={navigate} />
+              <FleetSection sparks={liveSparks} deployments={deployments} recipes={cp.recipes} models={cp.models} navigate={navigate} />
             ) : null}
             {route.section === "node" ? (
               activeNode ? (
@@ -286,6 +288,8 @@ function DashboardApp() {
                 models={cp.models}
                 recipes={cp.recipes}
                 deployments={deployments}
+                sparks={liveSparks}
+                activity={cp.activity}
                 navigate={navigate}
                 onSaved={() => void cp.reload()}
               />
@@ -294,17 +298,37 @@ function DashboardApp() {
               <ModelDetail
                 modelId={route.modelId}
                 initialTab={route.tab}
+                initialReqId={route.reqId}
                 sparks={liveSparks}
                 navigate={navigate}
                 onDataChanged={() => void cp.reload()}
               />
             ) : null}
-            {route.section === "activity" ? <ActivitySection events={cp.activity} /> : null}
+            {route.section === "activity" ? (
+              <ActivitySection
+                events={cp.activity}
+                reqId={route.reqId}
+                clearedUpTo={activityClearedUpTo}
+                onClearActivity={setActivityClearedUpTo}
+                onOpenInConsole={(event) => {
+                  const recipeId = event.meta?.recipeId != null ? String(event.meta.recipeId) : null;
+                  const reqId = event.meta?.reqId != null ? Number(event.meta.reqId) : undefined;
+                  const rec = cp.recipes.find((r) => r.id === recipeId) ?? cp.recipes.find((r) => r.id === event.subject);
+                  if (rec) navigate({ section: "model", modelId: rec.modelId, tab: "live-console", reqId });
+                }}
+              />
+            ) : null}
             {route.section === "benchmarks" ? (
               <BenchmarksSection sparks={liveSparks} recipes={cp.recipes} navigate={navigate} />
             ) : null}
             {route.section === "settings" ? (
-              <SettingsSection sparks={liveSparks} navigate={navigate} onSparksChanged={() => void refreshFromApi()} />
+              <SettingsSection
+                sparks={liveSparks}
+                navigate={navigate}
+                onSparksChanged={() => void refreshFromApi()}
+                activityLatestSeq={cp.activity.reduce((m, e) => Math.max(m, e.seq), 0)}
+                onClearActivity={setActivityClearedUpTo}
+              />
             ) : null}
           </main>
         </div>

@@ -1,5 +1,11 @@
-import { useSyncExternalStore } from "react";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
+import { cpSend } from "./useSnapshot";
 import type { ConsoleLine, ConsoleTelemetryRow, DeploymentStatus } from "../api/types";
+
+/** Subscribe/unsubscribe control frames for a console recipe. */
+function cpSendConsole(recipeId: string, on: boolean): void {
+  cpSend({ type: on ? "console:subscribe" : "console:unsubscribe", recipeId });
+}
 
 /**
  * Control-plane client store — mirrors the metricsStore contract
@@ -234,3 +240,139 @@ export function useDeployment(recipeId: string): DeploymentStatus | undefined {
     () => undefined
   );
 }
+
+// ─── Multi-source console views (per-deployment tabs / "All") ───────────────
+// The Live Console reads several recipes at once. These helpers hand back a
+// single coalesced, reference-stable array with the owning recipeId attached,
+// so callers can attribute rows to a node/model without re-slicing stores.
+
+export interface SourcedLine {
+  recipeId: string;
+  line: ConsoleLine;
+}
+
+export interface SourcedTelemetryRow {
+  recipeId: string;
+  row: ConsoleTelemetryRow;
+}
+
+function idsKey(ids: readonly string[]): string {
+  return [...ids].slice().sort().join("|");
+}
+
+function combinedSeq(ids: readonly string[]): string {
+  return ids.map((id) => consoleSlices.get(id)?.appendSeq ?? 0).join(".");
+}
+
+const combinedLines = new Map<string, { seq: string; rows: readonly SourcedLine[] }>();
+const combinedTelemetry = new Map<string, { seq: string; rows: readonly SourcedTelemetryRow[] }>();
+
+export function getConsoleCombinedLines(ids: readonly string[]): readonly SourcedLine[] {
+  if (!ids.length) return EMPTY_SOURCED_LINES;
+  const key = idsKey(ids);
+  const seq = combinedSeq(ids);
+  const prev = combinedLines.get(key);
+  if (prev && prev.seq === seq) return prev.rows;
+  const rows: SourcedLine[] = [];
+  for (const id of ids) {
+    for (const line of getConsoleLines(id)) rows.push({ recipeId: id, line });
+  }
+  rows.sort((a, b) => (a.line.ts ?? "").localeCompare(b.line.ts ?? ""));
+  const view = { seq, rows };
+  combinedLines.set(key, view);
+  return view.rows;
+}
+const EMPTY_SOURCED_LINES: readonly SourcedLine[] = Object.freeze([] as SourcedLine[]);
+
+export function getConsoleCombinedTelemetry(ids: readonly string[]): readonly SourcedTelemetryRow[] {
+  if (!ids.length) return EMPTY_SOURCED_TELEMETRY;
+  const key = idsKey(ids);
+  const seq = combinedSeq(ids);
+  const prev = combinedTelemetry.get(key);
+  if (prev && prev.seq === seq) return prev.rows;
+  const rows: SourcedTelemetryRow[] = [];
+  for (const id of ids) {
+    for (const row of getConsoleTelemetry(id)) rows.push({ recipeId: id, row });
+  }
+  rows.sort((a, b) => (b.row.ts ?? "").localeCompare(a.row.ts ?? "") || b.row.reqId - a.row.reqId);
+  const view = { seq, rows };
+  combinedTelemetry.set(key, view);
+  return view.rows;
+}
+const EMPTY_SOURCED_TELEMETRY: readonly SourcedTelemetryRow[] = Object.freeze([] as SourcedTelemetryRow[]);
+
+/** First disconnected source among `ids` (feeds the reconnect banner). */
+const COMBINED_DOWN = Object.freeze({ recipeId: null as string | null, reason: null as string | null });
+export function getFirstDisconnected(ids: readonly string[]): {
+  recipeId: string | null;
+  reason: string | null;
+} {
+  for (const id of ids) {
+    const s = consoleSlices.get(id);
+    if (s && !s.connected) return { recipeId: id, reason: s.reason };
+  }
+  return COMBINED_DOWN;
+}
+
+/**
+ * Subscribe to several console recipes at once. Sends subscribe frames for the
+ * union and unsubscribe frames for those that dropped out — the server tail is
+ * never restarted for filter-only changes.
+ */
+export function useConsoleMulti(recipeIds: readonly string[]): {
+  lines: readonly SourcedLine[];
+  telemetry: readonly SourcedTelemetryRow[];
+  connected: boolean;
+  reason: string | null;
+  disconnectedRecipeId: string | null;
+  resubscribe: () => void;
+} {
+  const ids = recipeIds;
+  const lines = useSyncExternalStore(subscribeDomain, () => getConsoleCombinedLines(ids), () => EMPTY_SOURCED_LINES);
+  const telemetry = useSyncExternalStore(
+    subscribeDomain,
+    () => getConsoleCombinedTelemetry(ids),
+    () => EMPTY_SOURCED_TELEMETRY
+  );
+  const conn = useSyncExternalStore(
+    subscribeDomain,
+    () => getFirstDisconnectedStable(ids),
+    () => COMBINED_DOWN
+  );
+
+  useEffect(() => {
+    const sent = [...ids];
+    for (const id of sent) cpSendConsole(id, true);
+    return () => {
+      for (const id of sent) cpSendConsole(id, false);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idsKey(ids)]);
+
+  const resubscribe = useCallback(() => {
+    for (const id of ids) cpSendConsole(id, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idsKey(ids)]);
+
+  return {
+    lines,
+    telemetry,
+    connected: conn.recipeId === null,
+    reason: conn.reason,
+    disconnectedRecipeId: conn.recipeId,
+    resubscribe,
+  };
+}
+
+const downSeen = new Map<string, string>();
+function getFirstDisconnectedStable(ids: readonly string[]) {
+  const key = idsKey(ids);
+  const seq = combinedSeq(ids);
+  const prev = downViews.get(key);
+  if (prev && downSeen.get(key) === seq) return prev;
+  const view = getFirstDisconnected(ids);
+  downViews.set(key, view);
+  downSeen.set(key, seq);
+  return view;
+}
+const downViews = new Map<string, { recipeId: string | null; reason: string | null }>();

@@ -89,7 +89,12 @@ describe("domainStore console buffers", () => {
 describe("domainStore deployment mirror", () => {
   it("upserts and lists sorted by recipe id", () => {
     const d = (recipeId: string, state: DeploymentStatus["state"]): DeploymentStatus => ({
-      recipeId, modelId: "m", nodeIds: [], apiPort: 1, managedBy: "sparkdash", dryRun: true, state, lastOp: null, lastError: null, startedAt: null, updatedAt: 0,
+      recipeId, modelId: "m", nodeIds: [], apiPort: 1, managedBy: "sparkdash", dryRun: true, state,
+      desired: state === "running" ? "running" : "stopped",
+      observed: state === "running" ? "running" : "not-detected",
+      discovered: false,
+      display: state === "error" ? "degraded" : (state as DeploymentStatus["display"]),
+      lastOp: null, lastError: null, startedAt: null, updatedAt: 0,
     });
     upsertDeployment(d("b", "running"));
     upsertDeployment(d("a", "stopped"));

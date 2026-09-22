@@ -84,6 +84,10 @@ export class LlmProbe {
     /** Live uncached/computed prefill tok/s when split is available. null otherwise. */
     this.uncachedPrefillTps = null;
     this.error = null;
+    /** Socket-level cause code of the last failed probe (ECONNREFUSED / ENOTFOUND / …). */
+    this.lastErrorCode = null;
+    /** Error name of the last failed probe (TimeoutError → engine answerless). */
+    this.lastErrorName = null;
 
     // Per-slot rate tracking (for llama.cpp native path)
     this.slotState = new Map();
@@ -214,10 +218,14 @@ export class LlmProbe {
         this._noteSuccess();
         return snap;
       } else {
+        this.lastErrorCode = null;
+        this.lastErrorName = null;
         this._noteFailure("LLM server not reachable");
         return this._defaultLlm();
       }
     } catch (err) {
+      this.lastErrorCode = err?.cause?.code ?? err?.code ?? null;
+      this.lastErrorName = err?.name ?? null;
       this._noteFailure(err.message);
       return this._defaultLlm();
     }
@@ -226,6 +234,8 @@ export class LlmProbe {
   _noteSuccess() {
     this._consecutiveFailures = 0;
     this.error = null;
+    this.lastErrorCode = null;
+    this.lastErrorName = null;
   }
 
   _noteFailure(message) {
@@ -240,6 +250,8 @@ export class LlmProbe {
     this.serverIsOpenAI = null;
     this.backendType = null;
     this.authOpen = null;
+    this.lastErrorCode = null;
+    this.lastErrorName = null;
     this.modelId = null;
     this.modelPath = null;
     this.generationTps = 0;
@@ -1558,6 +1570,9 @@ export class LlmProbe {
     const metricsLive = this.serverIsOpenAI !== null && this.authOpen !== false;
     return {
       available: metricsLive,
+      port: this.port,
+      errorCode: this.lastErrorCode,
+      errorName: this.lastErrorName,
       backend: this.backendType,
       modelId: this.modelId || null,
       modelPath: this.modelPath || null,
@@ -1588,6 +1603,9 @@ export class LlmProbe {
   _defaultLlm() {
     return {
       available: false,
+      port: this.port,
+      errorCode: this.lastErrorCode,
+      errorName: this.lastErrorName,
       backend: this.backendType,
       modelId: null,
       modelPath: null,

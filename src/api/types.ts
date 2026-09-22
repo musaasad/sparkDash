@@ -920,6 +920,33 @@ export type DeploymentState =
   | "stopped"
   | "error";
 
+/**
+ * Desired intent (operator/SparkDash) — separate from observed reality.
+ * Externally-managed recipes have no SparkDash intent, so they stay `unknown`.
+ */
+export type DeploymentDesired = "running" | "stopped" | "unknown";
+
+/**
+ * Observed probe classification. `auth-gated` (HTTP 401/403) PROVES the process
+ * is up and serving and must never read as stopped.
+ */
+export type DeploymentObserved = "running" | "auth-gated" | "unhealthy" | "not-detected";
+
+/**
+ * Derived display state — fixed vocabulary (DESIGN_BRIEF global rule 10).
+ * Transitional lifecycle slugs pass through while a dry-run op is in flight.
+ */
+export type DeploymentDisplay =
+  | "running"
+  | "running-external"
+  | "expected-not-detected"
+  | "degraded"
+  | "stopped"
+  | "starting"
+  | "loading"
+  | "stopping"
+  | "available";
+
 export type RecipeRuntime = "tabbyapi-exl3" | "vllm" | "sglang" | "llama.cpp" | "custom";
 export type RecipeTopology = "single" | "tp2" | "tp3";
 
@@ -979,6 +1006,11 @@ export interface DeploymentStatus {
   managedBy: "external" | "sparkdash";
   dryRun: boolean;
   state: DeploymentState;
+  desired: DeploymentDesired;
+  observed: DeploymentObserved;
+  /** Read-only SSH pgrep corroboration evidence; never process control. */
+  discovered: boolean;
+  display: DeploymentDisplay;
   lastOp: string | null;
   lastError: string | null;
   startedAt: number | null;

@@ -4,25 +4,93 @@ import type { Route } from "../../hooks/router";
 import { fetchModel, archiveRecipe, cloneRecipe, fetchActivity } from "../../api/client";
 import { useDeployments } from "../../hooks/domainStore";
 import { StatusPill, Chip, EmptyState } from "../ui/Status";
+import { TabStrip } from "../ui/DataTable";
 import { Field, TextInput, FormFooter } from "../ui/form";
 import { RecipeEditor } from "./RecipeEditor";
 import { DeployControls } from "./DeployControls";
 import { LiveConsole } from "./LiveConsole";
 import { TimeSeriesChart, RangePicker, type Series } from "../ui/TimeSeriesChart";
 import { useTimedMetricsHistory } from "../../hooks/metricsStore";
+import { externalConnectView, runtimeLabel, type ExternalConnect } from "./fleetModel";
 
 const TABS = ["Overview", "Performance", "Live Console", "Recipes", "Configuration", "History"] as const;
 type Tab = (typeof TABS)[number];
 
+function copyText(text: string) {
+  void navigator.clipboard?.writeText(text);
+}
+
+/**
+ * Read-only connect panel for an externally launched runtime (the never-touch
+ * Qwen/TabbyAPI process): copyable endpoint, masked key + show toggle when a
+ * key exists, muted manage-elsewhere note and DISABLED lifecycle with tooltip.
+ */
+export function ExternalConnectPanel({ connect, recipe }: { connect: ExternalConnect; recipe: RecipePublic | null }) {
+  const [showKey, setShowKey] = useState(false);
+  const hasKey = connect.hasKey;
+  const masked = hasKey ? (showKey ? "sk-••••••••  (stored on node)" : "sk-••••••••••••") : null;
+  const runtime = runtimeLabel(recipe?.runtime);
+  return (
+    <div className="cp-connect" style={{ marginTop: 6 }}>
+      <div className="cp-connect-row">
+        <span className="cp-connect-label">Endpoint</span>
+        <span className="cp-connect-val" title={connect.endpoint}>
+          {connect.endpoint}
+        </span>
+        <div className="cp-connect-actions">
+          <button type="button" className="cp-btn ghost" onClick={() => copyText(connect.endpoint)}>
+            Copy
+          </button>
+        </div>
+      </div>
+      {masked ? (
+        <div className="cp-connect-row">
+          <span className="cp-connect-label">API key</span>
+          <span className="cp-connect-val">{masked}</span>
+          <div className="cp-connect-actions">
+            <button type="button" className="cp-btn ghost" onClick={() => setShowKey((s) => !s)} aria-pressed={showKey}>
+              {showKey ? "Hide" : "Show"}
+            </button>
+          </div>
+        </div>
+      ) : null}
+      <div className="cp-connect-row">
+        <span className="cp-connect-note">⦿ {connect.note}</span>
+        <div className="cp-connect-actions">
+          <button type="button" className="cp-btn" disabled title={`Externally managed — manage via ${runtime}`}>
+            Stop
+          </button>
+          <button type="button" className="cp-btn" disabled title={`Externally managed — manage via ${runtime}`}>
+            Restart
+          </button>
+        </div>
+      </div>
+      {connect.nodeNames.length ? (
+        <div className="cp-connect-row">
+          <span className="cp-connect-label">Nodes</span>
+          <span className="muted" style={{ fontSize: 11 }}>
+            {connect.nodeNames.join(", ")}
+          </span>
+          <span className="muted" style={{ fontSize: 11, marginLeft: 8 }}>
+            recipe {recipe?.id ?? "—"}
+          </span>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 interface ModelDetailProps {
   modelId: string;
   initialTab?: string;
+  /** Deep-link reqId to pre-seed the Live Console query. */
+  initialReqId?: number;
   sparks: SparkSnapshot[];
   navigate: (route: Route) => void;
   onDataChanged: () => void;
 }
 
-export function ModelDetail({ modelId, initialTab, sparks, navigate, onDataChanged }: ModelDetailProps) {
+export function ModelDetail({ modelId, initialTab, initialReqId, sparks, navigate, onDataChanged }: ModelDetailProps) {
   const [model, setModel] = useState<ModelEntry | null>(null);
   const [recipes, setRecipes] = useState<RecipePublic[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -83,53 +151,58 @@ export function ModelDetail({ modelId, initialTab, sparks, navigate, onDataChang
             <span className="cp-chip mono">{modelId}</span>
           </div>
         </div>
-        {primaryDep ? <StatusPill status={primaryDep.state as never} /> : <Chip>not deployed</Chip>}
+        {primaryDep ? <StatusPill status={primaryDep.display} /> : <Chip>not deployed</Chip>}
       </div>
 
-      <div className="cp-tabs" role="tablist">
-        {TABS.map((t) => (
-          <button
-            key={t}
-            role="tab"
-            type="button"
-            aria-selected={tab === t}
-            className={`cp-tab ${tab === t ? "is-active" : ""}`}
-            onClick={() => setTab(t)}
-          >
-            {t}
-          </button>
-        ))}
-      </div>
+      <TabStrip tabs={TABS} active={tab} onSelect={setTab} ariaLabel="Model sections" panelId="model-panel" />
 
       {tab === "Overview" ? (
-        <OverviewTab model={model} recipes={recipes} deps={deps} sparks={sparks} onDeployChanged={() => { void load(); onDataChanged(); }} />
+        <div id="model-panel-Overview" role="tabpanel" aria-labelledby="model-panel-Overview-tab">
+          <OverviewTab model={model} recipes={recipes} deps={deps} sparks={sparks} onDeployChanged={() => { void load(); onDataChanged(); }} />
+        </div>
       ) : null}
-      {tab === "Performance" ? <PerformanceTab sparks={sparks} recipe={primaryRecipe} /> : null}
+      {tab === "Performance" ? (
+        <div id="model-panel-Performance" role="tabpanel" aria-labelledby="model-panel-Performance-tab">
+          <PerformanceTab sparks={sparks} recipe={primaryRecipe} />
+        </div>
+      ) : null}
       {tab === "Live Console" ? (
-        primaryRecipe ? (
-          <LiveConsole recipeId={primaryRecipe.id} logDir={primaryRecipe.logDir} />
-        ) : (
-          <div className="cp-panel">
-            <EmptyState title="No recipe" subtitle="Add a deployment recipe with a log directory to enable the Live Console." />
-          </div>
-        )
+        <div id="model-panel-Live Console" role="tabpanel" aria-labelledby="model-panel-Live Console-tab">
+          {primaryRecipe ? (
+            <LiveConsole recipeId={primaryRecipe.id} logDir={primaryRecipe.logDir} initialReqId={initialReqId} />
+          ) : (
+            <div className="cp-panel">
+              <EmptyState title="No recipe" subtitle="Add a deployment recipe with a log directory to enable the Live Console." />
+            </div>
+          )}
+        </div>
       ) : null}
       {tab === "Recipes" ? (
-        <RecipesTab
-          recipes={recipes}
-          deps={deps}
-          editing={editing}
-          setEditing={setEditing}
-          sparks={sparks}
-          modelId={modelId}
-          onChanged={() => {
-            void load();
-            onDataChanged();
-          }}
-        />
+        <div id="model-panel-Recipes" role="tabpanel" aria-labelledby="model-panel-Recipes-tab">
+          <RecipesTab
+            recipes={recipes}
+            deps={deps}
+            editing={editing}
+            setEditing={setEditing}
+            sparks={sparks}
+            modelId={modelId}
+            onChanged={() => {
+              void load();
+              onDataChanged();
+            }}
+          />
+        </div>
       ) : null}
-      {tab === "Configuration" ? <ConfigTab model={model} recipe={primaryRecipe} /> : null}
-      {tab === "History" ? <HistoryTab modelId={modelId} /> : null}
+      {tab === "Configuration" ? (
+        <div id="model-panel-Configuration" role="tabpanel" aria-labelledby="model-panel-Configuration-tab">
+          <ConfigTab model={model} recipe={primaryRecipe} />
+        </div>
+      ) : null}
+      {tab === "History" ? (
+        <div id="model-panel-History" role="tabpanel" aria-labelledby="model-panel-History-tab">
+          <HistoryTab modelId={modelId} />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -157,6 +230,7 @@ function OverviewTab({
   const primary = recipes.find((r) => !r.archived) ?? null;
   const dep = deps.find((d) => d.recipeId === primary?.id);
   const nodeNames = (primary?.nodeIds || []).map((id) => sparks.find((s) => s.id === id)?.name || id);
+  const connect = dep && primary ? externalConnectView(dep, primary, sparks) : null;
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
@@ -178,6 +252,7 @@ function OverviewTab({
               <dt>Context</dt>
               <dd>{primary.contextLength != null ? primary.contextLength.toLocaleString() : "—"}</dd>
             </dl>
+            {connect ? <ExternalConnectPanel connect={connect} recipe={primary} /> : null}
             <div style={{ marginTop: 14 }}>
               <DeployControls recipe={primary} deployment={dep} onUpdated={onDeployChanged} />
             </div>
@@ -318,7 +393,7 @@ function RecipesTab({
                 <Chip tone="mono">{r.nodeIds.join(", ")}</Chip>
                 <Chip tone="mono">:{r.apiPort}</Chip>
                 {r.archived ? <Chip>archived</Chip> : null}
-                {dep ? <StatusPill status={dep.state as never} /> : null}
+                {dep ? <StatusPill status={dep.display} /> : null}
                 <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
                   <button type="button" className="cp-btn ghost" onClick={() => setEditing(r)}>
                     Edit

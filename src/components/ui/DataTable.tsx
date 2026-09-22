@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { Fragment, type KeyboardEvent, type ReactNode } from "react";
 
 export interface Column<T> {
   key: string;
@@ -24,12 +24,21 @@ interface DataTableProps<T> {
   sortDir?: "asc" | "desc";
   onSort?: (key: string) => void;
   ariaLabel?: string;
+  /** Optional element rendered above the table (search-left/filters/primary-right). */
+  toolbar?: ReactNode;
+  /** Row keys currently expanded inline. */
+  expandedKeys?: ReadonlySet<string>;
+  /** Render an inline expansion row for an expanded key; null = no row. */
+  renderExpanded?: (row: T) => ReactNode;
 }
 
 /**
  * Ops-grade data table: uppercase column headers, tabular numerals, right-aligned
  * numeric columns, real <th scope> semantics, optional sortable headers with
  * aria-sort, clickable rows. Status/color is the caller's cell content.
+ *
+ * Optional toolbar sits above the table; optional expandedKeys/renderExpanded
+ * add an inline expansion row under the matching row.
  */
 export function DataTable<T>({
   columns,
@@ -41,96 +50,118 @@ export function DataTable<T>({
   sortDir,
   onSort,
   ariaLabel,
+  toolbar,
+  expandedKeys,
+  renderExpanded,
 }: DataTableProps<T>) {
   return (
-    <div className="cp-table-wrap">
-      <table className="cp-table" aria-label={ariaLabel}>
-        <thead>
-          <tr>
-            {columns.map((col) => {
-              const isSorted = sortKey === col.key;
-              return (
-                <th
-                  key={col.key}
-                  scope="col"
-                  style={{ textAlign: col.align ?? "left", width: col.width }}
-                  aria-sort={isSorted ? (sortDir === "asc" ? "ascending" : "descending") : undefined}
-                >
-                  {col.sortable && onSort ? (
-                    <button
-                      type="button"
-                      className="cp-sort-head"
-                      onClick={() => onSort(col.key)}
-                      style={{
-                        all: "unset",
-                        cursor: "pointer",
-                        display: "inline-flex",
-                        gap: 4,
-                        alignItems: "center",
-                        font: "inherit",
-                        color: "inherit",
-                      }}
-                    >
-                      {col.header}
-                      <span
-                        aria-hidden="true"
-                        className="cp-sort-caret"
-                        data-sorted={isSorted ? (sortDir === "asc" ? "asc" : "desc") : undefined}
-                        style={{ opacity: isSorted ? 1 : 0 }}
-                      >
-                        {isSorted && sortDir === "desc" ? "▼" : "▲"}
-                      </span>
-                    </button>
-                  ) : (
-                    col.header
-                  )}
-                </th>
-              );
-            })}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.length === 0 ? (
+    <>
+      {toolbar ? <div className="cp-toolbar">{toolbar}</div> : null}
+      <div className="cp-table-wrap">
+        <table className="cp-table" aria-label={ariaLabel}>
+          <thead>
             <tr>
-              <td colSpan={columns.length}>
-                {empty ?? <div className="cp-table-empty">No data</div>}
-              </td>
-            </tr>
-          ) : (
-            rows.map((row) => (
-              <tr
-                key={rowKey(row)}
-                className={onRowClick ? "clickable" : undefined}
-                onClick={onRowClick ? () => onRowClick(row) : undefined}
-                tabIndex={onRowClick ? 0 : undefined}
-                onKeyDown={
-                  onRowClick
-                    ? (e) => {
-                        if (e.key === "Enter") onRowClick(row);
-                      }
-                    : undefined
-                }
-              >
-                {columns.map((col) => (
-                  <td
+              {columns.map((col) => {
+                const isSorted = sortKey === col.key;
+                return (
+                  <th
                     key={col.key}
-                    className={[
-                      col.align === "right" ? "num" : "",
-                      col.mono ? "mono" : "",
-                      col.muted ? "muted" : "",
-                    ]
-                      .filter(Boolean)
-                      .join(" ")}
+                    scope="col"
+                    style={{ textAlign: col.align ?? "left", width: col.width }}
+                    aria-sort={isSorted ? (sortDir === "asc" ? "ascending" : "descending") : undefined}
                   >
-                    {col.render(row)}
-                  </td>
-                ))}
+                    {col.sortable && onSort ? (
+                      <button
+                        type="button"
+                        className="cp-sort-head"
+                        onClick={() => onSort(col.key)}
+                        style={{
+                          all: "unset",
+                          cursor: "pointer",
+                          display: "inline-flex",
+                          gap: 4,
+                          alignItems: "center",
+                          font: "inherit",
+                          color: "inherit",
+                        }}
+                      >
+                        {col.header}
+                        <span
+                          aria-hidden="true"
+                          className="cp-sort-caret"
+                          data-sorted={isSorted ? (sortDir === "asc" ? "asc" : "desc") : undefined}
+                          style={{ opacity: isSorted ? 1 : 0 }}
+                        >
+                          {isSorted && sortDir === "desc" ? "▼" : "▲"}
+                        </span>
+                      </button>
+                    ) : (
+                      col.header
+                    )}
+                  </th>
+                );
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan={columns.length}>
+                  {empty ?? <div className="cp-table-empty">No data</div>}
+                </td>
               </tr>
-            ))
-          )}
-        </tbody>
-      </table>
-    </div>
+            ) : (
+              rows.map((row) => {
+                const key = rowKey(row);
+                const expanded = expandedKeys?.has(key) ?? false;
+                const expansion = expanded && renderExpanded ? renderExpanded(row) : null;
+                return (
+                  <Fragment key={key}>
+                    <tr
+                      className={onRowClick ? "clickable" : undefined}
+                      onClick={onRowClick ? () => onRowClick(row) : undefined}
+                      tabIndex={onRowClick ? 0 : undefined}
+                      role={onRowClick ? "button" : undefined}
+                      aria-expanded={renderExpanded && expandedKeys ? expanded : undefined}
+                      onKeyDown={
+                        onRowClick
+                          ? (e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                onRowClick(row);
+                              }
+                            }
+                          : undefined
+                      }
+                    >
+                      {columns.map((col) => (
+                        <td
+                          key={col.key}
+                          className={[
+                            col.align === "right" ? "num" : "",
+                            col.mono ? "mono" : "",
+                            col.muted ? "muted" : "",
+                          ]
+                            .filter(Boolean)
+                            .join(" ")}
+                        >
+                          {col.render(row)}
+                        </td>
+                      ))}
+                    </tr>
+                    {expansion ? (
+                      <tr className="cp-expanded-row">
+                        <td colSpan={columns.length}>{expansion}</td>
+                      </tr>
+                    ) : null}
+                  </Fragment>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }
 
@@ -145,4 +176,152 @@ export function sortRows<T>(rows: T[], col: Column<T> | undefined, dir: "asc" | 
     if (va > vb) return dir === "asc" ? 1 : -1;
     return 0;
   });
+}
+
+// ─── Counted status tabs ──────────────────────────────────
+
+export interface CountedTab {
+  key: string;
+  label: string;
+  count: number;
+}
+
+/**
+ * Tally items into a Record keyed by bucket. Pure reducer shared by the
+ * Models/Fleet counted tabs so both surfaces agree on the grammar.
+ */
+export function countBy<T>(items: readonly T[], keyOf: (item: T) => string | null | undefined): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const item of items) {
+    const k = keyOf(item);
+    if (k == null) continue;
+    out[k] = (out[k] ?? 0) + 1;
+  }
+  return out;
+}
+
+/**
+ * Roving-tabindex keyboard nav shared by every tablist: ArrowLeft/Right wrap,
+ * Home/End jump, focus follows selection.
+ */
+export function moveTabFocus(
+  e: KeyboardEvent<HTMLElement>,
+  keys: readonly string[],
+  active: string,
+  onSelect: (key: string) => void
+) {
+  if (e.key !== "ArrowLeft" && e.key !== "ArrowRight" && e.key !== "Home" && e.key !== "End") return;
+  if (keys.length === 0) return;
+  e.preventDefault();
+  const i = Math.max(0, keys.indexOf(active));
+  const next =
+    e.key === "Home"
+      ? 0
+      : e.key === "End"
+        ? keys.length - 1
+        : e.key === "ArrowLeft"
+          ? (i - 1 + keys.length) % keys.length
+          : (i + 1) % keys.length;
+  onSelect(keys[next]);
+  const tabs = e.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]');
+  tabs[next]?.focus();
+}
+
+/**
+ * Generic underlined tab strip with roving tabindex, arrow-key nav and
+ * aria-controls wiring. `panelId` names the matching `role="tabpanel"` panels.
+ */
+export function TabStrip<T extends string>({
+  tabs,
+  active,
+  onSelect,
+  ariaLabel,
+  panelId,
+  className = "cp-tabs",
+  tabClassName = "cp-tab",
+  titleOf,
+}: {
+  tabs: readonly T[];
+  active: T;
+  onSelect: (tab: T) => void;
+  ariaLabel?: string;
+  panelId?: string;
+  className?: string;
+  tabClassName?: string;
+  titleOf?: (tab: T) => string;
+}) {
+  return (
+    <div className={className} role="tablist" aria-label={ariaLabel} onKeyDown={(e) => moveTabFocus(e, tabs, active, onSelect as (k: string) => void)}>
+      {tabs.map((t) => {
+        const isActive = t === active;
+        return (
+          <button
+            key={t}
+            type="button"
+            role="tab"
+            id={panelId ? `${panelId}-${t}-tab` : undefined}
+            aria-controls={panelId ? `${panelId}-${t}` : undefined}
+            aria-selected={isActive}
+            tabIndex={isActive ? 0 : -1}
+            className={`${tabClassName} ${isActive ? "is-active" : ""}`}
+            onClick={() => onSelect(t)}
+            title={titleOf?.(t)}
+          >
+            {t}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Counted status tabs. The count replaces a repeated status column; a zero-count
+ * bucket still renders so the vocabulary is stable.
+ */
+export function CountedTabs({
+  tabs,
+  active,
+  onSelect,
+  ariaLabel = "Status filters",
+  panelId,
+}: {
+  tabs: CountedTab[];
+  active: string;
+  onSelect: (key: string) => void;
+  ariaLabel?: string;
+  /** Optional id of the controlled panel (adds aria-controls). */
+  panelId?: string;
+}) {
+  const keys = tabs.map((t) => t.key);
+  return (
+    <div
+      className="cp-counted-tabs"
+      role="tablist"
+      aria-label={ariaLabel}
+      onKeyDown={(e) => moveTabFocus(e, keys, active, onSelect)}
+    >
+      {tabs.map((t) => {
+        const isActive = t.key === active;
+        return (
+          <button
+            key={t.key}
+            type="button"
+            role="tab"
+            id={panelId ? `${panelId}-${t.key}-tab` : undefined}
+            aria-controls={panelId ? `${panelId}-${t.key}` : undefined}
+            aria-selected={isActive}
+            tabIndex={isActive ? 0 : -1}
+            className={`cp-counted-tab ${isActive ? "is-active" : ""}`}
+            onClick={() => onSelect(t.key)}
+          >
+            {t.label}
+            <span className="cp-counted-count" aria-hidden="true">
+              {t.count}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
 }

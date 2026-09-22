@@ -1,10 +1,9 @@
-import { useMemo } from "react";
-import type { SparkSnapshot, DeploymentStatus, RecipePublic } from "../../api/types";
+import { useMemo, useState } from "react";
+import type { SparkSnapshot, DeploymentStatus, RecipePublic, ModelEntry } from "../../api/types";
 import type { Route } from "../../hooks/router";
-import { DataTable, type Column } from "../ui/DataTable";
-import { StatusPill, Chip } from "../ui/Status";
-import { EmptyState } from "../ui/Status";
-import { primaryNodes, workersOf, recipesOnNode, fmtUptime } from "./fleetModel";
+import { DataTable, CountedTabs, type Column } from "../ui/DataTable";
+import { StatusPill, StatusDot, Chip, EmptyState } from "../ui/Status";
+import { primaryNodes, recipesOnNode, fmtUptime, nodeHealthRail, nodeMatchesRail } from "./fleetModel";
 import { Topology } from "./Topology";
 import { isWorkerSpark } from "../../api/sparkRole";
 
@@ -13,11 +12,32 @@ interface FleetProps {
   deployments: readonly DeploymentStatus[];
   recipes: readonly RecipePublic[];
   navigate: (route: Route) => void;
+  /** Model registry — friendly topology labels; falls back to raw ids. */
+  models?: ModelEntry[];
 }
 
-export function FleetSection({ sparks, deployments, recipes, navigate }: FleetProps) {
+function fmtTemp(celsius: number): string {
+  return `${Math.round(celsius)}°C`;
+}
+
+export function FleetSection({ sparks, deployments, recipes, navigate, models = [] }: FleetProps) {
+  const [rail, setRail] = useState("all");
+  const [query, setQuery] = useState("");
+
   const nodes = useMemo(() => primaryNodes(sparks), [sparks]);
   const workers = useMemo(() => sparks.filter(isWorkerSpark), [sparks]);
+  // One rail vocabulary for both the side rail and the toolbar tabs so a chip
+  // persists when the other surface is used.
+  const railItems = useMemo(() => nodeHealthRail(nodes, deployments), [nodes, deployments]);
+
+  const rows = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return nodes.filter((n) => {
+      if (!nodeMatchesRail(n, rail, deployments)) return false;
+      if (q && !`${n.name} ${n.lanIp ?? ""} ${n.role ?? ""}`.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [nodes, rail, deployments, query]);
 
   const columns: Column<SparkSnapshot>[] = [
     {
@@ -25,40 +45,50 @@ export function FleetSection({ sparks, deployments, recipes, navigate }: FleetPr
       header: "Node",
       render: (n) => (
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span className={`cp-dot ${n.online ? "running" : "stopped"}`} />
           <span style={{ fontWeight: 500 }}>{n.name}</span>
           <Chip>{n.kind === "host" ? "host" : "spark"}</Chip>
           {n.role === "head" ? <Chip tone="accent">head</Chip> : null}
         </div>
       ),
     },
-    { key: "ip", header: "Address", mono: true, muted: true, render: (n) => n.lanIp || "—" },
     {
-      key: "models",
-      header: "Deployments",
-      render: (n) => {
-        const onNode = recipesOnNode(recipes, n.id);
-        if (!onNode.length) return <span className="muted">—</span>;
-        return (
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            {onNode.map((r) => {
-              const dep = deployments.find((d) => d.recipeId === r.id);
-              return <StatusPill key={r.id} status={(dep?.state ?? "available") as never} label={r.modelId} />;
-            })}
-          </div>
-        );
-      },
+      key: "status",
+      header: "Status",
+      render: (n) => <StatusPill status={n.online ? "online" : "offline"} />,
     },
     {
       key: "gpu",
       header: "GPU",
       align: "right",
-      render: (n) => (n.metrics?.gpu ? `${Math.round(n.metrics.gpu.usage)}%` : "—"),
+      render: (n) => (n.metrics?.gpu ? <span>{Math.round(n.metrics.gpu.usage)}<span className="cp-unit"> %</span></span> : "—"),
+    },
+    {
+      key: "vram",
+      header: "VRAM",
+      align: "right",
+      muted: true,
+      render: (n) => {
+        const v = n.metrics?.gpu?.vram;
+        if (!v || v.total <= 0) return "—";
+        return (
+          <span className="mono">
+            {Math.round(v.used / 1024)}/{Math.round(v.total / 1024)} GB
+          </span>
+        );
+      },
+    },
+    {
+      key: "temp",
+      header: "Temp",
+      align: "right",
+      muted: true,
+      render: (n) => (n.metrics?.gpu?.temperature != null ? <span>{fmtTemp(n.metrics.gpu.temperature)}</span> : "—"),
     },
     {
       key: "power",
       header: "Power",
       align: "right",
+      muted: true,
       render: (n) => {
         const p = n.metrics?.gpu?.power?.systemDraw ?? n.metrics?.gpu?.power?.draw;
         return p != null ? `${Math.round(p)} W` : "—";
@@ -71,6 +101,26 @@ export function FleetSection({ sparks, deployments, recipes, navigate }: FleetPr
       muted: true,
       render: (n) => fmtUptime(n.uptime),
     },
+    {
+      key: "actions",
+      header: "",
+      align: "right",
+      render: (n) => (
+        <div className="cp-row-actions">
+          <button
+            type="button"
+            className="cp-kebab"
+            aria-label={`Open ${n.name}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              navigate({ section: "node", nodeId: n.id });
+            }}
+          >
+            ⋯
+          </button>
+        </div>
+      ),
+    },
   ];
 
   return (
@@ -78,8 +128,36 @@ export function FleetSection({ sparks, deployments, recipes, navigate }: FleetPr
       <div>
         <div className="cp-section-title">Fleet</div>
         <div className="cp-section-sub">
-          {nodes.length} compute node{nodes.length === 1 ? "" : "s"}
+          {sparks.length} compute node{sparks.length === 1 ? "" : "s"}
           {workers.length ? ` · ${workers.length} worker${workers.length === 1 ? "" : "s"}` : ""} · scales to any node count
+        </div>
+      </div>
+
+      <div className="cp-toolbar" role="search">
+        <div className="cp-toolbar-search">
+          <input
+            type="search"
+            aria-label="Search nodes"
+            placeholder="Search name, address, role…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </div>
+        <div className="cp-toolbar-filters">
+          <CountedTabs
+            tabs={railItems.filter((r) => r.key !== "running").map((r) => ({ key: r.key, label: r.label, count: r.count }))}
+            active={rail}
+            onSelect={setRail}
+            ariaLabel="Node status filters"
+            panelId="fleet-nodes"
+          />
+        </div>
+        <div className="cp-toolbar-primary">
+          {query ? (
+            <button type="button" className="cp-btn ghost" onClick={() => setQuery("")}>
+              Clear
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -89,22 +167,48 @@ export function FleetSection({ sparks, deployments, recipes, navigate }: FleetPr
         </div>
       ) : (
         <>
+          <div className="cp-fleet-layout">
+            {/* Aggregate health rail — clicking a count filters the table */}
+            <div className="cp-rail" aria-label="Fleet health rail">
+              {railItems.map((r) => (
+                <button
+                  key={r.key}
+                  type="button"
+                  className={`cp-rail-item ${r.tone} ${rail === r.key ? "is-active" : ""}`}
+                  aria-pressed={rail === r.key}
+                  onClick={() => setRail(r.key)}
+                >
+                  <StatusDot status={r.key === "offline" ? "offline" : "online"} />
+                  <span>{r.label}</span>
+                  <span className="cp-rail-count">{r.count}</span>
+                </button>
+              ))}
+            </div>
+
+            <div id="fleet-nodes">
+              <DataTable
+                ariaLabel="Compute nodes"
+                columns={columns}
+                rows={rows}
+                rowKey={(n) => n.id}
+                onRowClick={(n) => navigate({ section: "node", nodeId: n.id })}
+                empty={<div className="cp-table-empty">No nodes match this filter.</div>}
+              />
+            </div>
+          </div>
+
           {nodes.length <= 4 ? (
             <div className="cp-panel">
               <div className="cp-panel-title">Topology</div>
-              <Topology sparks={sparks} recipes={recipes} deployments={deployments} onNodeClick={(id) => navigate({ section: "node", nodeId: id })} />
+              <Topology sparks={sparks} recipes={recipes} deployments={deployments} models={models} onNodeClick={(id) => navigate({ section: "node", nodeId: id })} />
             </div>
           ) : null}
-          <DataTable
-            ariaLabel="Compute nodes"
-            columns={columns}
-            rows={nodes}
-            rowKey={(n) => n.id}
-            onRowClick={(n) => navigate({ section: "node", nodeId: n.id })}
-          />
+
           {workers.length > 0 ? (
             <div>
-              <div className="cp-panel-title" style={{ marginBottom: 6 }}>Worker nodes</div>
+              <div className="cp-panel-title" style={{ marginBottom: 6 }}>
+                Worker nodes
+              </div>
               <DataTable
                 ariaLabel="Worker nodes"
                 columns={[
@@ -113,7 +217,7 @@ export function FleetSection({ sparks, deployments, recipes, navigate }: FleetPr
                     header: "Worker",
                     render: (n) => (
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <span className={`cp-dot ${n.online ? "running" : "stopped"}`} />
+                        <StatusDot status={n.online ? "online" : "offline"} />
                         <span style={{ fontWeight: 500 }}>{n.name}</span>
                         <Chip>worker</Chip>
                       </div>

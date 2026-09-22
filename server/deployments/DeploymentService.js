@@ -18,6 +18,7 @@
 import fs from "fs";
 import { atomicWrite } from "../util/atomicWrite.js";
 import { AUDIT_LOG_PATH, DEPLOYMENTS_ACTIVE_PATH } from "../config.js";
+import { deriveDisplay } from "./deploymentStatus.js";
 
 export const DEPLOYMENT_STATES = Object.freeze([
   "available",
@@ -71,9 +72,21 @@ export class DeploymentService {
         if (d?.recipeId) {
           // Ops that were mid-flight when the server died settle to their
           // end state; nothing is actually running in dry-run mode.
+          const settled =
+            d.state === "starting" || d.state === "loading"
+              ? "running"
+              : d.state === "stopping"
+                ? "stopped"
+                : d.state;
+          const desired = d.desired || (d.managedBy === "external" ? "unknown" : "stopped");
+          const observed = d.observed || "not-detected";
           this._states.set(d.recipeId, {
             ...d,
-            state: d.state === "starting" || d.state === "loading" ? "running" : d.state === "stopping" ? "stopped" : d.state,
+            desired,
+            observed,
+            discovered: Boolean(d.discovered),
+            display: d.display || deriveDisplay({ desired, observed }),
+            state: settled,
             recoveredAt: Date.now(),
           });
         }
@@ -129,14 +142,29 @@ export class DeploymentService {
   }
 
   _baseState(recipe) {
+    const managedBy = recipe.metadata?.managedBy === "sparkdash" ? "sparkdash" : "external";
+    // Externally-managed recipes have no SparkDash intent → desired stays
+    // unknown unless the seed asserts an operator intent via metadata.desired.
+    const declared = recipe.metadata?.desired;
+    const desired =
+      declared === "running" || declared === "stopped"
+        ? declared
+        : managedBy === "external"
+          ? "unknown"
+          : "stopped";
+    const observed = "not-detected";
     return {
       recipeId: recipe.id,
       modelId: recipe.modelId,
       nodeIds: recipe.nodeIds || [],
       apiPort: recipe.apiPort,
-      managedBy: recipe.metadata?.managedBy === "sparkdash" ? "sparkdash" : "external",
+      managedBy,
       dryRun: true,
       state: "available",
+      desired,
+      observed,
+      discovered: false,
+      display: deriveDisplay({ desired, observed }),
       lastOp: null,
       lastError: null,
       startedAt: null,
@@ -159,21 +187,46 @@ export class DeploymentService {
   }
 
   /**
-   * Observe-only update for externally-managed deployments: the LLM probe
-   * says whether the endpoint answers, which maps to running/unavailable.
-   * Never transitions a dry-run managed op.
+   * Observe-only update for externally-managed deployments.
+   *
+   * `observed` is the probe classification (see deploymentStatus.classifyProbe);
+   * an auth-gated 401 PROVES the process is up. `llmAvailable` is kept for
+   * backward compatibility and maps to running / not-detected. `discovered` is
+   * read-only SSH corroboration evidence. Never transitions a dry-run managed op.
+   *
+   * @param {string} recipeId
+   * @param {{ observed?: string, llmAvailable?: boolean, discovered?: boolean }} input
    */
-  observe(recipeId, { llmAvailable }) {
+  observe(recipeId, { observed, llmAvailable, discovered = false } = {}) {
     const state = this.getState(recipeId);
-    if (!state || state.managedBy !== "external") return state;
+    if (!state) return state;
     if (state.lastOp) return state; // an explicit op (dry-run) wins while active
-    const next = llmAvailable ? "running" : "stopped";
-    if (state.state !== next) {
-      state.state = next;
-      state.updatedAt = Date.now();
-      this._checkpoint();
-      this.onStateChange({ ...state });
+
+    const observedNext = observed || (llmAvailable ? "running" : "not-detected");
+    const stateNext =
+      observedNext === "running" || observedNext === "auth-gated"
+        ? "running"
+        : observedNext === "unhealthy"
+          ? "error"
+          : "stopped";
+    const display = deriveDisplay({ desired: state.desired, observed: observedNext, discovered });
+
+    if (
+      state.observed === observedNext &&
+      state.display === display &&
+      state.discovered === discovered
+    ) {
+      return state;
     }
+    state.observed = observedNext;
+    state.discovered = discovered;
+    state.display = display;
+    // Externally-managed recipes have no dry-run engine owning `state`; managed
+    // recipes keep the lifecycle state the dry-run op settled on.
+    if (state.managedBy === "external") state.state = stateNext;
+    state.updatedAt = Date.now();
+    this._checkpoint();
+    this.onStateChange({ ...state });
     return state;
   }
 
@@ -231,11 +284,19 @@ export class DeploymentService {
     for (const step of steps) {
       const apply = () => {
         state.state = step.state;
+        // Transitional lifecycle steps pass through to the display pill so the
+        // pulse stays honest; settled steps recompute from desired+observed.
+        state.display = step.state;
         state.updatedAt = Date.now();
-        if (step.state === "running") state.startedAt = Date.now();
+        if (step.state === "running") {
+          state.startedAt = Date.now();
+          state.desired = "running";
+        }
+        if (step.state === "stopped") state.desired = "stopped";
         if (step.state === "stopped" || step.state === "running") {
           state.lastOp = null;
           this._timers.delete(recipeId);
+          state.display = deriveDisplay({ desired: state.desired, observed: state.observed });
         }
         this._checkpoint();
         this.onStateChange({ ...state });

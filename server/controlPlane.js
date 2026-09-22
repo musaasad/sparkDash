@@ -14,6 +14,9 @@ import { DeploymentService } from "./deployments/DeploymentService.js";
 import { LiveConsoleManager } from "./collectors/LiveConsole.js";
 import { ActivityLog } from "./activity/ActivityLog.js";
 import { createRateLimiter } from "./validate.js";
+import { classifyProbe, probeEndpoint, probeUrl } from "./deployments/deploymentStatus.js";
+import { sshExec } from "./collectors/ssh.js";
+import { llmProbeHost } from "./collectors/llmHost.js";
 
 /**
  * Seed the first real deployment as generic architecture metadata (not logic).
@@ -99,6 +102,8 @@ function seedTp2Example(modelRegistry, recipeRegistry) {
           "vllm serve /model --served-model-name DeepSeek-V4.1-Flash-UNCENSORED-EXL3 --tensor-parallel-size 2 --nnodes 2 (containerized)",
         metadata: {
           managedBy: "external",
+          // Operator intent: TP2 is expected up (unknown-default external recipe).
+          desired: "running",
           servedModelId: "DeepSeek-V4.1-Flash-UNCENSORED-EXL3",
           masterAddr: "10.100.124.2",
           speculative: "dspark x3",
@@ -453,23 +458,92 @@ export function createControlPlane(deps) {
   const prevOnline = new Map();
   const seenBench = new Set();
 
+  // Desired-vs-observed probe cache. An unauthenticated 401/403 CLASSIFIES as
+  // auth-gated (the process is up and serving), never as stopped. The SSH
+  // pgrep corroboration is strictly read-only; nothing is signalled here.
+  const PROBE_TTL_MS = 6000;
+  const DISCOVERY_TTL_MS = 60_000;
+  /** recipeId -> { at: number, observed: string|null } */
+  const probeCache = new Map();
+  /** recipeId -> { at: number, value: boolean } */
+  const discoveredCache = new Map();
+  const discoveryInFlight = new Set();
+
+  /** Declared probe host for a recipe's primary node (same host rule as LlmProbe). */
+  function recipeHost(recipe) {
+    const spark = sparkRegistry.getSpark(recipe.nodeIds?.[0]);
+    return spark ? llmProbeHost(spark) : null;
+  }
+
+  /** Fallback classification from the monitor snapshot (first tick / mid-refresh). */
+  function classifyFromSnapshot(recipe, snap) {
+    const list = snap?.metrics?.llm || [];
+    const llm = list.find((l) => l.port === recipe.apiPort) || list[0];
+    if (!llm) return "not-detected";
+    if (llm.available === true) return "running";
+    // 401/403 posture from the existing probe: the endpoint answered but is gated.
+    if (llm.posture?.auth === "protected") return "auth-gated";
+    return classifyProbe({ status: null, errorCode: llm.errorCode, errorName: llm.errorName });
+  }
+
+  /** Fire-and-forget refresh of the read-only probe + pgrep corroboration. */
+  function refreshProbes() {
+    const now = Date.now();
+    for (const recipe of recipeRegistry.list()) {
+      if (recipe.metadata?.managedBy !== "external") continue;
+
+      const cached = probeCache.get(recipe.id);
+      if (!cached || now - cached.at >= PROBE_TTL_MS) {
+        const url = probeUrl(recipeHost(recipe), recipe.apiPort, recipe.healthPath);
+        probeCache.set(recipe.id, { at: now, observed: null });
+        void probeEndpoint(url)
+          .then((outcome) => {
+            probeCache.set(recipe.id, { at: Date.now(), observed: classifyProbe(outcome) });
+          })
+          .catch(() => {
+            probeCache.set(recipe.id, { at: Date.now(), observed: "not-detected" });
+          });
+      }
+
+      const disc = discoveredCache.get(recipe.id);
+      if (discoveryInFlight.has(recipe.id)) continue;
+      if (disc && now - disc.at < DISCOVERY_TTL_MS) continue;
+      const spark = sparkRegistry.getSpark(recipe.nodeIds?.[0]);
+      if (!spark) continue;
+      discoveryInFlight.add(recipe.id);
+      sshExec(spark, "pgrep -f 'tabbyapi|vllm' >/dev/null 2>&1 && echo up || echo down", {
+        timeoutMs: 6000,
+      })
+        .then((out) => discoveredCache.set(recipe.id, { at: Date.now(), value: /\bup\b/.test(out) }))
+        .catch(() => discoveredCache.set(recipe.id, { at: Date.now(), value: false }))
+        .finally(() => discoveryInFlight.delete(recipe.id));
+    }
+  }
+
   function observeFleet() {
-    // 1) Externally-managed deployments: derive state from LLM probes.
+    refreshProbes();
+
+    // 1) Externally-managed deployments: derive observed state from the probe.
     for (const recipe of recipeRegistry.list()) {
       const primary = monitors.get(recipe.nodeIds?.[0]);
-      if (!primary) {
-        deployments.observe(recipe.id, { llmAvailable: false });
-        continue;
+      let observed = "not-detected";
+      if (primary) {
+        let snap = null;
+        let online = false;
+        try {
+          snap = primary.snapshot();
+          online = Boolean(snap?.online);
+        } catch {
+          online = false;
+        }
+        if (online) {
+          observed = probeCache.get(recipe.id)?.observed || classifyFromSnapshot(recipe, snap);
+        }
       }
-      let available = false;
-      try {
-        const snap = primary.snapshot();
-        const llmList = snap?.metrics?.llm || [];
-        available = llmList.some((l) => l.available);
-      } catch {
-        available = false;
-      }
-      deployments.observe(recipe.id, { llmAvailable: available });
+      deployments.observe(recipe.id, {
+        observed,
+        discovered: discoveredCache.get(recipe.id)?.value === true,
+      });
     }
 
     // 2) Node online/offline transitions → activity events.
