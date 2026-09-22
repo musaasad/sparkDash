@@ -104,3 +104,11 @@ export function parseTelemetryLine(runtime, msg) {
 export function providerLabel(runtime) {
   return providerFor(runtime).label;
 }
+
+/**
+ * Normalized metric keys a runtime meaningfully exposes, for the /api/runtimes
+ * catalog. Empty (never null) means only the universal core instruments.
+ */
+export function metricsFor(runtime) {
+  return providerFor(runtime).metrics(runtime);
+}

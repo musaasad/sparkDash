@@ -589,6 +589,8 @@ export class SparkRegistry {
       kind: config.kind === "host" ? "host" : "spark",
       lanIp: config.lanIp || "",
       cx7Ip: config.cx7Ip || null,
+      /** Optional named physical fabric (link discovery only). */
+      fabric: config.fabric || null,
       /** Optional user override for Wake-on-LAN. Empty → use detectedMacAddress. */
       macAddress: config.macAddress || null,
       /** Last MAC seen on enP7s7 (auto; not set via public PATCH). */

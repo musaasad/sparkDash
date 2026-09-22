@@ -166,7 +166,68 @@ test("archived recipe cannot back a new deployment and renders read-only", () =>
   assert.equal(pub.archived, true);
 });
 
-const { normalizeRecipe, normalizeDeployment } = await import("../schema.js");
+const { normalizeRecipe, normalizeDeployment, normalizeTopology, topologySlug } = await import("../schema.js");
+
+test("WS4 explicit tp/pp/dp/ep normalize, dominate mode and product the slug", () => {
+  const t = normalizeTopology({ topology: { tp: 2, pp: 2 } });
+  assert.equal(t.tp, 2);
+  assert.equal(t.pp, 2);
+  assert.equal(t.dp, null);
+  assert.equal(t.ep, null);
+  // dominant degree kind, product parallelism (replica total)
+  assert.equal(t.mode, "tp");
+  assert.equal(t.parallelism, 4);
+  assert.equal(t.minNodes, 4);
+  assert.equal(t.unknown, false);
+  assert.equal(topologySlug(t), "tp4");
+});
+
+test("WS4 dominant tie-break is tp > pp > dp > ep", () => {
+  const t = normalizeTopology({ topology: { ep: 4, dp: 4, pp: 4, tp: 4 } });
+  assert.equal(t.mode, "tp");
+  assert.equal(t.parallelism, 256);
+  const only = normalizeTopology({ topology: { ep: 3 } });
+  assert.equal(only.mode, "ep");
+  assert.equal(topologySlug(only), "ep3");
+});
+
+test("WS4 legacy mode+parallelism still works and maps to its own degree", () => {
+  const t = normalizeTopology({ topology: { mode: "pp", parallelism: 3 } });
+  assert.equal(t.mode, "pp");
+  assert.equal(t.parallelism, 3);
+  assert.equal(t.pp, 3);
+  assert.equal(t.tp, null);
+  assert.equal(t.dp, null);
+  assert.equal(topologySlug(t), "pp3");
+  // legacy v1 string "tp2" keeps working too
+  const v1 = normalizeTopology({ topology: "tp2" });
+  assert.equal(v1.mode, "tp");
+  assert.equal(v1.tp, 2);
+  assert.equal(topologySlug(v1), "tp2");
+});
+
+test("WS4 node count NEVER creates a degree — unknown when >1 node unconfigured", () => {
+  const two = normalizeTopology({ topology: { mode: "single", parallelism: 1 }, nodeIds: ["a", "b"] });
+  assert.equal(two.tp, null);
+  assert.equal(two.pp, null);
+  assert.equal(two.dp, null);
+  assert.equal(two.ep, null);
+  assert.equal(two.unknown, true);
+
+  const three = normalizeTopology({ nodeIds: ["a", "b", "c"] });
+  assert.equal(three.tp, null);
+  assert.equal(three.unknown, true);
+  assert.equal(three.mode, "single");
+
+  // explicit degree present → not unknown, even without nodeIds
+  assert.equal(normalizeTopology({ topology: { tp: 2 } }).unknown, false);
+});
+
+test("WS4 unknown flag stays false for a genuine single node", () => {
+  const t = normalizeTopology({ topology: { mode: "single", parallelism: 1 }, nodeIds: ["a"] });
+  assert.equal(t.unknown, false);
+  assert.equal(t.mode, "single");
+});
 
 test("F3 normalize drops lifecycleCommands for an external mechanism", () => {
   const r = normalizeRecipe({

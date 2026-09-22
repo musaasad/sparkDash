@@ -295,3 +295,81 @@ describe("TP2 polish helpers", () => {
     expect(nodeHealthRail(sparks, [degraded]).find((r) => r.key === "attention")?.count).toBe(3);
   });
 });
+
+import { deploymentTelemetry, deriveRuntimeState } from "./fleetModel";
+import type { LlmMetrics } from "../../api/types";
+
+/** Minimal LlmMetrics series; absent fields stay undefined (never fabricated). */
+function llm(over: Partial<LlmMetrics> = {}): LlmMetrics {
+  return { available: true, generationTps: 0, ...over } as LlmMetrics;
+}
+
+function nodeWithLlm(id: string, over: Partial<SparkSnapshot> = {}, series: Partial<LlmMetrics> = {}): SparkSnapshot {
+  return spark({
+    id,
+    llmPort: 8889,
+    llmPorts: [8889],
+    metrics: { ...spark().metrics, llm: [llm(series)] },
+    ...over,
+  });
+}
+
+describe("deploymentTelemetry", () => {
+  it("reads primary-node fields and nulls absent ones", () => {
+    const d = { ...dep("r1", "running"), nodeIds: ["a"] };
+    const t = deploymentTelemetry([nodeWithLlm("a", { uptime: 500 }, { ttftSeconds: 0.4, requestsRunning: 2 })], d)!;
+    expect(t.ttftSeconds).toBe(0.4);
+    expect(t.requestsRunning).toBe(2);
+    expect(t.kvCacheUsage).toBeNull();
+    expect(t.mtpAcceptanceRate).toBeNull();
+    expect(t.slotsTotal).toBeNull();
+  });
+
+  it("sums generationTps across member nodes but takes ttft from the coordinator", () => {
+    const d = { ...dep("r1", "running"), nodeIds: ["head", "worker"] };
+    const sparks = [
+      nodeWithLlm("head", { role: "head" }, { generationTps: 40, ttftSeconds: 0.5 }),
+      nodeWithLlm("worker", { role: "worker" }, { generationTps: 60, ttftSeconds: 9 }),
+    ];
+    const t = deploymentTelemetry(sparks, d)!;
+    expect(t.generationTps).toBe(100);
+    expect(t.ttftSeconds).toBe(0.5);
+  });
+
+  it("returns null when no member node exposes a probe series", () => {
+    expect(deploymentTelemetry([spark({ id: "a" })], { ...dep("r1", "running"), nodeIds: ["a"] })).toBeNull();
+  });
+});
+
+describe("deriveRuntimeState", () => {
+  it("reads loaded-but-idle as idle when it has served, else ready — never a scary 0", () => {
+    const d = dep("r1", "running");
+    const loaded = { ...deploymentTelemetry([nodeWithLlm("n1", {}, { slotsTotal: 4, modelId: "m" })], d)! };
+    expect(deriveRuntimeState(d, { ...loaded, totalOutputTokens: 900 })).toBe("idle");
+    expect(deriveRuntimeState(d, { ...loaded, totalOutputTokens: 0 })).toBe("ready");
+  });
+
+  it("prioritises offline > degraded > busy > serving", () => {
+    const d = dep("r1", "running");
+    const hot = deploymentTelemetry([nodeWithLlm("n1", {}, { generationTps: 50, requestsWaiting: 3 })], d)!;
+    expect(deriveRuntimeState(d, hot)).toBe("busy");
+    expect(deriveRuntimeState(d, { ...hot, requestsWaiting: 0 })).toBe("serving");
+    expect(deriveRuntimeState({ ...d, observed: "unhealthy" }, hot)).toBe("degraded");
+    expect(deriveRuntimeState({ ...d, display: "stopped" }, hot)).toBe("offline");
+  });
+
+  it("returns unknown for missing probe data and never fabricates", () => {
+    expect(deriveRuntimeState(dep("r1", "running"), null)).toBe("unknown");
+    const t = deploymentTelemetry([nodeWithLlm("n1", {}, { available: false })], dep("r1", "running"))!;
+    expect(t.generationTps).toBeNull();
+    expect(deriveRuntimeState(dep("r1", "running"), t)).toBe("unknown");
+  });
+});
+
+describe("deploymentViews telemetry wiring", () => {
+  it("attaches telemetry and primary-node uptime", () => {
+    const [view] = deploymentViews([nodeWithLlm("n1", { uptime: 42 })], [dep("r1", "running")], [recipe()]);
+    expect(view.telemetry?.available).toBe(true);
+    expect(view.uptime).toBe(42);
+  });
+});

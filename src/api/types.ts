@@ -11,6 +11,8 @@ export interface SparkConfig {
   kind?: "spark" | "host";
   lanIp: string;
   cx7Ip?: string | null;
+  /** Optional named physical fabric this unit is wired into (link discovery hint). */
+  fabric?: string | null;
   /**
    * Optional Wake-on-LAN MAC override. When empty, the server uses
    * `detectedMacAddress` from the enP7s7 interface.
@@ -478,6 +480,10 @@ export interface SparkSnapshot {
   uptime: number | null;
   /** LAN IP for browser deep-links (e.g. Open ComfyUI). */
   lanIp?: string;
+  /** ConnectX-7 fabric IP when configured (physical-fabric link discovery). */
+  cx7Ip?: string | null;
+  /** Optional named physical fabric this unit is wired into. */
+  fabric?: string | null;
   isLocal?: boolean;
   disabledDevices: string[];
   disabledInterfaces: string[];
@@ -985,9 +991,19 @@ export interface RecipeEndpoint {
 export interface RecipeTopologyBlock {
   mode?: TopologyMode;
   parallelism?: number;
+  /** Explicit parallelism degrees — null when NOT configured (never inferred from node count). */
+  tp?: number | null;
+  pp?: number | null;
+  dp?: number | null;
+  ep?: number | null;
+  /** Optional coordinator node id and worker count hints. */
+  coordinator?: string | null;
+  workers?: number | null;
   minNodes?: number;
   maxNodes?: number;
   nodeConstraints?: Record<string, unknown>;
+  /** true when >1 node but no degree configured — render "topology unknown". */
+  unknown?: boolean;
 }
 export interface RecipeHealthProbe {
   kind?: "http" | "tcp" | "process";
@@ -1038,6 +1054,8 @@ export interface RuntimeProviderInfo {
   id: RecipeRuntime;
   label: string;
   launchable: boolean;
+  /** Normalized LlmMetrics keys this runtime meaningfully exposes (never fabricated). */
+  metrics: string[];
 }
 
 /** Env entry as returned by the API — secret values are stripped. */

@@ -43,25 +43,78 @@ export const WEIGHT_ID_RE = /^[a-z0-9][a-z0-9._-]{0,62}$/;
 
 const V1_TOPOLOGY = { single: 1, tp2: 2, tp3: 3 };
 
-/** Map a legacy topology string ("tp2") or a v2 object to the v2 block. */
-export function normalizeTopology(body = {}) {
+/** Explicit parallelism degree kinds, dominant-first tie-break order. */
+export const TOPOLOGY_DEGREE_KEYS = Object.freeze(["tp", "pp", "dp", "ep"]);
+
+const degreeOrNull = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 1 ? Math.round(n) : null;
+};
+
+/**
+ * Map a legacy topology string ("tp2") or a v2 object to the v2 block.
+ *
+ * Degrees are EXPLICIT, never inferred from node count:
+ *  - explicit `tp`/`pp`/`dp`/`ep` supplied → set them verbatim; derive legacy
+ *    `mode` from the DOMINANT degree (tie-break tp→pp→dp→ep) and `parallelism`
+ *    as the PRODUCT of the degrees (the replica count `topologySlug` reuses);
+ *    default minNodes/maxNodes follow that product.
+ *  - only legacy `mode` + `parallelism` → map that mode onto its own degree
+ *    (mode "pp", parallelism 3 ⇒ pp=3); all other degrees stay null.
+ *  - nothing configured → all degrees stay null and, once the topology spans
+ *    >1 node, `unknown` is true (2 nodes ≠ TP2, 3 nodes ≠ TP3).
+ *
+ * @param {object} body
+ * @param {number|null} nodeCount explicit node count (falls back to body.nodeIds)
+ */
+export function normalizeTopology(body = {}, nodeCount = null) {
   const t = body.topology;
   const src = t && typeof t === "object" && !Array.isArray(t) ? t : null;
   let mode = src?.mode ?? (typeof t === "string" && V1_TOPOLOGY[t] ? (V1_TOPOLOGY[t] > 1 ? "tp" : "single") : t);
   if (!TOPOLOGY_MODES.includes(mode)) mode = "single";
-  const parallelism = src
+  const legacyParallelism = src
     ? Number(src.parallelism) || V1_TOPOLOGY[t] || 1
     : typeof t === "string" && V1_TOPOLOGY[t]
       ? V1_TOPOLOGY[t]
       : 1;
-  const minNodes = src ? Number(src.minNodes ?? parallelism) || 1 : typeof t === "string" && V1_TOPOLOGY[t] ? V1_TOPOLOGY[t] : 1;
-  const maxNodes = src ? Number(src.maxNodes ?? minNodes) || minNodes : minNodes;
+  let parallelism = Number.isFinite(legacyParallelism) && legacyParallelism >= 1 ? Math.round(legacyParallelism) : 1;
+
+  const explicit = {
+    tp: degreeOrNull(src?.tp),
+    pp: degreeOrNull(src?.pp),
+    dp: degreeOrNull(src?.dp),
+    ep: degreeOrNull(src?.ep),
+  };
+  const explicitConfigured = TOPOLOGY_DEGREE_KEYS.some((k) => explicit[k] != null);
+  const degrees = explicitConfigured ? explicit : { tp: null, pp: null, dp: null, ep: null };
+  if (!explicitConfigured && mode !== "single") degrees[mode] = parallelism;
+
+  if (explicitConfigured) {
+    const present = TOPOLOGY_DEGREE_KEYS.filter((k) => degrees[k] != null);
+    mode = present.reduce((best, k) => (degrees[k] > (degrees[best] ?? 0) ? k : best), present[0]);
+    parallelism = present.reduce((product, k) => product * degrees[k], 1);
+  }
+
+  const minNodes = Math.max(1, degreeOrNull(src?.minNodes) ?? parallelism);
+  const maxNodes = Math.max(minNodes, degreeOrNull(src?.maxNodes) ?? minNodes);
+
+  const rawCount = nodeCount ?? (Array.isArray(body.nodeIds) ? body.nodeIds.length : 0);
+  const count = Number.isFinite(Number(rawCount)) && Number(rawCount) > 0 ? Math.round(Number(rawCount)) : 0;
+  const unknown = !explicitConfigured && TOPOLOGY_DEGREE_KEYS.every((k) => degrees[k] == null) && count > 1;
+
   return {
     mode,
     parallelism,
+    tp: degrees.tp,
+    pp: degrees.pp,
+    dp: degrees.dp,
+    ep: degrees.ep,
+    coordinator: src?.coordinator != null ? String(src.coordinator).trim() || null : null,
+    workers: degreeOrNull(src?.workers),
     minNodes,
     maxNodes,
     nodeConstraints: src?.nodeConstraints && typeof src.nodeConstraints === "object" ? src.nodeConstraints : {},
+    unknown,
   };
 }
 

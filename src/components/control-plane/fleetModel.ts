@@ -1,4 +1,4 @@
-import type { SparkSnapshot, DeploymentStatus, DeploymentDisplay, RecipePublic, RecipeTopology, RecipeLifecycleState, ModelEntry, ActivityEvent } from "../../api/types";
+import type { SparkSnapshot, DeploymentStatus, DeploymentDisplay, RecipePublic, RecipeTopology, RecipeLifecycleState, ModelEntry, ActivityEvent, LlmMetrics } from "../../api/types";
 import { isWorkerSpark } from "../../api/sparkRole";
 
 export interface FleetHealth {
@@ -48,7 +48,48 @@ export interface DeploymentView {
   contextLength: number | null;
   port: number;
   decodeTps: number | null;
+  /** Normalized live telemetry from the deployment's primary-node LLM probe. */
+  telemetry: DeploymentTelemetry | null;
+  /** Primary-node uptime in seconds when the snapshot carries it, else null. */
+  uptime: number | null;
 }
+
+/**
+ * Normalized per-deployment telemetry, read from the deployment's PRIMARY-node
+ * `spark.metrics.llm` probe (index-matched by `llmPorts` — the same series
+ * `deploymentDecodeTps` reads). Every field is null when the probe does not
+ * carry it: nothing is ever fabricated. For multi-node (TP2) deployments
+ * `generationTps` is the cross-node sum; coordinator-only fields (ttft,
+ * requests, kv, slots) come from the primary node.
+ */
+export interface DeploymentTelemetry {
+  /** Summed decode tok/s across all member nodes (null when none report). */
+  generationTps: number | null;
+  prefillTps: number | null;
+  ttftSeconds: number | null;
+  requestsRunning: number | null;
+  requestsWaiting: number | null;
+  /** KV cache usage fraction (0–1). */
+  kvCacheUsage: number | null;
+  /** Prefix-cache hit rate (0–1). */
+  prefixCacheHitRate: number | null;
+  /** Speculative/MTP acceptance rate (0–1). */
+  mtpAcceptanceRate: number | null;
+  contextLength: number | null;
+  gpuMemoryUtilization: number | null;
+  slotsActive: number | null;
+  slotsTotal: number | null;
+  /** Cumulative output tokens — the recent-request signal for idle-vs-ready. */
+  totalOutputTokens: number | null;
+  backend: LlmMetrics["backend"];
+  modelId: string | null;
+  available: boolean;
+  /** Probe error string when the backend reported one. */
+  error: string | null;
+}
+
+/** Coarse operational state a deployment row can render. */
+export type RuntimeState = "offline" | "degraded" | "busy" | "serving" | "idle" | "ready" | "unknown";
 
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
@@ -239,6 +280,85 @@ export function deploymentDecodeTps(sparks: SparkSnapshot[], d: DeploymentStatus
   return total > 0 ? Math.round(total) : null;
 }
 
+/** Primary (coordinator) node for a deployment: first non-worker node with a snapshot, else first node. */
+export function primaryNodeOf(sparks: SparkSnapshot[], d: DeploymentStatus): SparkSnapshot | null {
+  const present = d.nodeIds.map((id) => sparks.find((s) => s.id === id)).filter((s): s is SparkSnapshot => !!s);
+  return present.find((s) => !isWorkerSpark(s)) ?? present[0] ?? null;
+}
+
+/** LLM probe series for one node + port, index-aligned with `llmPorts` (no fallback match). */
+function llmForNode(s: SparkSnapshot | null | undefined, apiPort: number): LlmMetrics | undefined {
+  if (!s) return undefined;
+  const idx = (s.llmPorts ?? []).indexOf(apiPort);
+  return idx >= 0 ? s.metrics?.llm?.[idx] : undefined;
+}
+
+const optNum = (v: unknown): number | null => (isNum(v) ? v : null);
+
+/**
+ * Normalized telemetry for one deployment from its PRIMARY-node probe, with
+ * `generationTps` summed across every member node (TP2 aware). Returns null
+ * when no member node exposes an LLM probe series at all.
+ */
+export function deploymentTelemetry(sparks: SparkSnapshot[], d: DeploymentStatus): DeploymentTelemetry | null {
+  const primary = primaryNodeOf(sparks, d);
+  const llm = llmForNode(primary, d.apiPort);
+
+  let genTotal = 0;
+  let genSeen = false;
+  for (const id of d.nodeIds) {
+    const node = sparks.find((s) => s.id === id);
+    const series = llmForNode(node, d.apiPort);
+    if (series?.available && isNum(series.generationTps)) {
+      genTotal += series.generationTps;
+      genSeen = true;
+    }
+  }
+
+  if (!llm && !genSeen) return null;
+
+  return {
+    generationTps: genSeen ? Math.round(genTotal) : null,
+    prefillTps: optNum(llm?.prefillTps),
+    ttftSeconds: optNum(llm?.ttftSeconds),
+    requestsRunning: optNum(llm?.requestsRunning),
+    requestsWaiting: optNum(llm?.requestsWaiting),
+    kvCacheUsage: optNum(llm?.kvCacheUsage),
+    prefixCacheHitRate: optNum(llm?.prefixCacheHitRate),
+    mtpAcceptanceRate: optNum(llm?.mtpAcceptanceRate),
+    contextLength: optNum(llm?.contextLength),
+    gpuMemoryUtilization: optNum(llm?.gpuMemoryUtilization),
+    slotsActive: optNum(llm?.slotsActive),
+    slotsTotal: optNum(llm?.slotsTotal),
+    totalOutputTokens: optNum(llm?.totalOutputTokens),
+    backend: llm?.backend ?? null,
+    modelId: llm?.modelId ?? null,
+    available: Boolean(llm?.available),
+    error: llm?.error ?? null,
+  };
+}
+
+/**
+ * Derive a coarse operational state. A healthy-but-generating-nothing model
+ * reads as idle/ready — never a scary "0". Order matters: offline and degraded
+ * win over any live signal.
+ */
+export function deriveRuntimeState(d: DeploymentStatus, telemetry: DeploymentTelemetry | null): RuntimeState {
+  if (d.state === "stopped" || d.display === "stopped" || d.observed === "not-detected") return "offline";
+  if (d.display === "degraded" || d.observed === "unhealthy" || d.observed === "auth-gated") return "degraded";
+  if (!telemetry) return "unknown";
+  if (!telemetry.available && telemetry.error && /auth|401|403/i.test(telemetry.error)) return "degraded";
+
+  if ((telemetry.requestsWaiting ?? 0) > 0) return "busy";
+  if ((telemetry.requestsRunning ?? 0) > 0 || (telemetry.generationTps ?? 0) > 0) return "serving";
+
+  const loaded = (telemetry.slotsTotal ?? 0) > 0 || !!telemetry.modelId;
+  if (!loaded) return telemetry.available ? "degraded" : "unknown";
+
+  // Loaded, healthy, no active work: idle when it has served before, else ready.
+  return (telemetry.totalOutputTokens ?? 0) > 0 ? "idle" : "ready";
+}
+
 /** Deployment rows joined with recipe, friendly name and member nodes. */
 export function deploymentViews(
   sparks: SparkSnapshot[],
@@ -248,6 +368,7 @@ export function deploymentViews(
 ): DeploymentView[] {
   return deployments.map((deployment) => {
     const recipe = recipes.find((r) => r.id === deployment.recipeId) ?? null;
+    const primary = primaryNodeOf(sparks, deployment);
     return {
       deployment,
       key: deployment.deploymentId ?? deployment.recipeId,
@@ -261,6 +382,8 @@ export function deploymentViews(
       contextLength: recipe?.serving?.contextLength ?? recipe?.contextLength ?? null,
       port: deployment.apiPort,
       decodeTps: deploymentDecodeTps(sparks, deployment),
+      telemetry: deploymentTelemetry(sparks, deployment),
+      uptime: primary?.uptime ?? null,
     };
   });
 }

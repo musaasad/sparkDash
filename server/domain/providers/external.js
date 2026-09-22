@@ -10,7 +10,14 @@ import { RuntimeProvider, normalizeServedId } from "./base.js";
  */
 export class ExternalProvider extends RuntimeProvider {
   constructor() {
-    super({ runtimes: ["custom", "llama.cpp"], label: "External", launchable: false, processTerms: ["llama"] });
+    super({
+      runtimes: ["custom", "llama.cpp"],
+      label: "External",
+      launchable: false,
+      processTerms: ["llama"],
+      // llama.cpp native /slots carries slot occupancy; custom exposes nothing extra.
+      metricCaps: { "llama.cpp": ["slotsActive", "slotsTotal", "contextLength"] },
+    });
   }
 
   detect(signals) {

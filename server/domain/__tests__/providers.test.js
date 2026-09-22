@@ -9,6 +9,8 @@ import {
   renderLaunchCommand,
   parseTelemetryLine,
   parseLogLine,
+  providerLabel,
+  metricsFor,
 } from "../providers/registry.js";
 import { RECIPE_RUNTIMES } from "../../validate.js";
 
@@ -80,5 +82,25 @@ test("provider catalog exposes a non-empty label per runtime (GET /api/runtimes 
     assert.equal(typeof p.label, "string");
     assert.ok(p.label.length > 0, `empty label for ${r}`);
     assert.equal(typeof p.launchable, "boolean");
+  }
+});
+
+test("metricsFor declares only real per-runtime secondary instruments", () => {
+  for (const r of RUNTIME_TYPES) assert.ok(Array.isArray(metricsFor(r)));
+  assert.ok(metricsFor("vllm").includes("kvCacheUsage"));
+  assert.ok(metricsFor("vllm").includes("requestsWaiting"));
+  assert.ok(metricsFor("vllm").includes("ttftSeconds"));
+  assert.ok(metricsFor("tabbyapi-exl3").includes("mtpAcceptanceRate"));
+  assert.ok(metricsFor("tabbyapi-exl3").includes("prefixCacheHitRate"));
+  assert.ok(metricsFor("sglang").includes("prefixCacheHitRate"));
+  assert.deepEqual(metricsFor("llama.cpp"), ["slotsActive", "slotsTotal", "contextLength"]);
+});
+
+test("the /api/runtimes catalog shape carries the per-runtime metrics array", () => {
+  const catalog = RUNTIME_TYPES.map((id) => ({ id, label: providerLabel(id), metrics: metricsFor(id) }));
+  assert.equal(catalog.length, RUNTIME_TYPES.length);
+  for (const row of catalog) {
+    assert.ok(Array.isArray(row.metrics));
+    assert.ok(row.metrics.every((m) => typeof m === "string" && m.length > 0));
   }
 });

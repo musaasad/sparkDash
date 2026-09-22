@@ -3,7 +3,13 @@ import { RuntimeProvider } from "./base.js";
 /** vLLM — OpenAI-compatible, served models from /v1/models, Prometheus metrics. */
 export class VllmProvider extends RuntimeProvider {
   constructor() {
-    super({ runtimes: ["vllm"], label: "vLLM", launchable: true, processTerms: ["vllm"] });
+    super({
+      runtimes: ["vllm"],
+      label: "vLLM",
+      launchable: true,
+      processTerms: ["vllm"],
+      metricCaps: { vllm: ["kvCacheUsage", "requestsWaiting", "requestsRunning", "ttftSeconds", "preemptionsTotal"] },
+    });
   }
 
   detect(signals) {

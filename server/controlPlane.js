@@ -26,7 +26,7 @@ import { LiveConsoleManager } from "./collectors/LiveConsole.js";
 import { ActivityLog } from "./activity/ActivityLog.js";
 import { createRateLimiter } from "./validate.js";
 import { probeEndpoint, probeUrl } from "./deployments/deploymentStatus.js";
-import { detectRuntime, healthClassify, providerFor, RUNTIME_TYPES, processEvidenceCmd } from "./domain/providers/registry.js";
+import { detectRuntime, healthClassify, providerFor, RUNTIME_TYPES, processEvidenceCmd, metricsFor } from "./domain/providers/registry.js";
 import { DiscoveryService } from "./domain/discovery.js";
 import { sshExec } from "./collectors/ssh.js";
 import { llmProbeHost } from "./collectors/llmHost.js";
@@ -295,7 +295,7 @@ export function createControlPlane(deps) {
     res.json({
       runtimes: RUNTIME_TYPES.map((id) => {
         const p = providerFor(id);
-        return { id, label: p.label, launchable: Boolean(p.launchable) };
+        return { id, label: p.label, launchable: Boolean(p.launchable), metrics: metricsFor(id) };
       }),
     });
   });

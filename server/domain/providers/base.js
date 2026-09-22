@@ -42,16 +42,28 @@ export function extractOpenAIModelIds(body) {
 export class RuntimeProvider {
   /**
    * @param {{runtimes: string[], label?: string, launchable?: boolean,
-   *   processTerms?: string[]}} opts
+   *   processTerms?: string[], metricCaps?: Record<string, string[]>}} opts
    *   `runtimes` = every runtime key this provider serves (first = canonical).
    *   `processTerms` = pgrep substrings that identify this runtime's process.
+   *   `metricCaps` = per-runtime normalized LlmMetrics keys this runtime
+   *   meaningfully exposes (secondary instruments only — never the core
+   *   generationTps/ttft that every backend serves).
    */
-  constructor({ runtimes, label = null, launchable = true, processTerms = [] }) {
+  constructor({ runtimes, label = null, launchable = true, processTerms = [], metricCaps = {} }) {
     this.runtimes = runtimes;
     this.runtime = runtimes[0];
     this.label = label ?? this.runtime;
     this.launchable = launchable;
     this.processTerms = processTerms;
+    this.metricCaps = metricCaps;
+  }
+
+  /**
+   * Normalized LlmMetrics keys this provider genuinely exposes for a runtime.
+   * Empty means "only the universal core instruments". @param {string} runtime
+   */
+  metrics(runtime) {
+    return this.metricCaps[runtime] ?? [];
   }
 
   /** pgrep alternation pattern for the read-only process evidence probe. */
