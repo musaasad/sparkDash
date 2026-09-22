@@ -457,6 +457,7 @@ import type {
   DeploymentStatus,
   DeploymentBinding,
   DeploymentDesired,
+  DeploymentRole,
   ActivityEvent,
   AuditEntry,
   DiscoveryResponse,
@@ -560,8 +561,24 @@ export function createDeployment(body: {
   nodeIds: string[];
   desiredState?: DeploymentDesired;
   metadata?: Record<string, unknown>;
+  /** OPTIONAL placement role (pure config data — never a lifecycle action). */
+  role?: DeploymentRole | null;
 }): Promise<{ deployment: DeploymentBinding; runtime: DeploymentStatus }> {
   return apiFetch("/api/deployments", { method: "POST", body: JSON.stringify(body) });
+}
+
+/**
+ * CONFIG-ONLY role change on an existing binding: PATCH writes `role` only.
+ * Never recreates the model/recipe/weights and never touches the runtime.
+ */
+export function patchDeploymentRole(
+  id: string,
+  role: DeploymentRole | null
+): Promise<{ deployment: DeploymentBinding; runtime: DeploymentStatus; configOnly: boolean }> {
+  return apiFetch(`/api/deployments/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ role }),
+  });
 }
 
 /** Remove only the deployment binding — never the recipe/model/weights. */

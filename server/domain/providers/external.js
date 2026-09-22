@@ -46,8 +46,5 @@ export class ExternalProvider extends RuntimeProvider {
     return null; // external — SparkDash did not launch it
   }
 
-  /** External runtimes are unmodelled: topology capability stays UNKNOWN. */
-  supportsTopology() {
-    return "unknown";
-  }
+  // External runtimes are unmodelled: an empty topology map ⇒ every mode UNKNOWN.
 }

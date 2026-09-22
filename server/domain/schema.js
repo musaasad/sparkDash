@@ -26,7 +26,7 @@ import { loadRecipeEnv } from "../secretsStore.js";
 
 const quoteClamp = (s) => String(s).slice(0, 64);
 
-export const TOPOLOGY_MODES = Object.freeze(["single", "tp", "pp", "dp"]);
+export const TOPOLOGY_MODES = Object.freeze(["single", "tp", "pp", "dp", "ep"]);
 export const LAUNCH_MECHANISMS = Object.freeze(["command", "systemd", "docker", "external"]);
 export const DEPLOYMENT_ROLES = Object.freeze([
   "primary",

@@ -26,7 +26,7 @@ import { LiveConsoleManager } from "./collectors/LiveConsole.js";
 import { ActivityLog } from "./activity/ActivityLog.js";
 import { createRateLimiter } from "./validate.js";
 import { probeEndpoint, probeUrl } from "./deployments/deploymentStatus.js";
-import { detectRuntime, healthClassify, providerFor, RUNTIME_TYPES, processEvidenceCmd, metricsFor } from "./domain/providers/registry.js";
+import { detectRuntime, healthClassify, providerFor, RUNTIME_TYPES, processEvidenceCmd, metricsFor, topologyDescriptor } from "./domain/providers/registry.js";
 import { DiscoveryService } from "./domain/discovery.js";
 import { ComputeDiscoveryService } from "./domain/computeDiscovery.js";
 import { validateComputeDraft } from "./domain/computeValidate.js";
@@ -305,7 +305,8 @@ export function createControlPlane(deps) {
     res.json({
       runtimes: RUNTIME_TYPES.map((id) => {
         const p = providerFor(id);
-        return { id, label: p.label, launchable: Boolean(p.launchable), metrics: metricsFor(id) };
+        // `topology` = provider-declared capability DATA (absent mode ⇒ UNKNOWN).
+        return { id, label: p.label, launchable: Boolean(p.launchable), metrics: metricsFor(id), topology: topologyDescriptor(id) };
       }),
     });
   });
@@ -475,7 +476,9 @@ export function createControlPlane(deps) {
 
   app.post("/api/deployments", (req, res) => {
     try {
-      const { modelId, recipeId, nodeIds, desiredState } = req.body || {};
+      // `role` is OPTIONAL config data written on the binding (changeable later
+      // via PATCH without recreating the model/recipe/weights).
+      const { modelId, recipeId, nodeIds, desiredState, role } = req.body || {};
       const recipe = recipeRegistry.get(recipeId);
       if (!recipe) return res.status(404).json({ error: "recipe not found" });
       if (recipe.lifecycleState === "archived" || recipe.archived)
@@ -502,6 +505,7 @@ export function createControlPlane(deps) {
         nodeIds: nodes,
         desiredState: managedBy === "external" ? "unknown" : desiredState,
         metadata: { managedBy },
+        role,
       });
       activity.push({
         kind: "lifecycle",

@@ -16,6 +16,8 @@ export type RuntimeMetricsMap = Record<string, string[]>;
 export interface RuntimeOption {
   id: string;
   label: string;
+  /** Provider-declared topology capability DATA (absent strategy ⇒ UNKNOWN). */
+  topology: Record<string, string>;
 }
 
 let cached: RuntimeProviderInfo[] | null = null;
@@ -82,8 +84,22 @@ export function useRuntimeMetrics(): RuntimeMetricsMap {
   return map;
 }
 
-/** React hook: registry runtime options for pickers. */
+/** React hook: registry runtime options for pickers (label + topology DATA). */
 export function useRuntimeOptions(): RuntimeOption[] {
-  const map = useRuntimeLabels();
-  return Object.entries(map).map(([id, label]) => ({ id, label }));
+  return useRuntimeRegistry().map((r) => ({ id: r.id, label: r.label, topology: r.topology ?? {} }));
+}
+
+/** React hook: the raw registry rows (label + declared topology capability). */
+export function useRuntimeRegistry(): RuntimeProviderInfo[] {
+  const [list, setList] = useState<RuntimeProviderInfo[]>(() => cached ?? []);
+  useEffect(() => {
+    let live = true;
+    void loadRuntimes().then((l) => {
+      if (live) setList(l);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  return list;
 }

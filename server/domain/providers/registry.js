@@ -122,3 +122,15 @@ export function metricsFor(runtime) {
 export function supportsTopology(runtime, spec) {
   return providerFor(runtime).supportsTopology(spec);
 }
+
+/**
+ * Declarative topology capability DATA for a runtime (mode → "supported" |
+ * "unsupported" | "by-node-count"). An absent mode means UNKNOWN. The FE reads
+ * this from `/api/runtimes` so strategy tiers are provider data, never a
+ * model-name check and never an FE hard-code.
+ * @param {string} runtime
+ * @returns {Readonly<Record<string, string>>}
+ */
+export function topologyDescriptor(runtime) {
+  return providerFor(runtime).topology;
+}

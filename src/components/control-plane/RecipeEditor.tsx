@@ -22,6 +22,7 @@ export const TOPOLOGY_MODES: { id: TopologyMode; label: string; nodes: number }[
   { id: "tp", label: "Tensor-parallel", nodes: 2 },
   { id: "pp", label: "Pipeline-parallel", nodes: 2 },
   { id: "dp", label: "Data-parallel", nodes: 2 },
+  { id: "ep", label: "Expert-parallel", nodes: 2 },
 ];
 
 const MECHANISMS = ["command", "systemd", "docker", "external"] as const;
@@ -161,7 +162,8 @@ export function topologyUnknown(draft: RecipeDraft): boolean {
 export function topologyBlockFromDraft(draft: RecipeDraft): RecipeTopologyBlock {
   const prod = degreeProduct(draft);
   const unknown = topologyUnknown(draft);
-  const mode: TopologyMode = Number(draft.tp) > 1 ? "tp" : Number(draft.pp) > 1 ? "pp" : Number(draft.dp) > 1 ? "dp" : "single";
+  const mode: TopologyMode =
+    Number(draft.tp) > 1 ? "tp" : Number(draft.pp) > 1 ? "pp" : Number(draft.dp) > 1 ? "dp" : Number(draft.ep) > 1 ? "ep" : "single";
   return {
     mode,
     parallelism: prod || 1,

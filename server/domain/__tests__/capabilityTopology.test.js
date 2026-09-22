@@ -108,6 +108,28 @@ test("tabbyapi declares single-only; every parallelism mode is unsupported", () 
   }
 });
 
+test("topologyDescriptor exposes capability as DATA (provider, not model-name check)", () => {
+  assert.equal(registry.topologyDescriptor("tabbyapi-exl3").tp, "unsupported");
+  assert.equal(registry.topologyDescriptor("tabbyapi-exl3").single, "supported");
+  assert.equal(registry.topologyDescriptor("vllm").tp, "by-node-count");
+  assert.equal(registry.topologyDescriptor("sglang").tp, "by-node-count");
+  // External/unmodelled runtimes declare nothing ⇒ every mode stays UNKNOWN.
+  assert.equal(registry.topologyDescriptor("custom").tp, undefined);
+  assert.equal(registry.supportsTopology("custom", { mode: "tp", degree: 2, nodeCount: 2 }), "unknown");
+});
+
+test("an explicitly non-TP runtime (tabbyapi) makes TP-on-2-nodes INVALID", () => {
+  const out = t({ mode: "tp", tp: 2 }, 2, "tabbyapi-exl3");
+  assert.equal(out.status, "invalid");
+  assert.match(out.reason, /does not support topology mode\(s\): tp/);
+});
+
+test("TP3/3 on an external/unknown runtime stays NEEDS-CONFIRMATION", () => {
+  const out = t({ mode: "tp", tp: 3 }, 3, "custom");
+  assert.equal(out.status, "needs-confirmation");
+  assert.notEqual(out.status, "valid");
+});
+
 // ─── validateTopology ─────────────────────────────────────
 
 const t = (topology, nodeCount, runtime) => validateTopology({ topology, nodeCount, runtime, registry });

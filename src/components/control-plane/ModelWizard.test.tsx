@@ -97,14 +97,17 @@ beforeEach(() => {
 });
 
 describe("ModelWizard", () => {
-  it("renders an 8-step stepper, common fields first, advanced behind a disclosure", () => {
+  it("renders a 9-step stepper with explicit Topology and Role steps", () => {
     const { container } = render(
       <ModelWizard models={[]} recipes={[]} sparks={[spark]} navigate={() => {}} onSaved={() => {}} onCancel={() => {}} />
     );
     // Picker is the entry surface; templates exist, scratch continues to the form.
     expect(container.querySelectorAll(".cp-template-card").length).toBeGreaterThan(0);
     startScratch(container);
-    expect(container.querySelectorAll(".cp-step")).toHaveLength(8);
+    expect(container.querySelectorAll(".cp-step")).toHaveLength(9);
+    const labels = [...container.querySelectorAll(".cp-step")].map((s) => s.textContent?.trim() ?? "");
+    expect(labels.some((l) => l.includes("Topology"))).toBe(true);
+    expect(labels.some((l) => l.includes("Role & options"))).toBe(true);
     // Step 1 shows the common model fields but the weight-variant fields only
     // after opening the Advanced disclosure.
     expect(container.querySelector("#w-model-name")).not.toBeNull();
@@ -123,7 +126,7 @@ describe("ModelWizard", () => {
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("Model name is required");
   });
 
-  it("walks all 8 steps and saves config entities with desiredState stopped", async () => {
+  it("walks all 9 steps and saves config entities with desiredState stopped", async () => {
     const navigate = vi.fn();
     const onSaved = vi.fn();
     const { container } = render(
@@ -148,19 +151,22 @@ describe("ModelWizard", () => {
     clickText(container, "Node One");
     clickText(container, "Continue");
 
-    // 5 Options
+    // 5 Topology — single node, no degree (needs-confirmation, not invalid)
+    clickText(container, "Continue");
+
+    // 6 Role & options
     clickText(container, "Continue");
     await flush();
 
-    // 6 Validate — unsaved-body dry validate (no entity yet)
+    // 7 Validate — unsaved-body dry validate (no entity yet)
     expect(validateDraftRecipe).toHaveBeenCalled();
     clickText(container, "Continue");
 
-    // 7 Review
+    // 8 Review
     expect(container.textContent).toContain("create binding");
     clickText(container, "Continue");
 
-    // 8 Save
+    // 9 Save
     clickText(container, "Create model + recipe + deployment");
     await flush();
 

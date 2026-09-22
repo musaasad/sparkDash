@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { DiscoveredSeed, ModelEntry, RecipePublic, RecipeRuntime, SeedProvenance, SparkSnapshot } from "../../api/types";
+import type { DeploymentRole, DiscoveredSeed, ModelEntry, RecipePublic, RecipeRuntime, SeedProvenance, SparkSnapshot } from "../../api/types";
 import type { DeploymentView } from "./fleetModel";
 import type { Route } from "../../hooks/router";
 import { upsertModel, upsertRecipe, duplicateRecipe, validateRecipe, validateDraftRecipe, createDeployment, archiveModel } from "../../api/client";
@@ -26,23 +26,35 @@ import { useRuntimeOptions } from "./runtimeLabels";
 import { DiscoveryForm, SUGGESTION_TO_TEMPLATE } from "./DiscoveryForm";
 import { ProvenanceBadge } from "./ProvenanceBadge";
 import { TopologySummary } from "./TopologySummary";
+import { DEPLOYMENT_ROLE_OPTIONS, roleToSave } from "./deploymentRoles";
+import { TOPOLOGY_STRATEGIES, evaluateTopology, strategyTier, type TopologyDescriptor, type TopologyStrategy } from "./topologyCapability";
+import { buildValidateReport, reportSymbol } from "./validateReport";
 
+/**
+ * Explicit flow: MODEL → RECIPE → RUNTIME → COMPUTE → TOPOLOGY → ROLE/OPTIONS →
+ * VALIDATE → REVIEW → SAVE. TOPOLOGY and ROLE are first-class steps so the
+ * architecture is explicit; "Role & options" folds the old Options step in
+ * cleanly (no pointless churn).
+ */
 const STEPS = [
   { id: "model", label: "Model" },
   { id: "recipe", label: "Recipe" },
   { id: "runtime", label: "Runtime" },
   { id: "compute", label: "Compute" },
-  { id: "options", label: "Options" },
+  { id: "topology", label: "Topology" },
+  { id: "role", label: "Role & options" },
   { id: "validate", label: "Validate" },
   { id: "review", label: "Review" },
   { id: "save", label: "Save" },
 ];
 
+const STEP_INDEX = Object.fromEntries(STEPS.map((s, i) => [s.id, i])) as Record<string, number>;
+
 /** Spec §7 template picker seed — every field stays editable after a pick. */
 const MODEL_TEMPLATES: TemplatePickerItem[] = [
   {
     id: "vllm-openai",
-    name: "vLLM · OpenAI serve",
+    name: "vLLM · OpenAI-compatible",
     description: "Command launch, OpenAI-compatible endpoint, 32k context.",
     icon: <BoltIcon size={20} />,
   },
@@ -142,7 +154,8 @@ interface ModelWizardProps {
   models: ModelEntry[];
   recipes: RecipePublic[];
   sparks: SparkSnapshot[];
-  runtimes?: { id: RecipeRuntime; label: string }[];
+  /** Runtime rows from the WS-3 provider registry (label + declared topology DATA). */
+  runtimes?: { id: RecipeRuntime; label: string; topology?: Record<string, string> }[];
   navigate: (route: Route) => void;
   onSaved: () => void;
   onCancel: () => void;
@@ -203,6 +216,10 @@ export function ModelWizard({
   const [capabilities, setCapabilities] = useState(seed?.capabilities ?? null);
   const [seedOrigin, setSeedOrigin] = useState<string | null>(seed?.endpoint ?? null);
 
+  /** DEPLOYMENT role — pure config selection, default none/null (never primary). */
+  const [role, setRole] = useState<DeploymentRole | "">("");
+  const [templateOpen, setTemplateOpen] = useState(true);
+
   /** Entity ids materialised at validate time (config only). */
   const [savedModelId, setSavedModelId] = useState<string | null>(initialModelId ?? null);
   const [savedRecipeId, setSavedRecipeId] = useState<string | null>(null);
@@ -212,13 +229,42 @@ export function ModelWizard({
   const runtimesList = runtimes?.length ? runtimes : registryOptions;
   const range = topologyNodeRange(draft);
 
+  // Runtime-declared topology capability DATA (absent strategy ⇒ UNKNOWN).
+  const runtimeRow = runtimesList.find((r) => r.id === draft.runtime);
+  const descriptor = (runtimeRow?.topology ?? {}) as TopologyDescriptor;
+  const nodeCount = draft.nodeIds.length;
+  /** Live capability + structural verdict — never presents UNKNOWN as VALID. */
+  const topoEval = evaluateTopology({ draft, descriptor, nodeCount });
+  const runtimeVerifiable = Object.keys(descriptor).length > 0;
+
+  /** Degree of a strategy for the tier chip. */
+  const degreeOf = (s: TopologyStrategy): number | null =>
+    s === "single" ? 1 : Number(draft[s]) || null;
+
+  /** Operator-readable validate report — ✓ valid / ✗ invalid / ? unverifiable. */
+  const reportLines = buildValidateReport({
+    modelName: modelMode === "existing" ? (models.find((m) => m.id === modelId)?.name ?? modelId) : model.name,
+    modelId: modelMode === "existing" ? modelId : model.id,
+    weightPath: modelMode === "existing" ? "" : model.weightPath,
+    runtime: draft.runtime,
+    runtimeVerifiable,
+    nodeCount,
+    rangeMin: range.min,
+    rangeMax: range.max,
+    topologyStatus: topoEval.status,
+    topologyReason: topoEval.reason,
+    secretEntries: draft.env.filter((e) => e.secret).length,
+    secretMissingNames: draft.env.filter((e) => e.secret && !e.name.trim()).length,
+    role: roleToSave(role),
+  });
+
   // Dirty guard (spec §6): any user edit from the initial state.
   const initialSnapshot = useMemo(
-    () => JSON.stringify({ modelMode, model, recipeMode, srcRecipeId, dupId, draft }),
+    () => JSON.stringify({ modelMode, model, recipeMode, srcRecipeId, dupId, draft, role }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     []
   );
-  const dirty = JSON.stringify({ modelMode, model, recipeMode, srcRecipeId, dupId, draft }) !== initialSnapshot;
+  const dirty = JSON.stringify({ modelMode, model, recipeMode, srcRecipeId, dupId, draft, role }) !== initialSnapshot;
 
   const modelForRecipes = modelMode === "existing" ? modelId : model.id || slugify(model.name);
   const recipesForModel = useMemo(
@@ -307,7 +353,7 @@ export function ModelWizard({
       if (recipeMode !== "existing" && !draft.name.trim()) e.push("Recipe name is required.");
     }
     if (step === 2) e.push(...validateRecipeDraft(draft, "runtime"));
-    if (step === 3) {
+    if (step === STEP_INDEX.compute) {
       if (draft.nodeIds.length < range.min || draft.nodeIds.length > range.max)
         e.push(
           range.min === range.max
@@ -315,7 +361,21 @@ export function ModelWizard({
             : `Topology requires ${range.min}–${range.max} node(s).`
         );
     }
-    if (step === 5 && errors.length > 0) e.push(...errors);
+    if (step === STEP_INDEX.topology) {
+      for (const s of ["tp", "pp", "dp", "ep"] as const) {
+        const raw = draft[s].trim();
+        if (raw === "") continue;
+        const n = Number(raw);
+        if (!Number.isInteger(n) || n < 1) e.push(`${s.toUpperCase()} degree must be an integer ≥ 1.`);
+      }
+      // A declared-unsupported / structurally-impossible topology BLOCKS.
+      if (topoEval.status === "invalid") e.push(`Topology invalid: ${topoEval.reason}.`);
+    }
+    if (step === STEP_INDEX.role) {
+      const port = Number(draft.apiPort);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) e.push("API port must be 1–65535.");
+    }
+    if (step === STEP_INDEX.validate && errors.length > 0) e.push(...errors);
     return e;
   }
 
@@ -368,20 +428,27 @@ export function ModelWizard({
     }
   }
 
+  /** Advisory warnings derived LIVE from current state (never stale). */
+  const navWarnings: string[] = [];
+  if (topologyUnknown(draft)) {
+    navWarnings.push("Topology unknown — confirm TP/PP/DP/EP degrees. Node count alone never sets parallelism.");
+  }
+  if (topoEval.status === "needs-confirmation") {
+    navWarnings.push(`Topology NEEDS CONFIRMATION: ${topoEval.reason}.`);
+  }
+  if (!role) {
+    navWarnings.push("No role set — the deployment defaults to none (changeable later via PATCH).");
+  }
+  if (unknownFields.length) {
+    navWarnings.push(`${unknownFields.length} UNKNOWN discovered value(s) — confirm each before saving.`);
+  }
+
   function next() {
     const e = validateStep();
-    const w: string[] = [];
-    if (topologyUnknown(draft)) {
-      w.push("Topology unknown — confirm TP/PP/DP/EP degrees. Node count alone never sets parallelism.");
-    }
-    if (unknownFields.length) {
-      w.push(`${unknownFields.length} UNKNOWN discovered value(s) — confirm each before saving.`);
-    }
     setErrors(e);
-    setWarnings(w);
     if (e.length > 0) return;
     const target = step + 1;
-    if (target === 5) {
+    if (target === STEP_INDEX.validate) {
       void runValidate().then(() => setStep(target));
       return;
     }
@@ -438,7 +505,7 @@ export function ModelWizard({
       if (!check.ok) {
         setErrors(check.errors);
         setWarnings(check.warnings);
-        setStep(5);
+        setStep(STEP_INDEX.validate);
         return false;
       }
       await createDeployment({
@@ -446,6 +513,9 @@ export function ModelWizard({
         recipeId: rid,
         nodeIds: draft.nodeIds,
         desiredState,
+        // Role is pure config data written on the binding — no model recreation
+        // and no lifecycle. Changeable later via PATCH /api/deployments/:id.
+        role: roleToSave(role),
         metadata: { managedBy: wantsExternal ? "external" : "sparkdash" },
       });
       onSaved();
@@ -474,18 +544,40 @@ export function ModelWizard({
           <Chip tone="accent">config only · dry-run</Chip>
         </div>
         <p className="muted" style={{ fontSize: 12, margin: "0 0 12px", maxWidth: 560 }}>
-          Discover a running endpoint, start from a proven shape, or from scratch. Save writes CONFIG entities only — no
-          process is started or stopped.
+          Three equal paths: discover what is already running, start from a proven template shape, or create from
+          scratch. Save writes CONFIG entities only — no process is started or stopped.
         </p>
-        <TemplatePicker
-          title="Start from a template"
-          templates={MODEL_TEMPLATES}
-          onPick={applyTemplate}
-          onScratch={() => setPath("form")}
-          onDiscover={() => setPath("discover")}
-        />
+
+        {/* Three explicit, equally-weighted entry paths. */}
+        <div role="radiogroup" aria-label="Add model path" style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+          <button type="button" className="cp-btn primary" onClick={() => setPath("discover")}>
+            Discover running model
+          </button>
+          <button
+            type="button"
+            className="cp-btn"
+            aria-pressed={templateOpen}
+            onClick={() => setTemplateOpen((v) => !v)}
+          >
+            Start from template
+          </button>
+          <button type="button" className="cp-btn" onClick={() => setPath("form")}>
+            Create from scratch
+          </button>
+        </div>
+
+        {templateOpen ? (
+          <TemplatePicker
+            title="Templates (data-driven — a new runtime is a provider, never a code edit)"
+            templates={MODEL_TEMPLATES}
+            onPick={applyTemplate}
+            onScratch={() => setPath("form")}
+            onDiscover={() => setPath("discover")}
+          />
+        ) : null}
+
         <FormFooter onCancel={onCancel} cancelLabel="Cancel wizard">
-          <span className="muted" style={{ fontSize: 12 }}>Pick a template, discover, or start blank.</span>
+          <span className="muted" style={{ fontSize: 12 }}>Pick a path above; every template field stays editable.</span>
         </FormFooter>
       </div>
     );
@@ -512,9 +604,9 @@ export function ModelWizard({
           ))}
         </div>
       ) : null}
-      {warnings.length > 0 ? (
+      {navWarnings.length + warnings.length > 0 ? (
         <div className="cp-panel" style={{ borderColor: "var(--color-warning)", marginBottom: 14 }}>
-          {warnings.map((w, i) => (
+          {[...navWarnings, ...warnings].map((w, i) => (
             <div key={i} style={{ fontSize: 11, color: "var(--color-warning)" }}>
               {w}
             </div>
@@ -797,13 +889,13 @@ export function ModelWizard({
         </FormSection>
       ) : null}
 
-      {/* 4. Compute / topology — PHYSICAL placement vs DEPLOYMENT topology, separated */}
-      {step === 3 ? (
+      {/* 4. Compute — PHYSICAL placement only (topology is its own step) */}
+      {step === STEP_INDEX.compute ? (
         <>
           <div className="cp-section-legend">Physical placement — fleet-backed nodes</div>
           <p className="cp-field-hint" style={{ marginBottom: 8 }}>
-            Pick the node(s) this runs on, then a head/coordinator and worker count. Placement is physical — it never
-            implies a parallel degree.
+            Pick the node(s) this runs on, then a head/coordinator and worker count. Placement is physical — fleet size
+            never implies a parallel degree.
           </p>
           {sparks.length === 0 ? (
             <span className="cp-field-hint">No nodes registered — add one in Settings.</span>
@@ -834,44 +926,17 @@ export function ModelWizard({
                 ))}
               </Select>
             </Field>
-            <Field label="Workers" htmlFor="w-workers" hint="Optional physical worker hint">
+            <Field label="Workers" htmlFor="w-workers" hint="Optional physical worker hint (≠ parallelism degree)">
               <TextInput id="w-workers" mono inputMode="numeric" value={draft.workers} onChange={(e) => set("workers", e.target.value)} />
             </Field>
           </FormSection>
-
-          <div className="cp-section-legend">Deployment topology — explicit degrees</div>
-          <p className="cp-field-hint" style={{ marginBottom: 8 }}>
-            TP/PP/DP/EP are entered explicitly and default to unknown. Leaving them blank NEVER infers parallelism from
-            the node count.
-          </p>
-          <FormSection legend="Degrees (blank = unknown)" columns={4}>
-            <Field label="TP" htmlFor="w-tp">
-              <TextInput id="w-tp" mono inputMode="numeric" value={draft.tp} onChange={(e) => set("tp", e.target.value)} />
-            </Field>
-            <Field label="PP" htmlFor="w-pp">
-              <TextInput id="w-pp" mono inputMode="numeric" value={draft.pp} onChange={(e) => set("pp", e.target.value)} />
-            </Field>
-            <Field label="DP" htmlFor="w-dp">
-              <TextInput id="w-dp" mono inputMode="numeric" value={draft.dp} onChange={(e) => set("dp", e.target.value)} />
-            </Field>
-            <Field label="EP" htmlFor="w-ep">
-              <TextInput id="w-ep" mono inputMode="numeric" value={draft.ep} onChange={(e) => set("ep", e.target.value)} />
-            </Field>
-          </FormSection>
-
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
             <span className="muted" style={{ fontSize: 12 }}>Representation</span>
             <TopologySummary view={topoView} />
             <span className="muted" style={{ fontSize: 11 }}>
-              {draft.nodeIds.length} node(s) placed · bounds {range.min}–{range.max}
+              {draft.nodeIds.length} node(s) placed · bounds {range.min === range.max ? range.min : `${range.min}–${range.max}`}
             </span>
           </div>
-
-          {topologyUnknown(draft) ? (
-            <div className="cp-field-error" role="alert">
-              topology unknown — confirm: {draft.nodeIds.length} nodes placed but no TP/PP/DP/EP degree set.
-            </div>
-          ) : null}
           {draft.nodeIds.length < range.min || draft.nodeIds.length > range.max ? (
             <div className="cp-field-error" role="alert">
               Node count is out of the recipe topology bounds ({range.min === range.max ? range.min : `${range.min}–${range.max}`}).
@@ -880,9 +945,136 @@ export function ModelWizard({
         </>
       ) : null}
 
-      {/* 5. Options */}
-      {step === 4 ? (
+      {/* 5. Topology — explicit strategy + data-driven degrees, live-validated */}
+      {step === STEP_INDEX.topology ? (
         <>
+          <div className="cp-section-legend">Deployment topology — explicit strategy & degrees</div>
+          <p className="cp-field-hint" style={{ marginBottom: 8 }}>
+            Degrees are free integers ≥ 1 (not a fixed enum). Strategy tiers come from the selected runtime's DECLARED
+            capability data; when a runtime is silent the control stays visible and reads NEEDS CONFIRMATION — never
+            silently valid.
+          </p>
+
+          <div role="radiogroup" aria-label="Topology strategy" style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+            {TOPOLOGY_STRATEGIES.map((s) => {
+              const tier = strategyTier(descriptor, s.id, degreeOf(s.id), nodeCount);
+              return (
+                <button
+                  key={s.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={draft.topoMode === s.id}
+                  className={`cp-pick ${draft.topoMode === s.id ? "is-selected" : ""}`}
+                  title={s.hint}
+                  onClick={() => set("topoMode", s.id)}
+                >
+                  {s.label}
+                  {tier === "unsupported" ? <Chip tone="default">unsupported</Chip> : null}
+                  {tier === "needs-confirmation" ? <Chip tone="default">needs confirmation</Chip> : null}
+                </button>
+              );
+            })}
+          </div>
+
+          <FormSection legend="Explicit degrees (blank = unknown)" columns={4}>
+            {(["tp", "pp", "dp", "ep"] as const).map((k) => (
+              <Field key={k} label={k.toUpperCase()} htmlFor={`w-${k}`}>
+                <TextInput
+                  id={`w-${k}`}
+                  mono
+                  inputMode="numeric"
+                  value={draft[k]}
+                  onChange={(e) => {
+                    set(k, e.target.value);
+                    // Setting a degree makes that strategy the explicit mode.
+                    if (e.target.value.trim() !== "") set("topoMode", k);
+                  }}
+                />
+              </Field>
+            ))}
+          </FormSection>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+            <span className="muted" style={{ fontSize: 12 }}>Representation</span>
+            <TopologySummary view={topoView} />
+            <span className="cp-field-hint">
+              {nodeCount} node(s) placed · blank degree NEVER infers parallelism from the node count
+            </span>
+          </div>
+
+          {/* DISTINCT live result: VALID / INVALID(reason) / NEEDS-CONFIRMATION(unknown). */}
+          <div
+            className="cp-panel"
+            role="status"
+            data-topology-status={topoEval.status}
+            style={{
+              borderColor:
+                topoEval.status === "valid"
+                  ? "var(--color-success)"
+                  : topoEval.status === "invalid"
+                    ? "var(--color-danger)"
+                    : "var(--color-warning)",
+              marginBottom: 14,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <Chip tone={topoEval.status === "valid" ? "accent" : "default"}>
+                {topoEval.status === "valid" ? "VALID" : topoEval.status === "invalid" ? "INVALID" : "NEEDS CONFIRMATION"}
+              </Chip>
+              <span style={{ fontSize: 12 }}>{topoEval.reason}</span>
+            </div>
+            <p className="cp-field-hint" style={{ margin: 0 }}>
+              Provider data: {runtimeRow?.label ?? draft.runtime}
+              {runtimeVerifiable ? "" : " declares no capability — UNKNOWN is not VALID"}
+            </p>
+          </div>
+
+          {topologyUnknown(draft) ? (
+            <div className="cp-field-error" role="alert">
+              topology unknown — {nodeCount} nodes placed but no TP/PP/DP/EP degree set.
+            </div>
+          ) : null}
+        </>
+      ) : null}
+
+      {/* 6. Role & options — pure config; NO model-name logic */}
+      {step === STEP_INDEX.role ? (
+        <>
+          <div className="cp-section-legend">Deployment role — config selection only</div>
+          <p className="cp-field-hint" style={{ marginBottom: 8 }}>
+            The role is written on the binding at save and is changeable later via{" "}
+            <span className="mono">PATCH /api/deployments/:id {"{role}"}</span> WITHOUT recreating the model. Default is
+            none — primary is never auto-assigned.
+          </p>
+          <div role="radiogroup" aria-label="Deployment role" style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={role === ""}
+              className={`cp-pick ${role === "" ? "is-selected" : ""}`}
+              onClick={() => setRole("")}
+            >
+              none (default)
+            </button>
+            {DEPLOYMENT_ROLE_OPTIONS.filter((r) => r.id !== "none").map((r) => (
+              <button
+                key={r.id}
+                type="button"
+                role="radio"
+                aria-checked={role === r.id}
+                className={`cp-pick ${role === r.id ? "is-selected" : ""}`}
+                title={r.hint}
+                onClick={() => setRole(r.id)}
+              >
+                {r.label}
+              </button>
+            ))}
+          </div>
+          <p className="cp-field-hint" style={{ marginBottom: 14 }}>
+            Selected: <span className="mono">{role || "none"}</span> — saved as{" "}
+            <span className="mono">{roleToSave(role) ?? "null"}</span>.
+          </p>
+
           <FormSection legend="Endpoint & serving options" columns={2}>
             <Field label="API port" htmlFor="w-port">
               <div className="cp-discover-field">
@@ -916,8 +1108,8 @@ export function ModelWizard({
         </>
       ) : null}
 
-      {/* 6. Validate */}
-      {step === 5 ? (
+      {/* 7. Validate — operator-readable report, never a false ✓ */}
+      {step === STEP_INDEX.validate ? (
         <div className="cp-panel">
           <div className="cp-panel-title">
             <span>Dry-run validation — POST /api/recipes/:id/validate</span>
@@ -925,17 +1117,45 @@ export function ModelWizard({
               {busy ? "Validating…" : "Re-run validation"}
             </button>
           </div>
+
+          <dl className="cp-kv" data-validate-report>
+            {reportLines.map((l) => (
+              <div key={l.key} style={{ display: "contents" }}>
+                <dt>{l.key}</dt>
+                <dd
+                  className="mono"
+                  data-status={l.status}
+                  style={{
+                    color:
+                      l.status === "valid"
+                        ? "var(--color-success)"
+                        : l.status === "invalid"
+                          ? "var(--color-danger)"
+                          : "var(--color-warning)",
+                  }}
+                >
+                  {reportSymbol(l.status)} {l.detail}
+                </dd>
+              </div>
+            ))}
+          </dl>
+
           {errors.length === 0 ? (
-            <div style={{ fontSize: 12, color: "var(--color-success)" }}>No errors{". "}{warnings.length ? `${warnings.length} warning(s) — review before saving.` : " Ready to review."}</div>
+            <div style={{ fontSize: 12, color: "var(--color-success)", marginTop: 8 }}>
+              No backend errors{". "}
+              {navWarnings.length + warnings.length
+                ? `${navWarnings.length + warnings.length} warning(s) — review before saving.`
+                : " Ready to review."}
+            </div>
           ) : null}
           <p className="cp-field-hint" style={{ marginTop: 8 }}>
-            Compiled locally, never executed against a node.
+            Compiled locally, never executed against a node. ? means UNKNOWN / NOT-VERIFIED — never reported as ✓.
           </p>
         </div>
       ) : null}
 
-      {/* 7. Review */}
-      {step === 6 ? (
+      {/* 8. Review */}
+      {step === STEP_INDEX.review ? (
         <div className="cp-panel">
           <div className="cp-panel-title">Exactly what will be created / associated</div>
           <dl className="cp-kv">
@@ -968,7 +1188,25 @@ export function ModelWizard({
             <dt>Topology</dt>
             <dd>
               <TopologySummary view={topoView} />
-              {topologyUnknown(draft) ? <span className="cp-field-hint"> — confirm degrees</span> : null}
+              <span className="cp-field-hint" data-topology-status={topoEval.status}>
+                {" "}
+                — {topoEval.status.toUpperCase()}: {topoEval.reason}
+              </span>
+            </dd>
+            <dt>Role</dt>
+            <dd>
+              <span className="mono">{roleToSave(role) ?? "null (none)"}</span>
+              <span className="cp-field-hint"> — config only · changeable later via PATCH, never by recreation</span>
+            </dd>
+            <dt>Weights</dt>
+            <dd className="mono">
+              {modelMode === "existing" ? "existing model weights untouched" : model.weightPath || <span className="cp-field-hint">UNKNOWN — never guessed</span>}
+            </dd>
+            <dt>Secrets</dt>
+            <dd>
+              {draft.env.filter((e) => e.secret).length === 0
+                ? "none"
+                : `${draft.env.filter((e) => e.secret).length} secret ref(s) — values never echoed`}
             </dd>
             <dt>Context</dt>
             <dd>
@@ -1006,13 +1244,13 @@ export function ModelWizard({
         </div>
       ) : null}
 
-      {/* 8. Save */}
-      {step === 7 ? (
+      {/* 9. Save */}
+      {step === STEP_INDEX.save ? (
         <div className="cp-panel">
           <div className="cp-panel-title">Save</div>
           <p style={{ fontSize: 12, margin: 0 }}>
-            Writes config only. Weight files are never moved or deleted, and no process is started or stopped. You will land on the
-            new model detail.
+            Writes config only — model, recipe, binding and the role selection. No lifecycle action, no remote call. Weight
+            files are never moved or deleted, and no process is started or stopped. You will land on the new model detail.
           </p>
         </div>
       ) : null}

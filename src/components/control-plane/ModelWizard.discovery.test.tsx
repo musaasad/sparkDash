@@ -73,10 +73,8 @@ async function advanceToReview(container: HTMLElement) {
   for (let i = 0; i < 20; i++) {
     await flush();
     if (container.textContent?.includes("Exactly what will be created")) return;
-    if (container.querySelector("#w-tp")) {
-      for (const n of [...container.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")]) {
-        if (n.getAttribute("aria-pressed") !== "true" && /Node/.test(n.textContent ?? "")) act(() => n.click());
-      }
+    for (const n of [...container.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")]) {
+      if (n.getAttribute("aria-pressed") !== "true" && /Node/.test(n.textContent ?? "")) act(() => n.click());
     }
     const cont = [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === "Continue");
     expect(cont, `continue at ${i}`).not.toBeUndefined();
@@ -109,8 +107,8 @@ describe("ModelWizard discovery seed", () => {
     const { container } = render(
       <ModelWizard models={[]} recipes={[]} sparks={[n1]} navigate={() => {}} onSaved={() => {}} onCancel={() => {}} seed={seed()} />
     );
-    // Seed skips the picker → straight to the same 8-step flow.
-    expect(container.querySelectorAll(".cp-step")).toHaveLength(8);
+    // Seed skips the picker → straight to the same 9-step flow.
+    expect(container.querySelectorAll(".cp-step")).toHaveLength(9);
     expect(container.querySelector<HTMLInputElement>("#w-model-name")?.value).toBe("qwen-flash");
     expect(container.textContent).toContain("Detected");
     expect(container.textContent).toContain("UNKNOWN to confirm");
@@ -200,12 +198,13 @@ describe("ModelWizard discovery seed", () => {
     clickText("Continue");
     clickText("Node One");
     clickText("Node Two");
+    clickText("Continue"); // topology step (where the degrees live)
     type(container, "#w-tp", "2");
     await flush();
     expect(container.textContent).toContain("TP2");
     expect(container.textContent).not.toContain("topology unknown");
 
-    clickText("Continue"); // options
+    clickText("Continue"); // role & options
     clickText("Continue"); // validate
     await flush();
     const body = validateDraftRecipe.mock.calls.at(-1)![0] as Record<string, any>;

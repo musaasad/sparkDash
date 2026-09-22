@@ -13,6 +13,11 @@ export class TabbyApiProvider extends RuntimeProvider {
       launchable: true,
       processTerms: ["tabbyapi"],
       metricCaps: { "tabbyapi-exl3": ["mtpAcceptanceRate", "prefixCacheHitRate", "ttftSeconds", "prefillTps"] },
+      /**
+       * TabbyAPI/EXL3 is single-node EXL3 serving: single is supported, every
+       * parallelism mode is NOT. Data declaration only — no model-name check.
+       */
+      topology: { single: "supported", tp: "unsupported", pp: "unsupported", dp: "unsupported", ep: "unsupported" },
     });
   }
 
@@ -41,13 +46,6 @@ export class TabbyApiProvider extends RuntimeProvider {
     return parseTabbyTelemetry(msg);
   }
 
-  /**
-   * TabbyAPI/EXL3 is single-node EXL3 serving: single is supported, every
-   * parallelism mode is NOT. Data declaration only — no model-name check.
-   */
-  supportsTopology({ mode } = {}) {
-    return mode === "single" ? "supported" : "unsupported";
-  }
 }
 
 const num = (s) => Number(String(s).replace(/,/g, ""));

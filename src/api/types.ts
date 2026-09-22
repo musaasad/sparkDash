@@ -980,7 +980,7 @@ export type RecipeRuntime = string;
 /** Legacy topology slug (`single` | `tp8` | `dp4` | `pp5` | …) from the server. */
 export type RecipeTopology = `${TopologyMode}${number}` | "single" | (string & {});
 /** v2 structured topology mode (recipe.topology.mode). */
-export type TopologyMode = "single" | "tp" | "pp" | "dp";
+export type TopologyMode = "single" | "tp" | "pp" | "dp" | "ep";
 /** Recipe lifecycle badge — flows through the API for read-only rendering. */
 export type RecipeLifecycleState = "draft" | "validated" | "proven" | "deprecated" | "archived";
 
@@ -1061,6 +1061,8 @@ export interface DeploymentBinding {
   nodeIds: string[];
   desiredState: DeploymentDesired;
   metadata: Record<string, unknown>;
+  /** OPTIONAL explicit placement role (config data; changeable via PATCH). */
+  role?: DeploymentRole | LegacyDeploymentRole | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -1078,6 +1080,11 @@ export interface RuntimeProviderInfo {
   launchable: boolean;
   /** Normalized LlmMetrics keys this runtime meaningfully exposes (never fabricated). */
   metrics: string[];
+  /**
+   * Provider-declared topology capability DATA: strategy → "supported" |
+   * "unsupported" | "by-node-count"; an absent strategy means UNKNOWN.
+   */
+  topology?: Record<string, string>;
 }
 
 /** Env entry as returned by the API — secret values are stripped. */

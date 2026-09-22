@@ -49,13 +49,20 @@ export class RuntimeProvider {
    *   meaningfully exposes (secondary instruments only — never the core
    *   generationTps/ttft that every backend serves).
    */
-  constructor({ runtimes, label = null, launchable = true, processTerms = [], metricCaps = {} }) {
+  constructor({ runtimes, label = null, launchable = true, processTerms = [], metricCaps = {}, topology = {} }) {
     this.runtimes = runtimes;
     this.runtime = runtimes[0];
     this.label = label ?? this.runtime;
     this.launchable = launchable;
     this.processTerms = processTerms;
     this.metricCaps = metricCaps;
+    /**
+     * Declarative topology capability DATA: mode → "supported" | "unsupported" |
+     * "by-node-count". An absent mode means UNKNOWN — never fabricated. Keeping
+     * this as data (not a model-name check) lets the FE render strategy tiers
+     * straight from the registry.
+     */
+    this.topology = Object.freeze({ ...topology });
   }
 
   /**
@@ -113,7 +120,14 @@ export class RuntimeProvider {
    * @param {{mode?: string|null, degree?: number|null, nodeCount?: number|null}} [_spec]
    * @returns {"supported"|"unsupported"|"unknown"}
    */
-  supportsTopology(_spec) {
-    return "unknown";
+  supportsTopology({ mode, degree, nodeCount } = {}) {
+    const declared = this.topology[mode];
+    if (declared == null) return "unknown";
+    if (declared === "by-node-count") {
+      const d = Math.max(1, Number(degree) || 1);
+      const n = Number(nodeCount) || 0;
+      return d <= n ? "supported" : "unsupported";
+    }
+    return declared;
   }
 }
