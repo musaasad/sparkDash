@@ -3,8 +3,10 @@ import type { SparkSnapshot, RecipePublic, DecodeBenchJob, PrefillBenchJob } fro
 import type { Route } from "../../hooks/router";
 import { listDecodeBench, listPrefillBench } from "../../api/client";
 import { DataTable, CountedTabs, type Column } from "../ui/DataTable";
-import { Chip, EmptyState, StatusPill, Skeleton } from "../ui/Status";
+import { Chip, StatusPill, SkeletonRows } from "../ui/Status";
 import { TimeSeriesChart } from "../ui/TimeSeriesChart";
+import { SectionBand } from "../ui/SectionBand";
+import { BoltIcon } from "../ui/icons";
 import { relativeAge } from "./fleetModel";
 import {
   anchorTiles,
@@ -177,13 +179,6 @@ export function BenchmarksSection({ sparks, recipes, navigate }: BenchmarksProps
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <div>
-        <div className="cp-section-title">Benchmarks</div>
-        <div className="cp-section-sub">
-          {rows.length} fleet run{rows.length === 1 ? "" : "s"}. Runs are only compared when kind, recipe and workload shape match.
-        </div>
-      </div>
-
       <div className="cp-toolbar" role="search">
         <div className="cp-toolbar-search">
           <input
@@ -216,11 +211,11 @@ export function BenchmarksSection({ sparks, recipes, navigate }: BenchmarksProps
         </div>
       </div>
 
+      <SectionBand icon={<BoltIcon />} title="Fleet runs" count={filtered.length} />
+
       {loading && rows.length === 0 ? (
-        <div id="bench-runs" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {[0, 1, 2, 3].map((i) => (
-            <Skeleton key={i} height={34} />
-          ))}
+        <div id="bench-runs">
+          <SkeletonRows columns={4} rows={4} />
         </div>
       ) : (
         <div id="bench-runs">
@@ -232,26 +227,11 @@ export function BenchmarksSection({ sparks, recipes, navigate }: BenchmarksProps
           expandedKeys={open}
           renderExpanded={(r) => <BenchExpansion entry={r} groups={groups} />}
           empty={
-            query || kind !== "all" ? (
-              <EmptyState
-                title="No runs match these filters"
-                subtitle="Clear the search or pick another type."
-                action={
-                  <button
-                    type="button"
-                    className="cp-btn primary"
-                    onClick={() => {
-                      setQuery("");
-                      setKind("all");
-                    }}
-                  >
-                    Clear filters
-                  </button>
-                }
-              />
-            ) : (
-              <EmptyState title="No benchmark runs yet" subtitle="Run a decode or prefill benchmark from a node page to populate this history." />
-            )
+            <span className="cp-table-empty-box">
+              {query || kind !== "all"
+                ? "No runs match these filters — clear the search or pick another type."
+                : "No benchmark runs yet — run a decode or prefill benchmark from a node page."}
+            </span>
           }
         />
         </div>

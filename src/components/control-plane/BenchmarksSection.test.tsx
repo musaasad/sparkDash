@@ -102,6 +102,6 @@ describe("BenchmarksSection run rows", () => {
     expect(container.querySelectorAll(".cp-table tbody tr")).toHaveLength(2);
     const prefillTab = [...container.querySelectorAll<HTMLButtonElement>(".cp-counted-tab")].find((b) => b.textContent?.includes("Prefill"))!;
     act(() => prefillTab.click());
-    expect(container.querySelector(".cp-empty")).not.toBeNull();
+    expect(container.querySelector(".cp-table-empty-box")).not.toBeNull();
   });
 });

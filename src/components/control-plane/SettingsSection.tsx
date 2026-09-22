@@ -21,29 +21,27 @@ interface SettingsProps {
   onClearActivity?: (newestSeq: number) => void;
 }
 
-type SectionKey = "general" | "models" | "gpu" | "storage" | "network" | "advanced" | "danger";
+type SectionKey = "general" | "access" | "integrations" | "runtimes" | "limits" | "danger";
 
 const THEME_KEY = "sparkdash-theme";
 type Theme = "white" | "light" | "dark" | "oled";
 
-const SECTIONS: Array<{ key: SectionKey; label: string; danger?: boolean }> = [
-  { key: "general", label: "General" },
-  { key: "models", label: "Models" },
-  { key: "gpu", label: "GPU / Runtime" },
-  { key: "storage", label: "Storage" },
-  { key: "network", label: "Network" },
-  { key: "advanced", label: "Advanced" },
+const SECTIONS: Array<{ key: SectionKey; label: string; danger?: boolean; icon?: string }> = [
+  { key: "general", label: "General", icon: "◧" },
+  { key: "access", label: "Access", icon: "⇄" },
+  { key: "integrations", label: "Integrations", icon: "⧉" },
+  { key: "runtimes", label: "Runtimes", icon: "▤" },
+  { key: "limits", label: "Limits", icon: "◍" },
   { key: "danger", label: "Danger Zone", danger: true },
 ];
 
 /** Settings keys owned by each saveable section. */
 const SECTION_KEYS: Record<SectionKey, Array<keyof Settings>> = {
   general: ["temperatureUnit", "density", "autoHideOffline", "hideWorkers", "showOverviewSearch"],
-  models: ["benchShareImage"],
-  gpu: ["showFleetEnergy", "showFleetExceptions"],
-  storage: ["benchDebugTraces"],
-  network: ["pollIntervalMs", "defaultLlmPort"],
-  advanced: [],
+  access: ["pollIntervalMs", "defaultLlmPort"],
+  integrations: ["benchShareImage"],
+  runtimes: ["showFleetEnergy", "showFleetExceptions"],
+  limits: ["benchDebugTraces"],
   danger: [],
 };
 
@@ -168,11 +166,6 @@ export function SettingsSection({ sparks, navigate, onSparksChanged, activityLat
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <div>
-        <div className="cp-section-title">Settings</div>
-        <div className="cp-section-sub">Lab configuration — grouped by subsystem. Each section saves on its own.</div>
-      </div>
-
       {saveError ? <div className="cp-banner is-amber" role="alert">{saveError}</div> : null}
 
       <div className="cp-settings-layout">
@@ -181,17 +174,25 @@ export function SettingsSection({ sparks, navigate, onSparksChanged, activityLat
             <button
               key={s.key}
               type="button"
-              className={`cp-rail-item${section === s.key ? " is-active" : ""}${s.danger ? " danger" : ""}`}
+              className={`cp-setting-nav${section === s.key ? " is-active" : ""}${s.danger ? " danger" : ""}`}
               aria-current={section === s.key}
               onClick={() => setSection(s.key)}
             >
-              {s.danger ? <span className="cp-danger-icon" aria-hidden="true">⚠</span> : null}
+              {s.danger ? (
+                <span className="cp-danger-icon" aria-hidden="true">
+                  ⚠
+                </span>
+              ) : (
+                <span className="cp-setting-nav-icon" aria-hidden="true">
+                  {s.icon}
+                </span>
+              )}
               {s.label}
             </button>
           ))}
         </nav>
 
-        <section className="cp-panel cp-settings-panel" aria-label={`${activeLabel} settings`}>
+        <section className="cp-settings-panel" aria-label={`${activeLabel} settings`}>
           <div className="cp-panel-title">
             <span className={active?.danger ? "cp-danger-title" : undefined}>{activeLabel}</span>
             {sectionKeys.length > 0 ? (
@@ -295,7 +296,7 @@ export function SettingsSection({ sparks, navigate, onSparksChanged, activityLat
 
               <div className="cp-subhead">Compute nodes</div>
               <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 6 }}>
-                <button type="button" className="cp-btn primary" onClick={() => setAddOpen(true)}>
+                <button type="button" className="cp-btn ghost" onClick={() => setAddOpen(true)}>
                   + Add node
                 </button>
               </div>
@@ -305,12 +306,12 @@ export function SettingsSection({ sparks, navigate, onSparksChanged, activityLat
                 rows={sparks}
                 rowKey={(s) => s.id}
                 onRowClick={(s) => navigate({ section: "node", nodeId: s.id })}
-                empty={<EmptyState title="No nodes" subtitle="Add a Spark or host to start observing your lab." />}
+                empty={<span className="cp-table-empty-box">No nodes yet — add a Spark or host to start observing your lab.</span>}
               />
             </>
           ) : null}
 
-          {section === "models" && settings ? (
+          {section === "integrations" && settings ? (
             <>
               <SettingRow label="Benchmark share image" hint="Adds a Copy-as-image share card to the Copy results button.">
                 <button
@@ -327,7 +328,40 @@ export function SettingsSection({ sparks, navigate, onSparksChanged, activityLat
             </>
           ) : null}
 
-          {section === "gpu" && settings ? (
+          {section === "integrations" ? (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <Chip tone={dryRun === false ? "accent" : "default"}>{dryRun === false ? "LIVE (unexpected)" : "DRY-RUN"}</Chip>
+                <span style={{ fontSize: 12, color: "var(--color-muted)" }}>
+                  Start/Stop/Restart simulate state transitions and write audit entries. No process is launched or stopped.
+                  Externally managed deployments always render controls disabled.
+                </span>
+              </div>
+              {deployments.length > 0 ? (
+                <table className="cp-table" style={{ marginTop: 10 }}>
+                  <tbody>
+                    {deployments.map((d) => (
+                      <tr key={d.recipeId}>
+                        <td className="mono">{d.recipeId}</td>
+                        <td>{d.managedBy === "external" ? "externally managed" : "sparkdash-managed"}</td>
+                        <td style={{ textAlign: "right" }}>
+                          <StatusPill status={d.state as never} />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : null}
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12 }}>
+                <span style={{ fontSize: 12, color: "var(--color-muted)" }}>Server settings dialog (theme lives in General above)</span>
+                <button type="button" className="cp-btn" onClick={() => setServerOpen(true)}>
+                  Open server settings
+                </button>
+              </div>
+            </>
+          ) : null}
+
+          {section === "runtimes" && settings ? (
             <>
               <SettingRow label="Fleet Energy card" hint="Overview card with rolling fleet power estimates. Off by default.">
                 <button
@@ -357,7 +391,7 @@ export function SettingsSection({ sparks, navigate, onSparksChanged, activityLat
             </>
           ) : null}
 
-          {section === "storage" && settings ? (
+          {section === "limits" && settings ? (
             <>
               <SettingRow label="Benchmark debug traces" hint="Stores prompts, HTTP IDs and GPU samples — larger history files.">
                 <button
@@ -377,7 +411,7 @@ export function SettingsSection({ sparks, navigate, onSparksChanged, activityLat
             </>
           ) : null}
 
-          {section === "network" && settings ? (
+          {section === "access" && settings ? (
             <>
               <SettingRow
                 label="Poll interval"
@@ -417,39 +451,6 @@ export function SettingsSection({ sparks, navigate, onSparksChanged, activityLat
             </>
           ) : null}
 
-          {section === "advanced" ? (
-            <>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                <Chip tone={dryRun === false ? "accent" : "default"}>{dryRun === false ? "LIVE (unexpected)" : "DRY-RUN"}</Chip>
-                <span style={{ fontSize: 12, color: "var(--color-muted)" }}>
-                  Start/Stop/Restart simulate state transitions and write audit entries. No process is launched or stopped.
-                  Externally managed deployments always render controls disabled.
-                </span>
-              </div>
-              {deployments.length > 0 ? (
-                <table className="cp-table" style={{ marginTop: 10 }}>
-                  <tbody>
-                    {deployments.map((d) => (
-                      <tr key={d.recipeId}>
-                        <td className="mono">{d.recipeId}</td>
-                        <td>{d.managedBy === "external" ? "externally managed" : "sparkdash-managed"}</td>
-                        <td style={{ textAlign: "right" }}>
-                          <StatusPill status={d.state as never} />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              ) : null}
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12 }}>
-                <span style={{ fontSize: 12, color: "var(--color-muted)" }}>Server settings dialog (theme lives in General above)</span>
-                <button type="button" className="cp-btn" onClick={() => setServerOpen(true)}>
-                  Open server settings
-                </button>
-              </div>
-            </>
-          ) : null}
-
           {section === "danger" ? (
             <>
               <p className="cp-field-hint">
@@ -477,7 +478,7 @@ export function SettingsSection({ sparks, navigate, onSparksChanged, activityLat
                   />
                   <button
                     type="button"
-                    className="cp-btn danger"
+                    className="cp-btn danger-solid"
                     disabled={!activityConfirm.ok}
                     onClick={() => {
                       onClearActivity?.(activityLatestSeq);
@@ -512,7 +513,7 @@ export function SettingsSection({ sparks, navigate, onSparksChanged, activityLat
                   />
                   <button
                     type="button"
-                    className="cp-btn danger"
+                    className="cp-btn danger-solid"
                     disabled={!benchConfirm.ok}
                     onClick={() => {
                       setBenchCleared(true);

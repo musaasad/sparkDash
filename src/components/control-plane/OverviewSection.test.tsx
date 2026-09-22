@@ -49,8 +49,10 @@ describe("Overview health verdict", () => {
   it("restates a time window on windowed sections", () => {
     cleanupRenders();
     const { container } = render(<OverviewSection sparks={[spark()]} deployments={[]} recipes={[]} navigate={() => {}} loaded />);
-    expect(container.textContent).toContain("Compute nodes (1) · last 15m");
-    expect(container.textContent).toContain("Runtime activity · last 5 events");
+    expect(container.textContent).toContain("Compute nodes");
+    expect(container.textContent).toContain("Last 15m");
+    expect(container.textContent).toContain("Runtime activity");
+    expect(container.textContent).toContain("Last 5 events");
   });
 
   it("shows first-paint skeletons matching final geometry while unloaded", () => {

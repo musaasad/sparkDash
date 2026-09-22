@@ -22,6 +22,24 @@ function baseProps(className?: string) {
   };
 }
 
+export function PanelIcon({ className }: IconProps) {
+  return (
+    <svg {...baseProps(className)}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <line x1="9" y1="4" x2="9" y2="20" />
+    </svg>
+  );
+}
+
+export function SearchIcon({ className }: IconProps) {
+  return (
+    <svg {...baseProps(className)}>
+      <circle cx="11" cy="11" r="7" />
+      <line x1="16.5" y1="16.5" x2="21" y2="21" />
+    </svg>
+  );
+}
+
 export function ActivityIcon({ className }: IconProps) {
   return (
     <svg {...baseProps(className)}>

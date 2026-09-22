@@ -57,7 +57,7 @@ describe("ActivitySection toolbar + facets", () => {
     const { container } = render(<ActivitySection events={events} />);
     const search = container.querySelector<HTMLInputElement>(".cp-toolbar-search input")!;
     act(() => setInput(search, "no-such-thing"));
-    expect(container.querySelector(".cp-empty")?.textContent).toContain("No events match these filters");
+    expect(container.querySelector(".cp-table-empty-box")?.textContent).toContain("No events match these filters");
 
     const clear = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Clear filters")!;
     act(() => clear.click());

@@ -55,7 +55,7 @@ describe("ModelsSection row grammar", () => {
     const row = container.querySelector(".cp-deploy-row");
     expect(row).not.toBeNull();
     expect(row!.querySelector(".cp-pill")?.textContent).toContain("Running");
-    expect(row!.querySelector(".cp-deploy-id")?.textContent).toBe("r1");
+    expect(row!.querySelector(".cp-deploy-id")?.textContent).toContain("r1");
     expect(row!.querySelector(".cp-deploy-meta")?.textContent).toContain("managed");
     expect(row!.textContent).toContain("Spark A");
     expect(row!.textContent).toContain("View logs");

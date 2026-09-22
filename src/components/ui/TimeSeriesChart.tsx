@@ -110,7 +110,7 @@ export function TimeSeriesChart({
   return (
     <div style={{ position: "relative" }}>
       {!hasData ? (
-        <div className="cp-table-empty" style={{ height }}>{emptyLabel}</div>
+        <div className="cp-chart-empty" style={{ height }}>{emptyLabel}</div>
       ) : (
         <svg
           ref={svgRef}
@@ -218,7 +218,7 @@ export function RangePicker({
         <button
           key={o.ms}
           type="button"
-          className={`cp-btn ghost ${value === o.ms ? "is-active" : ""}`}
+          className={`cp-range${value === o.ms ? " is-active" : ""}`}
           style={{ padding: "3px 8px", fontSize: 11, background: value === o.ms ? "var(--color-surface-hover)" : undefined }}
           aria-pressed={value === o.ms}
           onClick={() => onChange(o.ms)}

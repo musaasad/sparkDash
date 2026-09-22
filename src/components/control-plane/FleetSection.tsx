@@ -1,8 +1,11 @@
 import { useMemo, useState } from "react";
 import type { SparkSnapshot, DeploymentStatus, RecipePublic, ModelEntry } from "../../api/types";
 import type { Route } from "../../hooks/router";
-import { DataTable, CountedTabs, type Column } from "../ui/DataTable";
+import { DataTable, CountedTabs, EntityChip, type Column } from "../ui/DataTable";
 import { StatusPill, StatusDot, Chip, EmptyState } from "../ui/Status";
+import { SectionBand } from "../ui/SectionBand";
+import { Toolbar, DensityToggle } from "../ui/Toolbar";
+import { NetworkIcon } from "../ui/icons";
 import { primaryNodes, recipesOnNode, fmtUptime, nodeHealthRail, nodeMatchesRail } from "./fleetModel";
 import { Topology } from "./Topology";
 import { isWorkerSpark } from "../../api/sparkRole";
@@ -23,6 +26,7 @@ function fmtTemp(celsius: number): string {
 export function FleetSection({ sparks, deployments, recipes, navigate, models = [] }: FleetProps) {
   const [rail, setRail] = useState("all");
   const [query, setQuery] = useState("");
+  const [dense, setDense] = useState(false);
 
   const nodes = useMemo(() => primaryNodes(sparks), [sparks]);
   const workers = useMemo(() => sparks.filter(isWorkerSpark), [sparks]);
@@ -45,7 +49,7 @@ export function FleetSection({ sparks, deployments, recipes, navigate, models = 
       header: "Node",
       render: (n) => (
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontWeight: 500 }}>{n.name}</span>
+          <EntityChip icon={<NetworkIcon />} label={n.name} title={n.lanIp ?? n.name} />
           <Chip>{n.kind === "host" ? "host" : "spark"}</Chip>
           {n.role === "head" ? <Chip tone="accent">head</Chip> : null}
         </div>
@@ -60,7 +64,15 @@ export function FleetSection({ sparks, deployments, recipes, navigate, models = 
       key: "gpu",
       header: "GPU",
       align: "right",
-      render: (n) => (n.metrics?.gpu ? <span>{Math.round(n.metrics.gpu.usage)}<span className="cp-unit"> %</span></span> : "—"),
+      render: (n) =>
+        n.metrics?.gpu ? (
+          <span className="cp-metric-chip">
+            {Math.round(n.metrics.gpu.usage)}
+            <span className="cp-unit"> %</span>
+          </span>
+        ) : (
+          <span className="cp-nodata">—</span>
+        ),
     },
     {
       key: "vram",
@@ -71,7 +83,7 @@ export function FleetSection({ sparks, deployments, recipes, navigate, models = 
         const v = n.metrics?.gpu?.vram;
         if (!v || v.total <= 0) return "—";
         return (
-          <span className="mono">
+          <span className="cp-metric-chip">
             {Math.round(v.used / 1024)}/{Math.round(v.total / 1024)} GB
           </span>
         );
@@ -82,7 +94,12 @@ export function FleetSection({ sparks, deployments, recipes, navigate, models = 
       header: "Temp",
       align: "right",
       muted: true,
-      render: (n) => (n.metrics?.gpu?.temperature != null ? <span>{fmtTemp(n.metrics.gpu.temperature)}</span> : "—"),
+      render: (n) =>
+        n.metrics?.gpu?.temperature != null ? (
+          <span className={`cp-metric-chip${n.metrics.gpu.temperature > 85 ? " cp-over" : ""}`}>{fmtTemp(n.metrics.gpu.temperature)}</span>
+        ) : (
+          <span className="cp-nodata">—</span>
+        ),
     },
     {
       key: "power",
@@ -125,16 +142,8 @@ export function FleetSection({ sparks, deployments, recipes, navigate, models = 
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <div>
-        <div className="cp-section-title">Fleet</div>
-        <div className="cp-section-sub">
-          {sparks.length} compute node{sparks.length === 1 ? "" : "s"}
-          {workers.length ? ` · ${workers.length} worker${workers.length === 1 ? "" : "s"}` : ""} · scales to any node count
-        </div>
-      </div>
-
-      <div className="cp-toolbar" role="search">
-        <div className="cp-toolbar-search">
+      <Toolbar
+        search={
           <input
             type="search"
             aria-label="Search nodes"
@@ -142,8 +151,8 @@ export function FleetSection({ sparks, deployments, recipes, navigate, models = 
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
-        </div>
-        <div className="cp-toolbar-filters">
+        }
+        filters={
           <CountedTabs
             tabs={railItems.filter((r) => r.key !== "running").map((r) => ({ key: r.key, label: r.label, count: r.count }))}
             active={rail}
@@ -151,22 +160,38 @@ export function FleetSection({ sparks, deployments, recipes, navigate, models = 
             ariaLabel="Node status filters"
             panelId="fleet-nodes"
           />
-        </div>
-        <div className="cp-toolbar-primary">
-          {query ? (
+        }
+        utilities={<DensityToggle dense={dense} onChange={setDense} />}
+        primary={
+          query ? (
             <button type="button" className="cp-btn ghost" onClick={() => setQuery("")}>
               Clear
             </button>
-          ) : null}
-        </div>
-      </div>
+          ) : null
+        }
+      />
 
       {nodes.length === 0 ? (
         <div className="cp-panel">
-          <EmptyState title="No compute nodes" subtitle="Add a Spark or host in Settings to start observing your lab." />
+          <EmptyState
+            icon={<NetworkIcon />}
+            title="No compute nodes found"
+            subtitle="Add a Spark or host in Settings to start observing your lab."
+            action={
+              <button type="button" className="cp-btn primary" onClick={() => navigate({ section: "settings" })}>
+                + Connect node
+              </button>
+            }
+            learnMore={
+              <button type="button" className="cp-link" onClick={() => navigate({ section: "settings" })}>
+                Learn more
+              </button>
+            }
+          />
         </div>
       ) : (
         <>
+          <SectionBand icon={<NetworkIcon />} title="Compute nodes" count={rows.length} />
           <div className="cp-fleet-layout">
             {/* Aggregate health rail — clicking a count filters the table */}
             <div className="cp-rail" aria-label="Fleet health rail">
@@ -188,11 +213,13 @@ export function FleetSection({ sparks, deployments, recipes, navigate, models = 
             <div id="fleet-nodes">
               <DataTable
                 ariaLabel="Compute nodes"
+                dense={dense}
                 columns={columns}
                 rows={rows}
                 rowKey={(n) => n.id}
+                rowClassName={(n) => (n.online ? "" : "is-offline")}
                 onRowClick={(n) => navigate({ section: "node", nodeId: n.id })}
-                empty={<div className="cp-table-empty">No nodes match this filter.</div>}
+                empty={<div className="cp-table-empty-box">No nodes match this filter.</div>}
               />
             </div>
           </div>
@@ -205,10 +232,8 @@ export function FleetSection({ sparks, deployments, recipes, navigate, models = 
           ) : null}
 
           {workers.length > 0 ? (
-            <div>
-              <div className="cp-panel-title" style={{ marginBottom: 6 }}>
-                Worker nodes
-              </div>
+            <div className="cp-section-block">
+              <SectionBand icon={<NetworkIcon />} title="Worker nodes" count={workers.length} />
               <DataTable
                 ariaLabel="Worker nodes"
                 columns={[

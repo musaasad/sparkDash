@@ -69,7 +69,7 @@ describe("SettingsSection section-scoped save", () => {
 
   it("blocks save on inline validation errors", async () => {
     const { container } = await mount();
-    act(() => railButton(container, "Network").click());
+    act(() => railButton(container, "Access").click());
 
     const poll = container.querySelector<HTMLInputElement>("#set-poll")!;
     act(() => setInput(poll, "100"));

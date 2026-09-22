@@ -13,6 +13,10 @@ import { ThemeSwitch } from "./components/ThemeSwitch";
 import { ConnectionBanner } from "./components/ui/ConnectionBanner";
 import { ErrorBanner } from "./components/ui/ErrorBanner";
 import { AppNav } from "./components/control-plane/AppNav";
+import { Breadcrumb } from "./components/ui/Breadcrumb";
+import { PageHeader } from "./components/ui/PageHeader";
+import type { Crumb } from "./components/ui/Breadcrumb";
+import type { Section } from "./hooks/router";
 import { OverviewSection } from "./components/control-plane/OverviewSection";
 import { FleetSection } from "./components/control-plane/FleetSection";
 import { NodeDetail } from "./components/control-plane/NodeDetail";
@@ -107,6 +111,43 @@ function placeholderSnapshot(
     },
   };
 }
+
+/** Shell-level page grammar per list section (detail routes own their header). */
+const PAGE_META: Record<
+  Exclude<Section, never>,
+  { title: string; subtitle: string; trail: string }
+> = {
+  overview: {
+    title: "Overview",
+    subtitle: "Operational summary of the lab — fleet health, deployments and activity at a glance.",
+    trail: "Overview",
+  },
+  models: {
+    title: "Models",
+    subtitle: "The model registry — a model can host many deployment recipes.",
+    trail: "Models",
+  },
+  fleet: {
+    title: "Fleet",
+    subtitle: "Compute nodes with live GPU, runtime and thermal status.",
+    trail: "Fleet",
+  },
+  activity: {
+    title: "Activity",
+    subtitle: "Everything that happened in the lab — node changes, deployments, benchmarks and alerts.",
+    trail: "Activity",
+  },
+  benchmarks: {
+    title: "Benchmarks",
+    subtitle: "A/B comparison runs across models, recipes and nodes.",
+    trail: "Benchmarks",
+  },
+  settings: {
+    title: "Settings",
+    subtitle: "Lab configuration — grouped by subsystem. Each section saves on its own.",
+    trail: "Settings",
+  },
+};
 
 function DashboardApp() {
   const {
@@ -221,8 +262,15 @@ function DashboardApp() {
     return liveSparks.find((s) => s.id === route.nodeId) ?? null;
   }, [route, liveSparks]);
 
+  const listSection: Section | null =
+    route.section === "model" || route.section === "node" ? null : (route.section as Section);
+  const pageMeta = listSection ? PAGE_META[listSection] : null;
+  const crumbs: Crumb[] = pageMeta
+    ? [{ label: "Lab", route: { section: "overview" } }, { label: pageMeta.trail }]
+    : [];
+
   return (
-    <div className="min-h-screen p-0 text-text sm:p-6">
+    <div className="min-h-screen text-text">
       <div className="cp-shell">
         <AppNav
           route={route}
@@ -230,107 +278,124 @@ function DashboardApp() {
           connected={connected}
           stale={telemetryStale}
           right={<ThemeSwitch />}
+          counts={{
+            fleet: liveSparks.length,
+            models: cp.models.length,
+            activity: cp.activity.length,
+          }}
         />
-        <div className="cp-body">
-          <ConnectionBanner
-            connected={connected}
-            lastValidSnapshotAt={lastValidSnapshotAt}
-            snapshotError={snapshotError}
-            now={telemetryNow}
-            stale={telemetryStale}
-          />
-          <ErrorBanner message={actionError} onDismiss={() => setActionError(null)} />
-          <main className={telemetryStale || !connected ? "telemetry-stale" : undefined}>
-            {route.section === "overview" ? (
-              <OverviewSection
-                sparks={liveSparks}
-                deployments={deployments}
-                recipes={cp.recipes}
-                navigate={navigate}
-                loaded={cp.loaded || sparks.length > 0}
-                models={cp.models}
-                activity={cp.activity}
-                temperatureUnit={settings?.temperatureUnit ?? "celsius"}
-              />
-            ) : null}
-            {route.section === "fleet" ? (
-              <FleetSection sparks={liveSparks} deployments={deployments} recipes={cp.recipes} models={cp.models} navigate={navigate} />
-            ) : null}
-            {route.section === "node" ? (
-              activeNode ? (
-                <NodeDetail
-                  spark={activeNode}
-                  allSparks={liveSparks}
+        <div className="cp-main">
+          <div className="cp-body">
+            <ConnectionBanner
+              connected={connected}
+              lastValidSnapshotAt={lastValidSnapshotAt}
+              snapshotError={snapshotError}
+              now={telemetryNow}
+              stale={telemetryStale}
+            />
+            <ErrorBanner
+              message={actionError}
+              onDismiss={() => setActionError(null)}
+              onRetry={() => void refreshFromApi()}
+            />
+            <main className={telemetryStale || !connected ? "telemetry-stale" : undefined}>
+              {pageMeta ? (
+                <div>
+                  <Breadcrumb items={crumbs} navigate={navigate} />
+                  <PageHeader title={pageMeta.title} subtitle={pageMeta.subtitle} />
+                </div>
+              ) : null}
+              {route.section === "overview" ? (
+                <OverviewSection
+                  sparks={liveSparks}
+                  deployments={deployments}
+                  recipes={cp.recipes}
+                  navigate={navigate}
+                  loaded={cp.loaded || sparks.length > 0}
+                  models={cp.models}
+                  activity={cp.activity}
+                  temperatureUnit={settings?.temperatureUnit ?? "celsius"}
+                />
+              ) : null}
+              {route.section === "fleet" ? (
+                <FleetSection sparks={liveSparks} deployments={deployments} recipes={cp.recipes} models={cp.models} navigate={navigate} />
+              ) : null}
+              {route.section === "node" ? (
+                activeNode ? (
+                  <NodeDetail
+                    spark={activeNode}
+                    allSparks={liveSparks}
+                    recipes={cp.recipes}
+                    deployments={deployments}
+                    temperatureUnit={settings?.temperatureUnit ?? "celsius"}
+                    benchShareImage={settings?.benchShareImage ?? false}
+                    navigate={navigate}
+                    onEdit={() => setEditId(activeNode.id)}
+                    onAddNode={() => setShowAdd(true)}
+                  />
+                ) : (
+                  <div className="cp-panel">
+                    <div className="cp-empty">
+                      <div className="cp-empty-title">Node not found</div>
+                      <div className="cp-empty-sub">
+                        “{route.nodeId}” is not a registered node. It may have been removed.
+                      </div>
+                      <button type="button" className="cp-btn" style={{ marginTop: 8 }} onClick={() => navigate({ section: "fleet" })}>
+                        ← Back to Fleet
+                      </button>
+                    </div>
+                  </div>
+                )
+              ) : null}
+              {route.section === "models" ? (
+                <ModelsSection
+                  models={cp.models}
                   recipes={cp.recipes}
                   deployments={deployments}
-                  temperatureUnit={settings?.temperatureUnit ?? "celsius"}
-                  benchShareImage={settings?.benchShareImage ?? false}
+                  sparks={liveSparks}
+                  activity={cp.activity}
                   navigate={navigate}
-                  onEdit={() => setEditId(activeNode.id)}
-                  onAddNode={() => setShowAdd(true)}
+                  onSaved={() => void cp.reload()}
                 />
-              ) : (
-                <div className="cp-panel">
-                  <div className="cp-empty">
-                    <div className="cp-empty-title">Node not found</div>
-                    <div className="cp-empty-sub">
-                      “{route.nodeId}” is not a registered node. It may have been removed.
-                    </div>
-                    <button type="button" className="cp-btn" style={{ marginTop: 8 }} onClick={() => navigate({ section: "fleet" })}>
-                      ← Back to Fleet
-                    </button>
-                  </div>
-                </div>
-              )
-            ) : null}
-            {route.section === "models" ? (
-              <ModelsSection
-                models={cp.models}
-                recipes={cp.recipes}
-                deployments={deployments}
-                sparks={liveSparks}
-                activity={cp.activity}
-                navigate={navigate}
-                onSaved={() => void cp.reload()}
-              />
-            ) : null}
-            {route.section === "model" ? (
-              <ModelDetail
-                modelId={route.modelId}
-                initialTab={route.tab}
-                initialReqId={route.reqId}
-                sparks={liveSparks}
-                navigate={navigate}
-                onDataChanged={() => void cp.reload()}
-              />
-            ) : null}
-            {route.section === "activity" ? (
-              <ActivitySection
-                events={cp.activity}
-                reqId={route.reqId}
-                clearedUpTo={activityClearedUpTo}
-                onClearActivity={setActivityClearedUpTo}
-                onOpenInConsole={(event) => {
-                  const recipeId = event.meta?.recipeId != null ? String(event.meta.recipeId) : null;
-                  const reqId = event.meta?.reqId != null ? Number(event.meta.reqId) : undefined;
-                  const rec = cp.recipes.find((r) => r.id === recipeId) ?? cp.recipes.find((r) => r.id === event.subject);
-                  if (rec) navigate({ section: "model", modelId: rec.modelId, tab: "live-console", reqId });
-                }}
-              />
-            ) : null}
-            {route.section === "benchmarks" ? (
-              <BenchmarksSection sparks={liveSparks} recipes={cp.recipes} navigate={navigate} />
-            ) : null}
-            {route.section === "settings" ? (
-              <SettingsSection
-                sparks={liveSparks}
-                navigate={navigate}
-                onSparksChanged={() => void refreshFromApi()}
-                activityLatestSeq={cp.activity.reduce((m, e) => Math.max(m, e.seq), 0)}
-                onClearActivity={setActivityClearedUpTo}
-              />
-            ) : null}
-          </main>
+              ) : null}
+              {route.section === "model" ? (
+                <ModelDetail
+                  modelId={route.modelId}
+                  initialTab={route.tab}
+                  initialReqId={route.reqId}
+                  sparks={liveSparks}
+                  navigate={navigate}
+                  onDataChanged={() => void cp.reload()}
+                />
+              ) : null}
+              {route.section === "activity" ? (
+                <ActivitySection
+                  events={cp.activity}
+                  reqId={route.reqId}
+                  clearedUpTo={activityClearedUpTo}
+                  onClearActivity={setActivityClearedUpTo}
+                  onOpenInConsole={(event) => {
+                    const recipeId = event.meta?.recipeId != null ? String(event.meta.recipeId) : null;
+                    const reqId = event.meta?.reqId != null ? Number(event.meta.reqId) : undefined;
+                    const rec = cp.recipes.find((r) => r.id === recipeId) ?? cp.recipes.find((r) => r.id === event.subject);
+                    if (rec) navigate({ section: "model", modelId: rec.modelId, tab: "live-console", reqId });
+                  }}
+                />
+              ) : null}
+              {route.section === "benchmarks" ? (
+                <BenchmarksSection sparks={liveSparks} recipes={cp.recipes} navigate={navigate} />
+              ) : null}
+              {route.section === "settings" ? (
+                <SettingsSection
+                  sparks={liveSparks}
+                  navigate={navigate}
+                  onSparksChanged={() => void refreshFromApi()}
+                  activityLatestSeq={cp.activity.reduce((m, e) => Math.max(m, e.seq), 0)}
+                  onClearActivity={setActivityClearedUpTo}
+                />
+              ) : null}
+            </main>
+          </div>
         </div>
       </div>
       <HermesUpdateDialog />

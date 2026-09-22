@@ -5,6 +5,8 @@ import { SparkPage } from "../SparkPage/SparkPage";
 import { SparkTabs } from "../SparkTabs";
 import { StatusPill, StatusDot, Chip, EmptyState } from "../ui/Status";
 import { TabStrip } from "../ui/DataTable";
+import { Breadcrumb } from "../ui/Breadcrumb";
+import { PageHeader } from "../ui/PageHeader";
 import { TimeSeriesChart, RangePicker, type Series } from "../ui/TimeSeriesChart";
 import { useTimedMetricsHistory } from "../../hooks/metricsStore";
 import { recipesOnNode, relativeAge, externalConnectView, runtimeLabel } from "./fleetModel";
@@ -78,48 +80,36 @@ export function NodeDetail({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <nav className="cp-crumb" aria-label="Breadcrumb">
-        <a
-          href="/fleet"
-          onClick={(e) => {
-            e.preventDefault();
-            navigate({ section: "fleet" });
-          }}
-        >
-          Fleet
-        </a>
-        <span className="cp-crumb-sep">/</span>
-        <span className="cp-crumb-current">{spark.name}</span>
-      </nav>
+      <Breadcrumb
+        items={[{ label: "Fleet", route: { section: "fleet" } }, { label: spark.name }]}
+        navigate={navigate}
+      />
 
-      {/* Node header: name + pill + copyable mono host + freshness */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <div>
-          <div className="cp-section-title">{spark.name}</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <button
-              type="button"
-              className="cp-chip mono cp-host"
-              title="Copy host address"
-              onClick={() => copyText(spark.lanIp ?? spark.id)}
-            >
+      {/* Node header: host id + freshness; status and actions right-aligned */}
+      <PageHeader
+        title={spark.name}
+        subtitle={`updated ${freshness}`}
+        actions={
+          <>
+            <button type="button" className="cp-chip mono cp-host" title="Copy host address" onClick={() => copyText(spark.lanIp ?? spark.id)}>
               {spark.lanIp ?? spark.id}
               <span className="muted" aria-hidden="true">
                 ⧉
               </span>
             </button>
-            <span className="cp-freshness" title="Last telemetry sample">
-              updated {freshness}
-            </span>
-          </div>
-        </div>
-        <StatusPill status={spark.online ? "online" : "offline"} />
-        <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-          <button type="button" className="cp-btn ghost" onClick={onEdit}>
-            Edit
-          </button>
-        </div>
-      </div>
+            <StatusPill status={spark.online ? "online" : "offline"} />
+            <button
+              type="button"
+              className="cp-btn ghost"
+              disabled={!spark.online}
+              title={spark.online ? "Edit node" : "Offline — last-known config shown; edits apply on next contact"}
+              onClick={onEdit}
+            >
+              Edit
+            </button>
+          </>
+        }
+      />
 
       {/* SSH-unreachable = amber banner + last-contact time, never blank */}
       {!spark.online ? (

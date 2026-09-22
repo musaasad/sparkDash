@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ModelEntry, RecipePublic, DeploymentStatus, SparkSnapshot, ActivityEvent } from "../../api/types";
 import type { Route } from "../../hooks/router";
-import { DataTable, sortRows, CountedTabs, type Column } from "../ui/DataTable";
-import { StatusPill, StatusDot, Chip, EmptyState } from "../ui/Status";
+import { DataTable, sortRows, CountedTabs, CopyId, type Column } from "../ui/DataTable";
+import { StatusPill, StatusDot, Chip, EmptyState, LifecycleBadge, SkeletonRows } from "../ui/Status";
 import { Field, TextInput, FormFooter } from "../ui/form";
+import { SectionBand } from "../ui/SectionBand";
+import { Toolbar, DensityToggle } from "../ui/Toolbar";
+import { ColumnsPopover } from "../ui/ColumnsPopover";
+import { BotIcon, PanelIcon } from "../ui/icons";
 import { upsertModel, fetchActivity } from "../../api/client";
 import {
   deploymentViews,
@@ -52,6 +56,8 @@ export function ModelsSection({ models, recipes, deployments, navigate, onSaved,
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   const [localActivity, setLocalActivity] = useState<ActivityEvent[]>([]);
   const [now, setNow] = useState(() => Date.now());
+  const [dense, setDense] = useState(false);
+  const [visibleCols, setVisibleCols] = useState<ReadonlySet<string>>(new Set(["name", "recipes", "deployment", "update"]));
 
   // Error rows expand with the last ~10 log lines. Prefer caller-supplied
   // activity; otherwise fetch the client-side activity feed as a fallback.
@@ -98,9 +104,7 @@ export function ModelsSection({ models, recipes, deployments, navigate, onSaved,
             </span>
             <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
               <span style={{ fontWeight: 500 }}>{m.name}</span>
-              <span className="mono muted" style={{ fontSize: 10 }}>
-                {m.weightPaths?.default ?? recipes.find((r) => r.modelId === m.id && !r.archived)?.modelPath ?? m.id}
-              </span>
+              <CopyId value={m.weightPaths?.default ?? recipes.find((r) => r.modelId === m.id && !r.archived)?.modelPath ?? m.id} className="cp-cell-sub" />
             </div>
           </div>
         ),
@@ -143,6 +147,7 @@ export function ModelsSection({ models, recipes, deployments, navigate, onSaved,
   );
 
   const groups = useMemo(() => familyGroups(active, deployments), [active, deployments]);
+  const shownColumns = useMemo(() => catalogColumns.filter((c) => visibleCols.has(c.key)), [catalogColumns, visibleCols]);
 
   async function save() {
     setSaving(true);
@@ -172,16 +177,9 @@ export function ModelsSection({ models, recipes, deployments, navigate, onSaved,
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
-        <div>
-          <div className="cp-section-title">Models</div>
-          <div className="cp-section-sub">The model registry — a model can have many deployment recipes.</div>
-        </div>
-      </div>
-
-      {/* Toolbar: search left · filters middle · primary right */}
-      <div className="cp-toolbar" role="search">
-        <div className="cp-toolbar-search">
+      {/* Toolbar: search left · filters middle · utilities + primary right */}
+      <Toolbar
+        search={
           <input
             type="search"
             aria-label="Search deployments"
@@ -189,8 +187,9 @@ export function ModelsSection({ models, recipes, deployments, navigate, onSaved,
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
-        </div>
-        <div className="cp-toolbar-filters">
+        }
+        filters={
+          <>
           <select className="cp-btn ghost" aria-label="Runtime filter" value={runtimeFilter} onChange={(e) => setRuntimeFilter(e.target.value)}>
             <option value="all">All runtimes</option>
             {runtimes.map((r) => (
@@ -220,13 +219,24 @@ export function ModelsSection({ models, recipes, deployments, navigate, onSaved,
               Clear
             </button>
           ) : null}
-        </div>
-        <div className="cp-toolbar-primary">
-          <button type="button" className="cp-btn primary" onClick={() => setAdding((a) => !a)}>
+          </>
+        }
+        utilities={
+          <>
+            <DensityToggle dense={dense} onChange={setDense} />
+            <ColumnsPopover columns={catalogColumns.map((c) => ({ key: c.key, label: String(c.header) }))} visible={visibleCols} onChange={setVisibleCols} />
+          </>
+        }
+        primary={
+          <button
+            type="button"
+            className={`cp-btn ${adding ? "ghost" : "primary"}`}
+            onClick={() => setAdding((a) => !a)}
+          >
             {adding ? "Cancel" : "+ Add model"}
           </button>
-        </div>
-      </div>
+        }
+      />
 
       {adding ? (
         <div className="cp-panel">
@@ -251,13 +261,11 @@ export function ModelsSection({ models, recipes, deployments, navigate, onSaved,
       ) : null}
 
       {/* Deployments — counted tabs replace a repeated status column */}
-      <div>
-        <div className="cp-panel-title" style={{ marginBottom: 6 }}>
-          Deployments
-        </div>
+      <div className="cp-section-block">
+        <SectionBand icon={<PanelIcon />} title="Deployments" count={filtered.length} />
         <CountedTabs tabs={tabCounts} active={tab} onSelect={setTab} ariaLabel="Deployment status filters" panelId="models-deployments" />
         {filtered.length === 0 ? (
-          <div id="models-deployments" className="cp-table-empty">No deployments match these filters.</div>
+          <div id="models-deployments" className="cp-table-empty-box">No deployments match these filters.</div>
         ) : (
           <div id="models-deployments" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {filtered.map((v) => {
@@ -284,13 +292,11 @@ export function ModelsSection({ models, recipes, deployments, navigate, onSaved,
 
                     <div className="cp-deploy-model">
                       <span className="cp-deploy-name">{v.modelName}</span>
-                      <span className="cp-deploy-id" title={v.recipe?.id ?? v.deployment.recipeId}>
-                        {v.recipe?.id ?? v.deployment.recipeId}
-                      </span>
+                      <CopyId value={v.recipe?.id ?? v.deployment.recipeId} className="cp-deploy-id" />
                     </div>
 
                     {v.lifecycleState && v.lifecycleState !== "draft" ? (
-                      <Chip tone="mono" className="cp-lifecycle">{v.lifecycleState}</Chip>
+                      <LifecycleBadge state={v.lifecycleState} />
                     ) : null}
 
                     <div className="cp-deploy-meta">
@@ -418,13 +424,12 @@ export function ModelsSection({ models, recipes, deployments, navigate, onSaved,
       </div>
 
       {/* Model catalog — family grouping with variant counts */}
-      <div>
-        <div className="cp-panel-title" style={{ marginBottom: 6 }}>
-          Model catalog
-        </div>
+      <div className="cp-section-block">
+        <SectionBand icon={<BotIcon />} title="Model catalog" count={active.length} />
         {groups.length === 0 ? (
           <EmptyState
-            title="No models registered"
+            icon={<BotIcon />}
+            title="No models found"
             subtitle="Register a model, then add deployment recipes describing how it runs on your nodes."
             action={
               <button type="button" className="cp-btn primary" onClick={() => setAdding(true)}>
@@ -443,7 +448,8 @@ export function ModelsSection({ models, recipes, deployments, navigate, onSaved,
                 </div>
                 <DataTable
                   ariaLabel={`${g.family} models`}
-                  columns={catalogColumns}
+                  dense={dense}
+                  columns={shownColumns}
                   rows={sortRows(g.models, catalogColumns.find((c) => c.key === sortKey), sortDir)}
                   rowKey={(m) => m.id}
                   onRowClick={(m) => navigate({ section: "model", modelId: m.id })}

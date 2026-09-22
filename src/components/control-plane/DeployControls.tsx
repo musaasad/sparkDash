@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { DeploymentStatus, RecipePublic } from "../../api/types";
 import { deploymentAction } from "../../api/client";
 import { StatusPill } from "../ui/Status";
+import { Modal } from "../ui/Modal";
 
 interface DeployControlsProps {
   recipe: RecipePublic;
@@ -83,22 +84,27 @@ export function DeployControls({ recipe, deployment, onUpdated }: DeployControls
       </div>
       {error ? <div className="cp-field-error" role="alert">{error}</div> : null}
 
-      {confirm ? (
-        <div className="cp-panel" style={{ borderColor: "var(--color-danger)" }}>
-          <div style={{ fontSize: 12, marginBottom: 8 }}>
-            Confirm <strong>{confirm}</strong> for <span className="cp-chip mono">{recipe.id}</span>?
-            {confirm === "restart" ? " Active requests will be interrupted." : ""}
-          </div>
-          <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
-            <button type="button" className="cp-btn ghost" onClick={() => setConfirm(null)}>
-              Cancel
-            </button>
-            <button type="button" className="cp-btn danger" onClick={() => run(confirm)} disabled={busy != null}>
-              {busy ? "Working…" : `Confirm ${confirm}`}
-            </button>
-          </div>
-        </div>
-      ) : null}
+      <Modal
+        open={confirm != null}
+        title={`${confirm === "stop" ? "Stop" : "Restart"} ${recipe.id}?`}
+        consequence={
+          confirm === "restart"
+            ? "Active requests will be interrupted while the process cycles."
+            : "The runtime stops serving until started again. State is simulated (dry-run)."
+        }
+        diagram={
+          <span className="cp-modal-diagram-row">
+            <StatusPill status={(state as never)} />
+            <span aria-hidden="true">→</span>
+            <StatusPill status={confirm === "stop" ? "stopping" : "starting"} />
+          </span>
+        }
+        confirmLabel={confirm === "stop" ? "Stop" : "Restart"}
+        tone="danger"
+        busy={busy != null}
+        onClose={() => setConfirm(null)}
+        onConfirm={() => confirm && run(confirm)}
+      />
     </div>
   );
 }

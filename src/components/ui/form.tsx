@@ -27,12 +27,11 @@ export function Field({
         {label}
       </label>
       {children}
+      {hint ? <span className="cp-field-hint">{hint}</span> : null}
       {error ? (
         <span className="cp-field-error" role="alert">
           {error}
         </span>
-      ) : hint ? (
-        <span className="cp-field-hint">{hint}</span>
       ) : null}
     </div>
   );
@@ -54,13 +53,50 @@ export function TextInput({
 
 export function Select({
   invalid,
+  icon,
   children,
   ...props
-}: SelectHTMLAttributes<HTMLSelectElement> & { invalid?: boolean }) {
+}: SelectHTMLAttributes<HTMLSelectElement> & { invalid?: boolean; icon?: ReactNode }) {
+  if (!icon) {
+    return (
+      <select className="cp-select" aria-invalid={invalid ? "true" : undefined} {...props}>
+        {children}
+      </select>
+    );
+  }
   return (
-    <select className="cp-select" aria-invalid={invalid ? "true" : undefined} {...props}>
-      {children}
-    </select>
+    <span className="cp-select-wrap">
+      <span className="cp-select-icon" aria-hidden="true">
+        {icon}
+      </span>
+      <select className="cp-select has-icon" aria-invalid={invalid ? "true" : undefined} {...props}>
+        {children}
+      </select>
+    </span>
+  );
+}
+
+/** Right-aligned switch; label/hint live in the surrounding SettingRow. */
+export function Toggle({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      className={`cp-toggle${checked ? " is-on" : ""}`}
+      onClick={() => onChange(!checked)}
+    >
+      <span className="cp-toggle-dot" />
+    </button>
   );
 }
 

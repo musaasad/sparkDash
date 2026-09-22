@@ -3,6 +3,8 @@ import type { SparkSnapshot, DeploymentStatus, RecipePublic, ModelEntry, Activit
 import type { Route as AppRoute } from "../../hooks/router";
 import { DataTable, sortRows, type Column } from "../ui/DataTable";
 import { StatusPill, StatusDot, Chip, EmptyState, Skeleton } from "../ui/Status";
+import { SectionBand } from "../ui/SectionBand";
+import { ActivityIcon, BotIcon, NetworkIcon, PanelIcon } from "../ui/icons";
 import {
   computeFleetHealth,
   attentionDigest,
@@ -116,11 +118,6 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <div>
-        <div className="cp-section-title">Lab Overview</div>
-        <div className="cp-section-sub">Operational summary — drill into Fleet and Models for detail.</div>
-      </div>
-
       {/* Health verdict + last-updated + auto-refresh toggle */}
       <div className={`cp-verdict${attention.length > 0 ? " is-warn" : ""}`} role="status">
         <span className={`cp-dot ${attention.length > 0 ? "warn" : "running"}`} aria-hidden="true" />
@@ -175,10 +172,8 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
 
       {/* Attention digest — deduped by condition+resource with ×N badges */}
       {attention.length > 0 ? (
-        <div>
-          <div className="cp-panel-title" style={{ marginBottom: 6 }}>
-            Attention ({attention.length})
-          </div>
+        <div className="cp-section-block">
+          <SectionBand icon={<PanelIcon />} title="Attention" count={attention.length} />
           <div className="cp-alerts">
             {attention.slice(0, 8).map((a) => (
               <div key={a.id} className={`cp-alert ${a.severity === "error" ? "is-error" : a.severity === "info" ? "is-info" : ""}`}>
@@ -202,13 +197,18 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
       )}
 
       {/* Layer 2 — deployments (hero) */}
-      <div>
-        <div className="cp-panel-title" style={{ marginBottom: 6 }}>
-          <span>Deployments ({views.length}) · last 15m</span>
-          <button type="button" className="cp-alert-link" onClick={() => navigate({ section: "models" })}>
-            Models →
-          </button>
-        </div>
+      <div className="cp-section-block">
+        <SectionBand
+          icon={<BotIcon />}
+          title="Deployments"
+          count={views.length}
+          local={<span className="cp-band-window">Last 15m</span>}
+          actions={
+            <button type="button" className="cp-alert-link" onClick={() => navigate({ section: "models" })}>
+              Models →
+            </button>
+          }
+        />
         {views.length === 0 ? (
           <div className="cp-table-empty">No deployments registered.</div>
         ) : (
@@ -278,8 +278,8 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
 
       {/* Layer 2 (visual) — topology, deployment enclosures */}
       {nodes.length > 0 && nodes.length <= 4 ? (
-        <div>
-          <div className="cp-panel-title">Topology</div>
+        <div className="cp-section-block">
+          <SectionBand icon={<NetworkIcon />} title="Topology" />
           <Topology
             sparks={sparks}
             recipes={recipes}
@@ -291,13 +291,18 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
       ) : null}
 
       {/* Layer 3 — runtime activity */}
-      <div>
-        <div className="cp-panel-title" style={{ marginBottom: 6 }}>
-          <span>Runtime activity · last 5 events</span>
-          <button type="button" className="cp-alert-link" onClick={() => navigate({ section: "activity" })}>
-            Activity →
-          </button>
-        </div>
+      <div className="cp-section-block">
+        <SectionBand
+          icon={<ActivityIcon />}
+          title="Runtime activity"
+          count={recent.length}
+          local={<span className="cp-band-window">Last 5 events</span>}
+          actions={
+            <button type="button" className="cp-alert-link" onClick={() => navigate({ section: "activity" })}>
+              Activity →
+            </button>
+          }
+        />
         {recent.length === 0 ? (
           <EmptyState title="No runtime activity yet." />
         ) : (
@@ -314,13 +319,18 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
       </div>
 
       {/* Layer 4 — node telemetry */}
-      <div>
-        <div className="cp-panel-title" style={{ marginBottom: 6 }}>
-          <span>Compute nodes ({nodes.length}) · last 15m</span>
-          <button type="button" className="cp-alert-link" onClick={() => navigate({ section: "fleet" })}>
-            Fleet →
-          </button>
-        </div>
+      <div className="cp-section-block">
+        <SectionBand
+          icon={<NetworkIcon />}
+          title="Compute nodes"
+          count={nodes.length}
+          local={<span className="cp-band-window">Last 15m</span>}
+          actions={
+            <button type="button" className="cp-alert-link" onClick={() => navigate({ section: "fleet" })}>
+              Fleet →
+            </button>
+          }
+        />
         <DataTable
           ariaLabel="Compute nodes"
           columns={columns}
@@ -330,7 +340,7 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
           sortKey={sortKey}
           sortDir={sortDir}
           onSort={onSort}
-          empty={<div className="cp-table-empty">No compute nodes registered.</div>}
+          empty={<div className="cp-table-empty-box">No compute nodes registered.</div>}
         />
       </div>
     </div>
@@ -382,7 +392,7 @@ function COLUMNS(
             <span className="cp-unit"> %</span>
           </span>
         ) : (
-          "—"
+          <span className="cp-nodata">—</span>
         ),
     },
     {
@@ -393,7 +403,7 @@ function COLUMNS(
       sortValue: (n) => n.metrics?.unifiedMemory?.percentage ?? 0,
       render: (n) => {
         const um = n.metrics?.unifiedMemory;
-        if (!um || um.total <= 0) return "—";
+        if (!um || um.total <= 0) return <span className="cp-nodata">—</span>;
         // used/total are MB (collector convention, cf. RamPanel formatMb).
         return (
           <span title={`${Math.round(um.used / 1024)} / ${Math.round(um.total / 1024)} GB unified`}>
@@ -412,12 +422,12 @@ function COLUMNS(
       sortValue: (n) => n.metrics?.gpu?.temperature ?? 0,
       render: (n) =>
         n.metrics?.gpu ? (
-          <span>
+          <span className={n.metrics.gpu.temperature > 85 ? "cp-over" : undefined}>
             {fmtTemp(n.metrics.gpu.temperature, temperatureUnit)}
             <span className="cp-unit"> {temperatureUnit === "fahrenheit" ? "°F" : "°C"}</span>
           </span>
         ) : (
-          "—"
+          <span className="cp-nodata">—</span>
         ),
     },
     {

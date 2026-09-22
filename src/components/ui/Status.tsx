@@ -1,28 +1,35 @@
 import type { ReactNode } from "react";
-import type { DeploymentDisplay, DeploymentState } from "../../api/types";
+import type { DeploymentDisplay, DeploymentState, RecipeLifecycleState } from "../../api/types";
 
 /**
- * Lifecycle status primitives for the control plane. Status color lives ONLY on
- * the dot/pill — never on numeric cells. Transitional states (starting/loading)
- * pulse in accent; they never borrow success.
+ * Lifecycle status primitives for the control plane. Status colour lives ONLY on
+ * the dot/pill — never on numeric cells. Transitional states (starting/loading/
+ * stopping/validating) pulse the DOT only; they never borrow success.
  *
- * The derived DISPLAY vocabulary (docs/DESIGN_BRIEF.md global rule 10) rides the
- * same primitives: "Running external" is running-green plus a muted "external"
- * suffix chip, and only "Expected · not detected" takes the warning tone.
+ * Dot + WORD always — never colour alone. The derived DISPLAY vocabulary rides
+ * the same primitives: "Running external" is running-green plus a muted
+ * "external" suffix chip, and only "Expected · not detected" takes warning.
  */
 
 export type StatusKind =
   | DeploymentState
   | DeploymentDisplay
+  | RecipeLifecycleState
   | "online"
   | "offline"
   | "archived"
-  | "unknown";
+  | "unknown"
+  | "failed"
+  | "degraded"
+  | "retired"
+  | "warning"
+  | "validating";
 
 const LABELS: Record<string, string> = {
   available: "Available",
   starting: "Starting",
   loading: "Loading",
+  validating: "Validating",
   running: "Running",
   "running-external": "Running",
   "expected-not-detected": "Expected · not detected",
@@ -30,10 +37,17 @@ const LABELS: Record<string, string> = {
   stopping: "Stopping",
   stopped: "Stopped",
   error: "Error",
+  failed: "Failed",
+  warning: "Warning",
   online: "Online",
   offline: "Offline",
+  retired: "Retired",
   archived: "Archived",
   unknown: "Unknown",
+  draft: "Draft",
+  validated: "Validated",
+  proven: "Proven",
+  deprecated: "Deprecated",
 };
 
 export function statusLabel(kind: StatusKind): string {
@@ -87,27 +101,43 @@ export function Chip({
   );
 }
 
+/** Lifecycle badge — word-first dot+word pill, purple-free neutral palette. */
+export function LifecycleBadge({ state, className = "" }: { state: RecipeLifecycleState; className?: string }) {
+  return <StatusPill status={state} className={`cp-lifecycle ${className}`} title={`Lifecycle: ${statusLabel(state)}`} />;
+}
+
 export function EmptyState({
   icon,
   title,
   subtitle,
   action,
+  learnMore,
+  variant = "page",
 }: {
   icon?: ReactNode;
   title: string;
   subtitle?: string;
   action?: ReactNode;
+  learnMore?: ReactNode;
+  /** `table` = one hairline sentence box (headers/pager stay); page = centered. */
+  variant?: "page" | "table";
 }) {
+  if (variant === "table") {
+    return <div className="cp-table-empty-box">{subtitle ?? title}</div>;
+  }
   return (
     <div className="cp-empty">
       {icon ? <div className="cp-empty-icon">{icon}</div> : null}
       <div className="cp-empty-title">{title}</div>
       {subtitle ? <div className="cp-empty-sub">{subtitle}</div> : null}
-      {action ? <div style={{ marginTop: 6 }}>{action}</div> : null}
+      {action || learnMore ? (
+        <div className="cp-empty-cta">
+          {action}
+          {learnMore}
+        </div>
+      ) : null}
     </div>
   );
 }
 
-export function Skeleton({ height = 14, width = "100%", style }: { height?: number; width?: number | string; style?: React.CSSProperties }) {
-  return <div className="cp-skeleton" style={{ height, width, ...style }} />;
-}
+export { Skeleton, SkeletonRows } from "./Skeleton";

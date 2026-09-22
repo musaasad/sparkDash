@@ -103,7 +103,7 @@ describe("generic invented-entity rendering", () => {
     expect(row).not.toBeNull();
     expect(row!.textContent).toContain("GLM-5.3 Flash");
     expect(row!.textContent).toContain("glm53-sglang-pp3");
-    expect(row!.textContent).toContain("proven");
+    expect(row!.textContent).toContain("Proven");
     expect(row!.textContent).toContain("PP3 · 3 nodes");
     expect(row!.textContent).toContain("Node 7");
     expect(row!.textContent).toContain(":8891");

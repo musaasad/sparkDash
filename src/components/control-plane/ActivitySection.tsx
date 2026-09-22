@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ActivityEvent } from "../../api/types";
-import { DataTable, type Column } from "../ui/DataTable";
-import { Chip, EmptyState, Skeleton } from "../ui/Status";
+import { DataTable, EntityChip, type Column } from "../ui/DataTable";
+import { Chip, SkeletonRows } from "../ui/Status";
+import { SectionBand } from "../ui/SectionBand";
+import { Modal } from "../ui/Modal";
+import { ActivityIcon } from "../ui/icons";
 import {
   ACTIVITY_WINDOWS,
   ACTIVITY_SOURCES,
@@ -154,21 +157,6 @@ export function ActivitySection({ events, onClearActivity, onOpenInConsole, reqI
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
-        <div style={{ flex: 1 }}>
-          <div className="cp-section-title">Activity</div>
-          <div className="cp-section-sub">Everything that happened in the lab — node changes, deployments, benchmarks, alerts.</div>
-        </div>
-        <button
-          type="button"
-          className="cp-btn ghost"
-          disabled={base.length === 0}
-          onClick={() => setConfirmClear(true)}
-        >
-          Clear history
-        </button>
-      </div>
-
       <div className="cp-toolbar" role="search">
         <div className="cp-toolbar-search">
           <input
@@ -206,21 +194,13 @@ export function ActivitySection({ events, onClearActivity, onOpenInConsole, reqI
               </option>
             ))}
           </select>
-          <div className="cp-activity-windows">
-            {ACTIVITY_WINDOWS.map((w) => (
-              <button
-                key={w.key}
-                type="button"
-                className={`cp-activity-window${windowKey === w.key ? " is-active" : ""}`}
-                aria-pressed={windowKey === w.key}
-                onClick={() => setWindowKey(w.key)}
-              >
-                {w.label}
-              </button>
-            ))}
-          </div>
         </div>
         <div className="cp-toolbar-primary">
+          {hasFilters ? (
+            <button type="button" className="cp-btn ghost" onClick={clearFilters}>
+              Clear filters
+            </button>
+          ) : null}
           <span className={`cp-activity-followstate ${paused ? "is-paused" : "is-following"}`}>
             <span className={`cp-dot ${paused ? "warning" : "running"}`} aria-hidden="true" />
             {paused ? "Paused" : "Following"}
@@ -249,39 +229,52 @@ export function ActivitySection({ events, onClearActivity, onOpenInConsole, reqI
               Pause
             </button>
           )}
+          <button type="button" className="cp-btn ghost" disabled={base.length === 0} onClick={() => setConfirmClear(true)}>
+            Clear history
+          </button>
         </div>
       </div>
 
-      {confirmClear ? (
-        <div className="cp-banner is-amber" role="alert">
-          <span>Clear the {base.length} locally loaded events? The server JSONL log stays on disk (dry-run clear).</span>
-          <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-            <button
-              type="button"
-              className="cp-btn ghost"
-              onClick={() => {
-                const newestSeq = base.reduce((m, e) => Math.max(m, e.seq), 0);
-                if (clearedUpTo !== undefined) onClearActivity?.(newestSeq);
-                else setLocalCleared(newestSeq || null);
-                setOpen(new Set());
-                setConfirmClear(false);
-              }}
-            >
-              Clear
-            </button>
-            <button type="button" className="cp-btn" onClick={() => setConfirmClear(false)}>
-              Keep
-            </button>
-          </span>
-        </div>
-      ) : null}
+      <Modal
+        open={confirmClear}
+        title="Clear activity history?"
+        consequence={`Hides the ${base.length} locally loaded events. The server JSONL log stays on disk (dry-run clear).`}
+        confirmLabel="Clear"
+        cancelLabel="Keep"
+        tone="danger"
+        onConfirm={() => {
+          const newestSeq = base.reduce((m, e) => Math.max(m, e.seq), 0);
+          if (clearedUpTo !== undefined) onClearActivity?.(newestSeq);
+          else setLocalCleared(newestSeq || null);
+          setOpen(new Set());
+          setConfirmClear(false);
+        }}
+        onClose={() => setConfirmClear(false)}
+      />
+
+      <SectionBand
+        icon={<ActivityIcon />}
+        title="Activity"
+        count={rows.length}
+        local={
+          <div className="cp-activity-windows">
+            {ACTIVITY_WINDOWS.map((w) => (
+              <button
+                key={w.key}
+                type="button"
+                className={`cp-activity-window${windowKey === w.key ? " is-active" : ""}`}
+                aria-pressed={windowKey === w.key}
+                onClick={() => setWindowKey(w.key)}
+              >
+                {w.label}
+              </button>
+            ))}
+          </div>
+        }
+      />
 
       {loading && rows.length === 0 ? (
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {[0, 1, 2, 3, 4].map((i) => (
-            <Skeleton key={i} height={34} />
-          ))}
-        </div>
+        <SkeletonRows columns={5} />
       ) : (
         <DataTable
           ariaLabel="Activity feed"
@@ -289,19 +282,11 @@ export function ActivitySection({ events, onClearActivity, onOpenInConsole, reqI
           rows={rows}
           rowKey={(r) => String(r.event.seq)}
           empty={
-            hasFilters ? (
-              <EmptyState
-                title="No events match these filters"
-                subtitle="Widen the range or clear the filters to see the full stream."
-                action={
-                  <button type="button" className="cp-btn primary" onClick={clearFilters}>
-                    Clear filters
-                  </button>
-                }
-              />
-            ) : (
-              <EmptyState title="No activity yet" subtitle="Node transitions, lifecycle operations and benchmark runs will appear here." />
-            )
+            <span className="cp-table-empty-box">
+              {hasFilters
+                ? "No events match these filters — widen the range or clear the filters."
+                : "No activity yet — node transitions, lifecycle operations and benchmark runs appear here."}
+            </span>
           }
           expandedKeys={open}
           renderExpanded={(r) => <ActivityExpansion event={r.event} onOpenInConsole={onOpenInConsole} />}

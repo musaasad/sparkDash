@@ -30,6 +30,10 @@ interface DataTableProps<T> {
   expandedKeys?: ReadonlySet<string>;
   /** Render an inline expansion row for an expanded key; null = no row. */
   renderExpanded?: (row: T) => ReactNode;
+  /** Dense 32px rows (toolbar density toggle). */
+  dense?: boolean;
+  /** Extra class per row (e.g. offline dimming). */
+  rowClassName?: (row: T) => string;
 }
 
 /**
@@ -53,12 +57,14 @@ export function DataTable<T>({
   toolbar,
   expandedKeys,
   renderExpanded,
+  dense = false,
+  rowClassName,
 }: DataTableProps<T>) {
   return (
     <>
       {toolbar ? <div className="cp-toolbar">{toolbar}</div> : null}
       <div className="cp-table-wrap">
-        <table className="cp-table" aria-label={ariaLabel}>
+        <table className="cp-table" aria-label={ariaLabel} data-dense={dense ? "true" : undefined}>
           <thead>
             <tr>
               {columns.map((col) => {
@@ -106,8 +112,8 @@ export function DataTable<T>({
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={columns.length}>
-                  {empty ?? <div className="cp-table-empty">No data</div>}
+                <td colSpan={columns.length} className="cp-empty-cell">
+                  {empty ?? <span className="cp-table-empty-box">No data</span>}
                 </td>
               </tr>
             ) : (
@@ -118,7 +124,7 @@ export function DataTable<T>({
                 return (
                   <Fragment key={key}>
                     <tr
-                      className={onRowClick ? "clickable" : undefined}
+                      className={[onRowClick ? "clickable" : "", rowClassName?.(row) ?? ""].filter(Boolean).join(" ") || undefined}
                       onClick={onRowClick ? () => onRowClick(row) : undefined}
                       tabIndex={onRowClick ? 0 : undefined}
                       role={onRowClick ? "button" : undefined}
@@ -162,6 +168,57 @@ export function DataTable<T>({
         </table>
       </div>
     </>
+  );
+}
+
+/** Middle-truncate a long ID, keeping both ends legible. */
+export function truncateMiddle(value: string, keep = 8): string {
+  if (value.length <= keep * 2 + 1) return value;
+  return `${value.slice(0, keep)}…${value.slice(-keep)}`;
+}
+
+/** Mono ID with middle truncation + click-to-copy affordance. */
+export function CopyId({ value, className = "" }: { value: string; className?: string }) {
+  return (
+    <button
+      type="button"
+      className={`cp-id ${className}`}
+      title={`${value} — click to copy`}
+      onClick={(e) => {
+        e.stopPropagation();
+        void navigator.clipboard?.writeText(value);
+      }}
+    >
+      <span className="cp-id-text">{truncateMiddle(value)}</span>
+      <span className="cp-id-copy" aria-hidden="true">
+        ⧉
+      </span>
+    </button>
+  );
+}
+
+/** Linked entity as an icon + label chip. */
+export function EntityChip({
+  icon,
+  label,
+  title,
+  onClick,
+}: {
+  icon?: ReactNode;
+  label: string;
+  title?: string;
+  onClick?: () => void;
+}) {
+  const Tag = onClick ? "button" : "span";
+  return (
+    <Tag
+      {...(onClick ? { type: "button" as const, onClick } : {})}
+      className={`cp-entity-chip${onClick ? " is-link" : ""}`}
+      title={title}
+    >
+      {icon ? <span className="cp-entity-chip-icon" aria-hidden="true">{icon}</span> : null}
+      {label}
+    </Tag>
   );
 }
 
@@ -316,9 +373,9 @@ export function CountedTabs({
             onClick={() => onSelect(t.key)}
           >
             {t.label}
-            <span className="cp-counted-count" aria-hidden="true">
+            <sup className="cp-counted-count" aria-hidden="true">
               {t.count}
-            </span>
+            </sup>
           </button>
         );
       })}

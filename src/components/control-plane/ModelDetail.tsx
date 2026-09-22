@@ -3,8 +3,11 @@ import type { ModelEntry, RecipePublic, DeploymentStatus, SparkSnapshot } from "
 import type { Route } from "../../hooks/router";
 import { fetchModel, archiveRecipe, cloneRecipe, fetchActivity } from "../../api/client";
 import { useDeployments } from "../../hooks/domainStore";
-import { StatusPill, Chip, EmptyState } from "../ui/Status";
-import { TabStrip } from "../ui/DataTable";
+import { StatusPill, Chip, EmptyState, LifecycleBadge } from "../ui/Status";
+import { Modal } from "../ui/Modal";
+import { TabStrip, CopyId } from "../ui/DataTable";
+import { Breadcrumb } from "../ui/Breadcrumb";
+import { PageHeader } from "../ui/PageHeader";
 import { Field, TextInput, FormFooter } from "../ui/form";
 import { RecipeEditor } from "./RecipeEditor";
 import { DeployControls } from "./DeployControls";
@@ -129,30 +132,16 @@ export function ModelDetail({ modelId, initialTab, initialReqId, sparks, navigat
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <nav className="cp-crumb" aria-label="Breadcrumb">
-        <a
-          href="/models"
-          onClick={(e) => {
-            e.preventDefault();
-            navigate({ section: "models" });
-          }}
-        >
-          Models
-        </a>
-        <span className="cp-crumb-sep">/</span>
-        <span className="cp-crumb-current">{model?.name ?? modelId}</span>
-      </nav>
+      <Breadcrumb
+        items={[{ label: "Models", route: { section: "models" } }, { label: model?.name ?? modelId }]}
+        navigate={navigate}
+      />
 
-      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <div>
-          <div className="cp-section-title">{model?.name ?? "…"}</div>
-          <div className="cp-section-sub">
-            {model?.family ? `${model.family} · ` : ""}
-            <span className="cp-chip mono">{modelId}</span>
-          </div>
-        </div>
-        {primaryDep ? <StatusPill status={primaryDep.display} /> : <Chip>not deployed</Chip>}
-      </div>
+      <PageHeader
+        title={model?.name ?? "…"}
+        subtitle={model?.family ? `${model.family} · ${modelId}` : modelId}
+        actions={primaryDep ? <StatusPill status={primaryDep.display} /> : <Chip>not deployed</Chip>}
+      />
 
       <TabStrip tabs={TABS} active={tab} onSelect={setTab} ariaLabel="Model sections" panelId="model-panel" />
 
@@ -275,7 +264,7 @@ function OverviewTab({
               <div key={r.id} style={{ display: "flex", gap: 8, alignItems: "center", padding: "6px 0", fontSize: 12 }}>
                 <span style={{ fontWeight: 500 }}>{r.name}</span>
                 <Chip>{r.topology}</Chip>
-                {r.archived ? <Chip>archived</Chip> : null}
+                {r.lifecycleState ? <LifecycleBadge state={r.lifecycleState} /> : r.archived ? <Chip>archived</Chip> : null}
                 <span className="muted" style={{ marginLeft: "auto" }}>
                   {r.nodeIds.join(", ")}
                 </span>
@@ -353,6 +342,7 @@ function RecipesTab({
   modelId: string;
   onChanged: () => void;
 }) {
+  const [archiveTarget, setArchiveTarget] = useState<RecipePublic | null>(null);
   if (editing) {
     return (
       <div className="cp-panel">
@@ -418,15 +408,7 @@ function RecipesTab({
                     <button
                       type="button"
                       className="cp-btn ghost danger"
-                      onClick={async () => {
-                        if (!window.confirm(`Archive recipe "${r.name}"? Weights are never deleted.`)) return;
-                        try {
-                          await archiveRecipe(r.id);
-                          onChanged();
-                        } catch (err) {
-                          window.alert(err instanceof Error ? err.message : String(err));
-                        }
-                      }}
+                      onClick={() => setArchiveTarget(r)}
                     >
                       Archive
                     </button>
@@ -447,6 +429,25 @@ function RecipesTab({
           );
         })
       )}
+      <Modal
+        open={archiveTarget != null}
+        title={`Archive recipe "${archiveTarget?.name ?? ""}"?`}
+        consequence="The recipe stops counting as active. Model weights are never deleted."
+        confirmLabel="Archive"
+        tone="danger"
+        onClose={() => setArchiveTarget(null)}
+        onConfirm={async () => {
+          const target = archiveTarget;
+          setArchiveTarget(null);
+          if (!target) return;
+          try {
+            await archiveRecipe(target.id);
+            onChanged();
+          } catch (err) {
+            window.alert(err instanceof Error ? err.message : String(err));
+          }
+        }}
+      />
     </div>
   );
 }
