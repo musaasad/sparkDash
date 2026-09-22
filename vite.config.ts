@@ -17,13 +17,16 @@ export default defineConfig({
     watch: {
       usePolling: process.env.CHOKIDAR_USEPOLLING === "1",
     },
-    proxy: {
-      "/api": "http://127.0.0.1:5555",
-      "/ws": {
-        target: "ws://127.0.0.1:5555",
-        ws: true,
-      },
-    },
+    // Dev API target. Default matches the server default port; point at a dev
+    // instance (e.g. http://127.0.0.1:5556) when the default port is occupied
+    // by something else — never accidentally proxy to another machine.
+    proxy: (() => {
+      const target = process.env.VITE_API_TARGET || "http://127.0.0.1:5555";
+      return {
+        "/api": target,
+        "/ws": { target: target.replace(/^http/, "ws"), ws: true },
+      };
+    })(),
   },
   build: {
     outDir: "dist",
