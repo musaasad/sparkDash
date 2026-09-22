@@ -47,6 +47,7 @@ import {
 import { testSparkConnectivity } from "./connectivity.js";
 import { inspectStartupPreflight, logStartupPreflight } from "./startupPreflight.js";
 import { createControlPlane } from "./controlPlane.js";
+import { seedComputeNodes } from "./domain/computeSeed.js";
 
 dotenv.config();
 
@@ -247,6 +248,15 @@ function consumeBenchStartQuota(req, res) {
 
 // ─── Spark registry ──────────────────────────────────────
 const registry = new SparkRegistry();
+
+// Committed COMPUTE seed (3 DGX nodes + configured fabric triangle). Only
+// applies when config/sparks.json is empty — the live file is never overwritten.
+try {
+  const seeded = seedComputeNodes(registry);
+  if (seeded > 0) console.log(`[compute] seeded ${seeded} node(s) from server/seeds/compute.json`);
+} catch (err) {
+  console.warn("[compute] seed skipped:", err.message);
+}
 
 const fleetEnergyTracker = new FleetEnergyTracker({
   nodeIds: registry.sparkIds,

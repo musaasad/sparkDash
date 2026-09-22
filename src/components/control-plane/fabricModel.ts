@@ -7,10 +7,12 @@
  * and is never read here.
  *
  * Honesty rules:
- *  - A link exists ONLY when two nodes share a discovered CX7 subnet or a
- *    configured fabric id. Three nodes never become a triangle.
- *  - When no link is discoverable, `links` is empty and `wiringDiscovered` is
- *    false — the UI renders "nodes + link speed, wiring not discovered".
+ *  - A link exists ONLY when two nodes share a discovered CX7 subnet / fabric id
+ *    (provenance "discovered") OR the node config declares a fabricLink peer
+ *    (provenance "configured"). Three nodes never become a triangle on their own.
+ *  - When no link is discoverable/configured, `links` is empty and
+ *    `wiringDiscovered` is false — the UI renders "nodes + link speed, wiring
+ *    not discovered".
  */
 import type { SparkSnapshot } from "../../api/types";
 import { resolveSparkRole } from "../../api/sparkRole";
@@ -18,6 +20,8 @@ import type { DeploymentView } from "./fleetModel";
 
 export type FabricHealth = "ok" | "warn" | "error" | "offline" | "unknown";
 export type FabricLinkKind = "cx7" | "fabric";
+/** Where a link came from: CONFIG vs DISCOVERY (never conflated). */
+export type FabricProvenance = "configured" | "discovered";
 
 export interface FabricNode {
   id: string;
@@ -37,6 +41,8 @@ export interface FabricLink {
   to: string;
   /** Medium actually discovered: a shared CX7 subnet, or a configured fabric. */
   kind: FabricLinkKind;
+  /** CONFIG or DISCOVERY — never inferred from topology or node count. */
+  provenance: FabricProvenance;
   /** Discovered NIC speed in Mbps, else the CX7 nominal 200 Gb/s when unset. */
   speedMbps: number | null;
   degraded: boolean;
@@ -100,25 +106,56 @@ export function deriveFabric(sparks: SparkSnapshot[], deploymentViews: readonly 
     return Math.min(...speeds);
   };
 
-  const pushLink = (a: SparkSnapshot, b: SparkSnapshot, kind: FabricLinkKind) => {
+  const pushLink = (
+    a: SparkSnapshot,
+    b: SparkSnapshot,
+    kind: FabricLinkKind,
+    provenance: FabricProvenance,
+    speedOverride: number | null = null
+  ) => {
     const key = [a.id, b.id].sort().join("~");
     if (a.id === b.id || seen.has(key)) return;
     seen.add(key);
-    links.push({ id: `${kind}:${key}`, from: a.id, to: b.id, kind, speedMbps: nominalSpeed(a, b), degraded: !a.online || !b.online });
+    links.push({
+      id: `${provenance}:${kind}:${key}`,
+      from: a.id,
+      to: b.id,
+      kind,
+      provenance,
+      speedMbps: speedOverride ?? nominalSpeed(a, b),
+      degraded: !a.online || !b.online,
+    });
   };
 
-  // Physical discovery: same fabric id, or same discovered CX7 /24 segment.
+  // CONFIGURED first (highest confidence): explicit fabricLinks neighbours.
+  // A configured link only exists when the peer node is actually present.
+  const byId = new Map(sparks.map((s) => [s.id, s]));
+  for (const s of sparks) {
+    for (const l of s.fabricLinks || []) {
+      const peer = byId.get(l.to);
+      if (!peer) continue;
+      pushLink(
+        s,
+        peer,
+        l.medium === "cx7" ? "cx7" : "fabric",
+        "configured",
+        typeof l.speedMbps === "number" ? l.speedMbps : null
+      );
+    }
+  }
+
+  // Physical DISCOVERY: same fabric id, or same discovered CX7 /24 segment.
   for (let i = 0; i < sparks.length; i++) {
     for (let j = i + 1; j < sparks.length; j++) {
       const a = sparks[i];
       const b = sparks[j];
       if (a.fabric && b.fabric && a.fabric === b.fabric) {
-        pushLink(a, b, "fabric");
+        pushLink(a, b, "fabric", "discovered");
         continue;
       }
       const sa = subnet(a.cx7Ip);
       const sb = subnet(b.cx7Ip);
-      if (sa && sb && sa === sb) pushLink(a, b, "cx7");
+      if (sa && sb && sa === sb) pushLink(a, b, "cx7", "discovered");
     }
   }
 

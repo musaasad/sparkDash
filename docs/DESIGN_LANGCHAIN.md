@@ -182,3 +182,25 @@ Extends §7's guide grammar; server contract is WS-3a (`/api/discovery/probe`, `
 - Seeded values carry the §10 provenance badge inline and stay editable; UNKNOWN gets a "confirm" affordance and is counted in a banner before Save. Suggested template is pre-selected, always overridable.
 - Compute separates PHYSICAL placement (node multi-select + head/coordinator + workers) from DEPLOYMENT topology (explicit TP/PP/DP/EP, blank = unknown). Node count NEVER becomes a degree: >1 node with no degree renders "topology unknown — confirm" via TopologySummary.
 - Review is a clean key-value summary with provenance per important value, ownership stays "External / observed" (discovery ≠ ownership), plus a SAFETY line "CONFIG ONLY — no lifecycle action will occur".
+
+## 11. Domain foundation — roles, capability, fabric provenance
+Server/domain contract the UI builds on. Concept separation is absolute:
+MODEL ≠ RECIPE ≠ RUNTIME ≠ DEPLOYMENT ≠ COMPUTE ≠ TOPOLOGY ≠ ROLE ≠ STATE.
+
+### 11a. Roles
+- `DEPLOYMENT_ROLES = primary | worker | specialist | reviewer | experimental | none`; role stays OPTIONAL (absent ⇒ FE heuristic). Legacy `edge` normalises to `worker`.
+- A role change is a CONFIG write only: `PATCH /api/deployments/:id` body `{role}` — never recreates the model/recipe, never touches RUNTIME/STATE. `{role:null}` clears it and hands the surface back to the heuristic. Reflect it in the deployment row as a plain text word (dot+word rule), with a "config only" microcopy; no re-validate step.
+- DeploymentService projects `role` onto the runtime view so a change appears without a reload.
+
+### 11b. Topology capability
+- `provider.supportsTopology({mode,degree,nodeCount}) → supported|unsupported|unknown`; base/external default `unknown`. Declared provider DATA only (vllm/sglang: `tp` supported while `degree ≤ nodeCount`, else unsupported, other modes unknown; tabbyapi: single only).
+- `validateTopology()` → `valid | invalid | needs-confirmation`, combining STRUCTURAL rules (degree ≤ nodeCount, degree product ≤ nodeCount, single ⇒ 1 node) with the provider declaration.
+  - **Rule**: structural violation OR provider `unsupported` ⇒ `invalid`; provider `unknown` on a structurally fine multi-degree ⇒ `needs-confirmation`; `supported` + fine ⇒ `valid`. FLEET SIZE is never a degree: >1 node with no configured degree ⇒ `needs-confirmation`. UNKNOWN ≠ FAILED.
+  - `recipeValidate` surfaces it: error when invalid, warning when needs-confirmation. The UI renders needs-confirmation as a neutral/amber "confirm parallelism" line, never red.
+- Recipe topology editor shows explicit TP/PP/DP/EP inputs (blank = unknown) and a capability hint per runtime from the provider declaration.
+
+### 11c. Physical fabric provenance
+- `SparkConfig`/`SparkSnapshot` carry READ-ONLY `fabricLinks: [{to, speedMbps?, medium?: cx7|fabric}]` as a config passthrough (like `cx7Ip`).
+- `fabricModel` emits links with explicit `provenance: configured | discovered`: configured from `fabricLinks`, discovered from a shared CX7 subnet / fabric id. Configured wins on duplicate pairs. `wiringDiscovered=false` when neither — a 3-node fleet never becomes a triangle on its own.
+- UI styling: configured links = solid hairline, discovered = dashed; label the caption "configured"/"discovered" so the operator knows which is which. Never infer an edge from node count.
+- Committed `server/seeds/compute.json` (3 DGX nodes + configured triangle, speedMbps where known) seeds an EMPTY fleet only; the gitignored live `config/sparks.json` is never hand-edited.

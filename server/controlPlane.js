@@ -511,6 +511,31 @@ export function createControlPlane(deps) {
     res.json(result);
   });
 
+  /**
+   * CONFIG-ONLY role change. Writes the role to the deployment binding: no
+   * model/recipe/weights recreation, no lifecycle, no runtime touch. Legacy
+   * "edge" folds onto "worker"; `role: null` clears it (FE heuristic resumes).
+   */
+  app.patch("/api/deployments/:id", (req, res) => {
+    try {
+      const body = req.body || {};
+      if (!Object.prototype.hasOwnProperty.call(body, "role"))
+        return res.status(400).json({ error: "only a role change is supported (body: {role})" });
+      const before = deploymentRegistry.get(req.params.id);
+      if (!before) return res.status(404).json({ error: "deployment not found" });
+      const dep = deploymentRegistry.setRole(req.params.id, body.role);
+      activity.push({
+        kind: "lifecycle",
+        subject: dep.id,
+        summary: `deployment role ${before.role ?? "(none)"} → ${dep.role ?? "(none)"} (config-only)`,
+        meta: { modelId: dep.modelId, recipeId: dep.recipeId, configOnly: true, dryRun: true },
+      });
+      res.json({ deployment: dep, runtime: deployments.getState(dep.id), configOnly: true });
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message });
+    }
+  });
+
   // ─── Routes: discovery + adoption (read-only scan, config-only adopt) ─
   app.get("/api/discovery", (req, res) => {
     const includeAdopted = req.query.includeAdopted !== "0";

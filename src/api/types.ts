@@ -1,4 +1,17 @@
 // ─── Spark config (matches server/sparks.json) ────────────
+/**
+ * READ-ONLY configured physical fabric neighbour. Config data only — a
+ * discovered (observed) link is a separate provenance and is never written here.
+ */
+export interface FabricLinkConfig {
+  /** Peer node id on the same physical fabric. */
+  to: string;
+  /** Known physical link speed in Mbps, else null. */
+  speedMbps?: number | null;
+  /** Physical medium: ConnectX-7 or a named fabric. */
+  medium?: "cx7" | "fabric";
+}
+
 export interface SparkConfig {
   id: string;
   name: string;
@@ -13,6 +26,8 @@ export interface SparkConfig {
   cx7Ip?: string | null;
   /** Optional named physical fabric this unit is wired into (link discovery hint). */
   fabric?: string | null;
+  /** READ-ONLY configured physical fabric neighbours (never derived). */
+  fabricLinks?: FabricLinkConfig[] | null;
   /**
    * Optional Wake-on-LAN MAC override. When empty, the server uses
    * `detectedMacAddress` from the enP7s7 interface.
@@ -484,6 +499,8 @@ export interface SparkSnapshot {
   cx7Ip?: string | null;
   /** Optional named physical fabric this unit is wired into. */
   fabric?: string | null;
+  /** READ-ONLY configured physical fabric neighbours (CONFIGURED provenance). */
+  fabricLinks?: FabricLinkConfig[] | null;
   isLocal?: boolean;
   disabledDevices: string[];
   disabledInterfaces: string[];

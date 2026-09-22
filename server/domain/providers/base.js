@@ -102,4 +102,18 @@ export class RuntimeProvider {
   parseTelemetryLine(_msg) {
     return null;
   }
+
+  /**
+   * Declare whether this runtime can genuinely BACK a parallelism mode/degree.
+   *
+   * IMPORTANT: default is "unknown" — a provider that does not KNOW a degree is
+   * supported says so, so validation yields NEEDS-CONFIRMATION instead of
+   * silently blowing through as "valid". Never fabricate.
+   *
+   * @param {{mode?: string|null, degree?: number|null, nodeCount?: number|null}} [_spec]
+   * @returns {"supported"|"unsupported"|"unknown"}
+   */
+  supportsTopology(_spec) {
+    return "unknown";
+  }
 }

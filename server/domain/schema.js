@@ -28,7 +28,29 @@ const quoteClamp = (s) => String(s).slice(0, 64);
 
 export const TOPOLOGY_MODES = Object.freeze(["single", "tp", "pp", "dp"]);
 export const LAUNCH_MECHANISMS = Object.freeze(["command", "systemd", "docker", "external"]);
-export const DEPLOYMENT_ROLES = Object.freeze(["primary", "worker", "edge"]);
+export const DEPLOYMENT_ROLES = Object.freeze([
+  "primary",
+  "worker",
+  "specialist",
+  "reviewer",
+  "experimental",
+  "none",
+]);
+/** Legacy role spellings folded onto the current set (v2 back-compat). */
+const LEGACY_ROLE_MAP = Object.freeze({ edge: "worker" });
+
+/**
+ * Canonicalise a deployment role: legacy aliases map onto the current set.
+ * Returns null for absent/unknown — role stays OPTIONAL (absent => FE heuristic).
+ * @param {unknown} role
+ * @returns {string|null}
+ */
+export function normalizeDeploymentRole(role) {
+  if (role == null) return null;
+  const key = String(role).trim();
+  const mapped = LEGACY_ROLE_MAP[key] ?? key;
+  return DEPLOYMENT_ROLES.includes(mapped) ? mapped : null;
+}
 export const API_PROTOCOLS = Object.freeze(["openai", "custom"]);
 export const PROBE_KINDS = Object.freeze(["http", "tcp", "process"]);
 export const DISCOVERY_STRATEGIES = Object.freeze(["openai-models", "process", "manual"]);
@@ -319,7 +341,8 @@ export function normalizeDeployment(body = {}, prev = null) {
   // An external runtime has no SparkDash intent → desired must stay 'unknown'.
   if (managedBy === "external") desiredState = "unknown";
   // OPTIONAL explicit role (owner's mental model). Absent => FE heuristic.
-  const role = DEPLOYMENT_ROLES.includes(body.role) ? body.role : prev?.role != null && DEPLOYMENT_ROLES.includes(prev.role) ? prev.role : null;
+  // Legacy "edge" folds onto "worker" (back-compat, config-only normalisation).
+  const role = normalizeDeploymentRole(body.role) ?? normalizeDeploymentRole(prev?.role);
   return {
     id: body.id ?? prev?.id,
     schemaVersion: 2,
@@ -446,7 +469,8 @@ export function validateDeployment(dep) {
   if (new Set(dep?.nodeIds || []).size !== (dep?.nodeIds || []).length) errors.push("nodeIds must be unique");
   for (const n of dep?.nodeIds || []) if (!isValidSlug(n)) errors.push(`invalid node id: ${n}`);
   if (!["running", "stopped", "unknown"].includes(dep?.desiredState)) errors.push("desiredState must be running|stopped|unknown");
-  if (dep?.role != null && !DEPLOYMENT_ROLES.includes(dep.role)) errors.push(`role must be one of: ${DEPLOYMENT_ROLES.join(", ")}`);
+  if (dep?.role != null && !normalizeDeploymentRole(dep.role))
+    errors.push(`role must be one of: ${DEPLOYMENT_ROLES.join(", ")}`);
   return { ok: errors.length === 0, errors };
 }
 

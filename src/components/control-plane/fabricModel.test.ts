@@ -92,6 +92,7 @@ describe("deriveFabric", () => {
     expect(f.wiringDiscovered).toBe(true);
     expect(f.links).toHaveLength(1);
     expect(f.links[0].kind).toBe("cx7");
+    expect(f.links[0].provenance).toBe("discovered");
     expect([f.links[0].from, f.links[0].to].sort()).toEqual(["a", "b"]);
     expect(f.links[0].speedMbps).toBe(100_000);
   });
@@ -101,9 +102,54 @@ describe("deriveFabric", () => {
     const f = deriveFabric(sparks, []);
     expect(f.links).toHaveLength(1);
     expect(f.links[0].kind).toBe("fabric");
+    expect(f.links[0].provenance).toBe("discovered");
     expect(f.links[0].degraded).toBe(true);
     expect(f.links[0].speedMbps).toBe(200_000);
     expect(f.nodes.find((n) => n.id === "b")?.health).toBe("offline");
+  });
+
+  it("emits CONFIGURED links from fabricLinks with configured provenance + speed", () => {
+    const sparks = [
+      spark({ id: "a", fabricLinks: [{ to: "b", speedMbps: 200_000, medium: "cx7" }] }),
+      spark({ id: "b" }),
+      spark({ id: "c" }), // peer-less / no links → no fabricated triangle
+    ];
+    const f = deriveFabric(sparks, []);
+    expect(f.links).toHaveLength(1);
+    expect(f.links[0].provenance).toBe("configured");
+    expect(f.links[0].kind).toBe("cx7");
+    expect(f.links[0].speedMbps).toBe(200_000);
+    expect([f.links[0].from, f.links[0].to].sort()).toEqual(["a", "b"]);
+    expect(f.wiringDiscovered).toBe(true);
+  });
+
+  it("configured beats discovered on the same pair (no duplicate)", () => {
+    const sparks = [
+      spark({ id: "a", cx7Ip: "10.0.0.1", fabricLinks: [{ to: "b" }] }),
+      spark({ id: "b", cx7Ip: "10.0.0.2" }),
+    ];
+    const f = deriveFabric(sparks, []);
+    expect(f.links).toHaveLength(1);
+    expect(f.links[0].provenance).toBe("configured");
+  });
+
+  it("emits a full configured triangle only from config, for 1..N nodes", () => {
+    for (const n of [1, 2, 3, 4, 5]) {
+      const ids = [...Array(n).keys()].map((i) => `n${i}`);
+      const sparks = ids.map((id) =>
+        spark({ id, fabricLinks: ids.filter((o) => o !== id).map((to) => ({ to, speedMbps: 100_000, medium: "cx7" as const })) })
+      );
+      const f = deriveFabric(sparks, []);
+      expect(f.links).toHaveLength((n * (n - 1)) / 2);
+      expect(f.links.every((l) => l.provenance === "configured")).toBe(true);
+    }
+  });
+
+  it("fabricLinks pointing at an absent peer are skipped", () => {
+    const sparks = [spark({ id: "a", fabricLinks: [{ to: "ghost" }] })];
+    const f = deriveFabric(sparks, []);
+    expect(f.links).toHaveLength(0);
+    expect(f.wiringDiscovered).toBe(false);
   });
 
   it("places deployment names on nodes and flags a degraded deployment", () => {

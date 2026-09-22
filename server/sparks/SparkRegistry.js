@@ -591,6 +591,11 @@ export class SparkRegistry {
       cx7Ip: config.cx7Ip || null,
       /** Optional named physical fabric (link discovery only). */
       fabric: config.fabric || null,
+      /**
+       * READ-ONLY configured physical fabric neighbours (peer id + optional
+       * speed/medium). Config passthrough only — never derived from observation.
+       */
+      fabricLinks: this._normalizeFabricLinks(config.fabricLinks),
       /** Optional user override for Wake-on-LAN. Empty → use detectedMacAddress. */
       macAddress: config.macAddress || null,
       /** Last MAC seen on enP7s7 (auto; not set via public PATCH). */
@@ -634,8 +639,29 @@ export class SparkRegistry {
     };
   }
 
-  /** Normalize ComfyUI port to 1–65535 (default 8188). */
-  _normalizeComfyPort(value) {
+  /**
+   * Normalize configured fabric neighbours: unique peer ids, positive Mbps,
+   * medium limited to cx7|fabric. Empty → null (absent stays absent).
+   */
+  _normalizeFabricLinks(list) {
+    if (!Array.isArray(list)) return null;
+    const seen = new Set();
+    const out = [];
+    for (const l of list) {
+      const to = String(l?.to ?? "").trim();
+      if (!to || seen.has(to)) continue;
+      seen.add(to);
+      const speed = Number(l?.speedMbps);
+      out.push({
+        to,
+        speedMbps: Number.isFinite(speed) && speed > 0 ? Math.round(speed) : null,
+        medium: l?.medium === "cx7" ? "cx7" : "fabric",
+      });
+    }
+    return out.length > 0 ? out : null;
+  }
+
+  /** Normalize ComfyUI port to 1–65535 (default 8188). */  _normalizeComfyPort(value) {
     const n = typeof value === "string" ? parseInt(value, 10) : Number(value);
     if (Number.isInteger(n) && n >= 1 && n <= 65535) return n;
     return 8188;

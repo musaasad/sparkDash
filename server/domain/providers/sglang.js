@@ -26,4 +26,15 @@ export class SglangProvider extends RuntimeProvider {
     const port = recipe?.endpoint?.port ?? recipe?.apiPort;
     return `python -m sglang.launch_server --model-path ${modelPath}${port ? ` --port ${port}` : ""}`;
   }
+
+  /** SGLang genuinely supports tensor-parallel serving to the declared degree. */
+  supportsTopology({ mode, degree, nodeCount } = {}) {
+    if (mode === "single") return "supported";
+    if (mode === "tp") {
+      const d = Math.max(1, Number(degree) || 1);
+      const n = Number(nodeCount) || 0;
+      return d <= n ? "supported" : "unsupported";
+    }
+    return "unknown";
+  }
 }

@@ -74,7 +74,8 @@ test("registry mutation starts a monitor, invalidates energy, and appears on the
   const { port } = await startServer(t);
   const listed = await json(port, "/api/sparks");
   assert.equal(listed.status, 200);
-  assert.deepEqual(listed.body.sparks, []);
+  // The committed compute seed fills the empty live fleet (3 DGX nodes).
+  assert.deepEqual(listed.body.sparks.map((s) => s.id).sort(), ["dgx-1", "dgx-2", "dgx-3"]);
 
   const created = await json(port, "/api/sparks", {
     method: "POST",
@@ -107,5 +108,6 @@ test("registry mutation starts a monitor, invalidates energy, and appears on the
   assert.equal(removed.status, 200);
   assert.equal(removed.body.success, true);
   const after = await json(port, "/api/sparks");
-  assert.equal(after.body.sparks.length, 0);
+  // alpha removed; only the seeded fleet remains.
+  assert.deepEqual(after.body.sparks.map((s) => s.id).sort(), ["dgx-1", "dgx-2", "dgx-3"]);
 });

@@ -217,7 +217,13 @@ export class DeploymentService {
   getState(id) {
     const key = this._key(id);
     const existing = this._states.get(key);
-    if (existing) return existing;
+    if (existing) {
+      // Role is CONFIG data owned by the registry — project it onto the runtime
+      // view so a role change shows up without recreating anything.
+      const dep = this.deploymentRegistry?.get(key);
+      if (dep && existing.role !== dep.role) existing.role = dep.role ?? null;
+      return existing;
+    }
     const resolved = this._resolve(id);
     if (!resolved?.recipe) return null;
     const state = this._baseState(key, resolved.dep, resolved.recipe);

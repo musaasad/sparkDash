@@ -40,6 +40,14 @@ export class TabbyApiProvider extends RuntimeProvider {
   parseTelemetryLine(msg) {
     return parseTabbyTelemetry(msg);
   }
+
+  /**
+   * TabbyAPI/EXL3 is single-node EXL3 serving: single is supported, every
+   * parallelism mode is NOT. Data declaration only — no model-name check.
+   */
+  supportsTopology({ mode } = {}) {
+    return mode === "single" ? "supported" : "unsupported";
+  }
 }
 
 const num = (s) => Number(String(s).replace(/,/g, ""));

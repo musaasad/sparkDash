@@ -112,3 +112,13 @@ export function providerLabel(runtime) {
 export function metricsFor(runtime) {
   return providerFor(runtime).metrics(runtime);
 }
+
+/**
+ * Provider-declared topology capability for a mode/degree on a node count.
+ * @param {string} runtime
+ * @param {{mode?: string|null, degree?: number|null, nodeCount?: number|null}} spec
+ * @returns {"supported"|"unsupported"|"unknown"}
+ */
+export function supportsTopology(runtime, spec) {
+  return providerFor(runtime).supportsTopology(spec);
+}

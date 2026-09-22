@@ -261,13 +261,17 @@ test("F9 normalizeDeployment forces desiredState unknown for external managedBy"
 });
 
 test("normalizeDeployment accepts an optional config role and stays backward compatible", () => {
-  for (const role of ["primary", "worker", "edge"]) {
+  for (const role of ["primary", "worker", "specialist", "reviewer", "experimental", "none"]) {
     assert.equal(normalizeDeployment({ recipeId: "r1", modelId: "m1", nodeIds: ["n"], role }).role, role);
   }
+  // legacy "edge" folds onto "worker"
+  assert.equal(normalizeDeployment({ recipeId: "r1", modelId: "m1", nodeIds: ["n"], role: "edge" }).role, "worker");
   assert.equal(normalizeDeployment({ recipeId: "r1", modelId: "m1", nodeIds: ["n"] }).role, null);
   assert.equal(normalizeDeployment({ recipeId: "r1", modelId: "m1", nodeIds: ["n"], role: "bogus" }).role, null);
   // prev role survives an unrelated update, and validateDeployment rejects a bad role.
   const prev = normalizeDeployment({ id: "d1", recipeId: "r1", modelId: "m1", nodeIds: ["n"], role: "primary" });
   assert.equal(normalizeDeployment({ nodeIds: ["n"] }, prev).role, "primary");
   assert.equal(validateDeployment({ ...prev, role: "bogus" }).ok, false);
+  // legacy edge on a stored prev is normalised too
+  assert.equal(normalizeDeployment({ nodeIds: ["n"] }, { ...prev, role: "edge" }).role, "worker");
 });

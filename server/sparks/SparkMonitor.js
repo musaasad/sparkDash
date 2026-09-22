@@ -455,7 +455,9 @@ export class SparkMonitor {
       uptime: this._uptimeSeconds,
       lanIp: this.spark.lanIp || "",
       cx7Ip: this.spark.cx7Ip || null,
-      fabric: this.spark.fabric || null,      isLocal: Boolean(this.spark.isLocal),
+      fabric: this.spark.fabric || null,
+      /** READ-ONLY configured physical fabric neighbours (CONFIGURED provenance). */
+      fabricLinks: this.spark.fabricLinks || null,      isLocal: Boolean(this.spark.isLocal),
       disabledDevices: this.spark.disabledDevices || [],
       disabledInterfaces: this.spark.disabledInterfaces || [],
       storagePollDisabled: Boolean(this.spark.storagePollDisabled),

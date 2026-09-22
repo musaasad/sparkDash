@@ -6,6 +6,8 @@
  * `nodeIds` to test a hypothetical binding.
  */
 import { validateRecipeV2 } from "./schema.js";
+import { validateTopology } from "./topologyValidate.js";
+import { supportsTopology } from "./providers/registry.js";
 import { hasRecipeSecret } from "../secretsStore.js";
 
 const ACTIVE_STATES = new Set(["draft", "validated", "proven"]);
@@ -42,6 +44,18 @@ export function validateRecipeFeasibility(recipe, ctx = {}) {
     } else {
       warnings.push("no node registry available — node ids not checked");
     }
+
+    // Capability-aware topology check: structural violation or a provider that
+    // KNOWS it cannot back this degree => error; a provider that does not KNOW
+    // => warning (needs confirmation), never silently valid.
+    const capability = validateTopology({
+      topology: recipe?.topology,
+      nodeCount: nodes.length,
+      runtime: recipe?.engine?.runtime,
+      registry: { supportsTopology },
+    });
+    if (capability.status === "invalid") errors.push(`topology: ${capability.reason}`);
+    else if (capability.status === "needs-confirmation") warnings.push(`topology needs confirmation: ${capability.reason}`);
   }
 
   // Weight variant must exist on the referenced model.

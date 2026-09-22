@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 2,
+  "kind": "compute-seed",
+  "note": "Committed COMPUTE seed: the three DGX Spark nodes and their CONFIGURED physical fabric triangle (dgx-1<->dgx-2<->dgx-3). Config data only — never derived from node count. Loaded only when config/sparks.json is empty; the live gitignored fleet file is never rewritten by this seed.",
+  "nodes": [
+    {
+      "id": "dgx-1",
+      "name": "DGX 1",
+      "kind": "spark",
+      "lanIp": "192.168.1.161",
+      "cx7Ip": "10.10.0.1",
+      "fabric": "rack-a",
+      "isLocal": true,
+      "llmPorts": [8888],
+      "fabricLinks": [
+        { "to": "dgx-2", "speedMbps": 200000, "medium": "cx7" },
+        { "to": "dgx-3", "speedMbps": 200000, "medium": "cx7" }
+      ]
+    },
+    {
+      "id": "dgx-2",
+      "name": "DGX 2",
+      "kind": "spark",
+      "lanIp": "192.168.1.162",
+      "cx7Ip": "10.10.0.2",
+      "fabric": "rack-a",
+      "isLocal": false,
+      "llmPorts": [8889],
+      "fabricLinks": [
+        { "to": "dgx-1", "speedMbps": 200000, "medium": "cx7" },
+        { "to": "dgx-3", "speedMbps": 200000, "medium": "cx7" }
+      ]
+    },
+    {
+      "id": "dgx-3",
+      "name": "DGX 3",
+      "kind": "spark",
+      "lanIp": "192.168.1.163",
+      "cx7Ip": "10.10.0.3",
+      "fabric": "rack-a",
+      "isLocal": false,
+      "llmPorts": [8890],
+      "fabricLinks": [
+        { "to": "dgx-1", "speedMbps": 200000, "medium": "cx7" },
+        { "to": "dgx-2", "speedMbps": 200000, "medium": "cx7" }
+      ]
+    }
+  ]
+}

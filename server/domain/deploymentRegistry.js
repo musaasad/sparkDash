@@ -10,7 +10,7 @@
 import fs from "fs";
 import { atomicWrite } from "../util/atomicWrite.js";
 import { DEPLOYMENTS_JSON_PATH } from "../config.js";
-import { normalizeDeployment, validateDeployment } from "./schema.js";
+import { normalizeDeployment, normalizeDeploymentRole, validateDeployment } from "./schema.js";
 
 const MAX_DEPLOYMENTS = 1024;
 
@@ -102,6 +102,31 @@ export class DeploymentRegistry {
     const dep = this._deployments.get(id);
     if (!dep) return null;
     dep.desiredState = desiredState;
+    dep.updatedAt = Date.now();
+    this._deployments.set(id, dep);
+    this._save();
+    return dep;
+  }
+
+  /**
+   * CONFIG-ONLY role change: writes `role` to the binding. Never recreates the
+   * model/recipe/weights and never touches the RUNTIME — a role is config data.
+   * Legacy alias "edge" folds onto "worker". `role:null` clears it.
+   * @throws {Error & {status:number}} on an unknown role
+   */
+  setRole(id, role) {
+    const dep = this._deployments.get(id);
+    if (!dep) return null;
+    let next = null;
+    if (role != null && role !== "") {
+      next = normalizeDeploymentRole(role);
+      if (!next) {
+        const err = new Error(`unknown deployment role: ${role}`);
+        err.status = 400;
+        throw err;
+      }
+    }
+    dep.role = next;
     dep.updatedAt = Date.now();
     this._deployments.set(id, dep);
     this._save();
