@@ -42,7 +42,7 @@ const COMPLETION_RE = new RegExp(
     TS_RE +
     "\\s*\\|\\s*INFO.*?#(\\d+)\\s+.*?:\\s*([\\d,]+)\\s+tokens generated at\\s+([\\d.]+)\\s+T/s\\s*" +
     SEP +
-    "\\s*prompt\\s+([\\d,]+)\\s+tokens,\\s*(\\d+)%\\s*cached,\\s*([\\d,]+)\\s*new in\\s+([\\d.]+)\\s*s\\s*\\(([\\d.]+)\\s*T/s\\)\\s*" +
+    "\\s*prompt\\s+([\\d,]+)\\s+tokens,\\s*(?:(\\d+)%|none)\\s*cached,\\s*([\\d,]+)\\s*new in\\s+([\\d.]+)\\s*s\\s*\\(([\\d.]+)\\s*T/s\\)\\s*" +
     SEP +
     "\\s*first token\\s+([\\d.]+)\\s*s,\\s*total\\s+([\\d.]+)\\s*s" +
     "(?:\\s*" +
@@ -50,9 +50,19 @@ const COMPLETION_RE = new RegExp(
     "\\s*draft\\s+(\\d+)/(\\d+)\\s+accepted\\s*\\(\\d+%\\))?"
 );
 
-/** START line — request begin, no metrics. */
+/**
+ * START line — request begin, no metrics. Real form is
+ * `#<id> chat/completions (stream): 184,855 prompt tokens · temperature: …`,
+ * i.e. the prompt-token count is followed by an optional word ("prompt") before
+ * "tokens", so allow zero-or-more words between the number and the literal
+ * "tokens" before the `·` separator. (Only reached when COMPLETION_RE fails, so
+ * it can never shadow a completion line.)
+ */
 const START_RE = new RegExp(
-  "^" + TS_RE + "\\s*\\|\\s*INFO.*?#(\\d+)\\s+.*?:\\s*([\\d,]+)\\s+tokens\\s*" + SEP
+  "^" +
+    TS_RE +
+    "\\s*\\|\\s*INFO.*?#(\\d+)\\s+.*?:\\s*([\\d,]+)\\s+(?:[a-zA-Z]+\\s+)*tokens\\s*" +
+    SEP
 );
 
 /**
@@ -91,7 +101,8 @@ export function parseCompletionLine(line) {
   const id = num(m[2]);
   const genTps = num(m[4]);
   const promptTokens = num(m[5]);
-  const cachedPct = num(m[6]);
+  // TabbyAPI logs an empty cache as "none cached" (not "0% cached"); map it to 0.
+  const cachedPct = m[6] == null ? 0 : num(m[6]);
   const newTokens = num(m[7]);
   const prefillSeconds = num(m[8]);
   const prefillTps = num(m[9]);

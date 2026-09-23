@@ -22,11 +22,14 @@ import {
 const COMPLETION =
   "2026-09-23 08:43:06.141 | INFO     | #67897 chat/completions (stream): 1,893 tokens generated at 59.9 T/s · prompt 191,844 tokens, 99% cached, 2,660 new in 6.33 s (420 T/s) · first token 6.34 s, total 37.9 s · draft 1269/2077 accepted (61%)";
 
+// Real START line: the prompt-token count is followed by the word "prompt"
+// before "tokens" (`191,844 prompt tokens ·`). Fixtures MUST match the live
+// format — a fixture that omits "prompt" silently hides a START_RE regression.
 const START =
-  "2026-09-23 08:43:00.000 | INFO     | #67897 chat/completions (stream): 191,844 tokens · temperature: 0.8 (preset), ... max_tokens: 32768 (req)";
+  "2026-09-23 08:43:00.000 | INFO     | #67897 chat/completions (stream): 191,844 prompt tokens · temperature: 0.8 (preset), top_k: 40 (preset), top_p: 0.95 (preset), min_p: 0.05 (preset), max_tokens: 32768 (req)";
 
 const START_OPEN =
-  "2026-09-23 08:43:10.500 | INFO     | #67898 chat/completions (stream): 12,000 tokens · temperature: 0.8 (preset)";
+  "2026-09-23 08:43:10.500 | INFO     | #67898 chat/completions (stream): 12,000 prompt tokens · temperature: 0.8 (preset)";
 
 test("parseCompletionLine extracts every metric exactly (commas + U+00B7)", () => {
   const c = parseCompletionLine(COMPLETION);
@@ -51,6 +54,39 @@ test("draft segment is OPTIONAL (some lines lack it)", () => {
   assert.equal(c.genTps, 59.9);
   assert.equal(c.draftAccepted, null);
   assert.equal(c.draftTotal, null);
+});
+
+// Regression: the live START line reads "191,844 prompt tokens ·" (the word
+// "prompt" sits between the count and "tokens"). An earlier START_RE required
+// the number to be immediately followed by "tokens" and so NEVER matched real
+// START lines => active/BUSY never fired in production. Guard the real format.
+test("parseStartLine matches the REAL 'N prompt tokens ·' format", () => {
+  const s = parseStartLine(START);
+  assert.ok(s, "real START line must parse");
+  assert.equal(s.id, 67897);
+  assert.equal(Number.isFinite(s.tsMs), true);
+});
+
+// Regression: TabbyAPI logs an EMPTY cache as "none cached", not "0% cached".
+// An earlier COMPLETION_RE required `N% cached` and so failed on those lines,
+// leaving the request unmatched => it looked permanently in-flight => false
+// BUSY. A "none cached" completion must parse with cachedPct 0 and mark done.
+test("parseCompletionLine accepts 'none cached' (empty cache) as 0%", () => {
+  const line =
+    "2026-09-23 09:17:03.864 | INFO     | #69978 chat/completions (stream): 5,535 tokens generated at 69.9 T/s · prompt 156,066 tokens, none cached, 156,066 new in 262.6 s (594 T/s) · first token 262.6 s, total 341.8 s · draft 4124/5942 accepted (69%)";
+  const c = parseCompletionLine(line);
+  assert.ok(c, "'none cached' completion must parse");
+  assert.equal(c.id, 69978);
+  assert.equal(c.cachedPct, 0);
+  assert.equal(c.promptTokens, 156066);
+  assert.equal(c.newTokens, 156066);
+  assert.equal(c.genTps, 69.9);
+  // A START whose (none-cached) completion is present must NOT be active.
+  const open =
+    "2026-09-23 09:11:22.042 | INFO     | #69978 chat/completions (stream): 156,066 prompt tokens · temperature: 0.8 (preset), max_tokens: 32768 (req)";
+  const out = parseTabbyLog([open, line].join("\n"));
+  assert.equal(out.active, false, "completed (none-cached) request is not in-flight");
+  assert.deepEqual(out.activeIds, []);
 });
 
 test("parseTabbyLog: a START id with no COMPLETION => active=true", () => {
