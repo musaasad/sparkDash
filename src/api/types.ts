@@ -1144,6 +1144,8 @@ export interface ModelEntry {
   id: string;
   name: string;
   family: string | null;
+  /** True for a model surfaced from live endpoint discovery, not the registry. */
+  discovered?: boolean;
   /** Weights identity lives here: variantId -> absolute path. */
   weightPaths?: Record<string, string>;
   tags?: string[];

@@ -43,6 +43,12 @@ export interface DeploymentView {
   recipe: RecipePublic | null;
   modelName: string;
   rawModelId: string;
+  /** 'live' = resolved from the serving endpoint; 'config' = offline fallback. */
+  modelSource?: "live" | "config";
+  /** True when the live serving model differs from the recipe's configured model. */
+  diverged?: boolean;
+  /** The persisted deployment.modelId (recipe intent) behind a diverged view. */
+  configuredModelId?: string;
   nodes: SparkSnapshot[];
   runtime: string;
   /** Recipe-declared topology, or null when the recipe carries none. Node count
@@ -156,6 +162,82 @@ const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFin
 /** Friendly registry name for a model id; falls back to the raw id. */
 export function friendlyName(modelId: string, models: readonly ModelEntry[] = []): string {
   return models.find((m) => m.id === modelId)?.name ?? modelId;
+}
+
+/** Quantization/version tokens stripped when comparing model identities so a
+ *  served-model-name like "Qwen3.8-Flash-Next-EXL3" matches the registry name
+ *  "Qwen 3.8 Flash Next". Never matches a genuinely different model. */
+const MODEL_KEY_NOISE = /exl3|exl2|exl|uncensored|awq|gptq|gguf|int4|int8|fp16|fp8|tr\d+|\d+bpw|\d+bit/g;
+
+/** Normalized identity key: lowercase, drop quant/version tokens + separators. */
+export function normalizeModelKey(s: string | null | undefined): string {
+  if (!s) return "";
+  return String(s).toLowerCase().replace(MODEL_KEY_NOISE, "").replace(/[^a-z0-9]/g, "");
+}
+
+/** Family label for a discovered (unregistered) live model id: leading letters. */
+export function derivedFamily(liveId: string): string {
+  return (String(liveId).match(/^[A-Za-z]+/)?.[0] ?? String(liveId)).toUpperCase();
+}
+
+/** The model a deployment is ACTUALLY serving, resolved live-first. */
+export interface ServingModel {
+  /** Effective id used for display + navigation (live id when swapped). */
+  modelId: string;
+  /** Friendly registry name, or the live id itself when discovered. */
+  name: string;
+  contextLength: number | null;
+  backend: LlmMetrics["backend"] | null;
+  /** 'live' = endpoint reported it; 'config' = offline fallback to the recipe. */
+  source: "live" | "config";
+  /** The persisted deployment.modelId (recipe intent), for divergence hints. */
+  configuredModelId: string;
+  /** True when the live model differs from the configured/recipe model. */
+  diverged: boolean;
+}
+
+/**
+ * Resolve the CURRENTLY SERVING model for a deployment, live-first.
+ *
+ * The authoritative identity is whatever the deployment's serving endpoint
+ * (primary-node LLM probe for `apiPort`) reports via `/v1/models`. The persisted
+ * recipe/deployment model is a FALLBACK used only when the endpoint is offline —
+ * it must never override live discovery. A live served-model-name is matched to
+ * a registry model by normalized key (id AND name, plus the recipe's
+ * `metadata.servedModelId` when present): a match means the SAME model under a
+ * different served alias (keep the friendly configured name); no match means the
+ * server was actually swapped (surface the live id as a discovered model).
+ */
+export function resolveServingModel(
+  deployment: DeploymentStatus,
+  sparks: SparkSnapshot[],
+  recipe: RecipePublic | null,
+  models: readonly ModelEntry[] = []
+): ServingModel {
+  const configuredId = deployment.modelId;
+  const configured = models.find((m) => m.id === configuredId) ?? null;
+  const recipeCtx = recipe?.serving?.contextLength ?? recipe?.contextLength ?? null;
+  const primary = primaryNodeOf(sparks, deployment);
+  const llm = llmForNode(primary, deployment.apiPort);
+  const liveId = llm?.available ? llm.modelId ?? null : null;
+  const liveCtx = optNum(llm?.contextLength);
+  const liveBackend = llm?.backend ?? null;
+
+  if (liveId) {
+    const k = normalizeModelKey(liveId);
+    const servedId = recipe?.metadata?.servedModelId;
+    const matched =
+      models.find((m) => k && (normalizeModelKey(m.id) === k || normalizeModelKey(m.name) === k)) ??
+      (typeof servedId === "string" && normalizeModelKey(servedId) === k ? configured : null);
+    if (matched) {
+      // Same model under a different served alias — keep the friendly name.
+      return { modelId: matched.id, name: matched.name, contextLength: liveCtx ?? recipeCtx, backend: liveBackend, source: "live", configuredModelId: configuredId, diverged: false };
+    }
+    // The endpoint serves a DIFFERENT model than configured — surface it live.
+    return { modelId: liveId, name: liveId, contextLength: liveCtx ?? recipeCtx, backend: liveBackend, source: "live", configuredModelId: configuredId, diverged: true };
+  }
+  // Endpoint offline/unreachable — fall back to the persisted config identity.
+  return { modelId: configuredId, name: friendlyName(configuredId, models), contextLength: recipeCtx, backend: liveBackend, source: "config", configuredModelId: configuredId, diverged: false };
 }
 
 /** Fleet-wide health rollup for the Overview strip. */
@@ -370,7 +452,7 @@ export function primaryNodeOf(sparks: SparkSnapshot[], d: DeploymentStatus): Spa
 export { nodeById, type CanonicalRuntimeState };
 
 /** LLM probe series for one node + port, index-aligned with `llmPorts` (no fallback match). */
-function llmForNode(s: SparkSnapshot | null | undefined, apiPort: number): LlmMetrics | undefined {
+export function llmForNode(s: SparkSnapshot | null | undefined, apiPort: number): LlmMetrics | undefined {
   if (!s) return undefined;
   const idx = (s.llmPorts ?? []).indexOf(apiPort);
   return idx >= 0 ? s.metrics?.llm?.[idx] : undefined;
@@ -554,18 +636,24 @@ export function deploymentViews(
   return deployments.map((deployment) => {
     const recipe = recipes.find((r) => r.id === deployment.recipeId) ?? null;
     const primary = primaryNodeOf(sparks, deployment);
+    // Live-first: the SERVING model is whatever the endpoint reports, not the
+    // persisted recipe model. Config is the offline fallback only.
+    const serving = resolveServingModel(deployment, sparks, recipe, models);
     return {
       deployment,
       key: deployment.deploymentId ?? deployment.recipeId,
       recipe,
-      modelName: friendlyName(deployment.modelId, models),
-      rawModelId: deployment.modelId,
+      modelName: serving.name,
+      rawModelId: serving.modelId,
+      modelSource: serving.source,
+      diverged: serving.diverged,
+      configuredModelId: serving.configuredModelId,
       nodes: deployment.nodeIds.map((id) => sparks.find((s) => s.id === id)).filter((s): s is SparkSnapshot => !!s),
       runtime: recipe?.runtime ?? "—",
       // Topology is ONLY what the recipe declares — node count never decides.
       topology: recipe?.topology ?? null,
       lifecycleState: recipe?.lifecycleState ?? null,
-      contextLength: recipe?.serving?.contextLength ?? recipe?.contextLength ?? null,
+      contextLength: serving.contextLength,
       port: deployment.apiPort,
       decodeTps: deploymentDecodeTps(sparks, deployment),
       telemetry: deploymentTelemetry(sparks, deployment),
@@ -741,7 +829,7 @@ export interface FamilyGroup {
 }
 
 /** Catalog grouped by family; unknown family falls into a muted bucket last. */
-export function familyGroups(models: readonly ModelEntry[], deployments: readonly DeploymentStatus[]): FamilyGroup[] {
+export function familyGroups(models: readonly ModelEntry[], servingModelIds: ReadonlySet<string>): FamilyGroup[] {
   const groups = new Map<string, ModelEntry[]>();
   for (const m of models) {
     const fam = (m.family || "").trim() || "Other";
@@ -755,7 +843,9 @@ export function familyGroups(models: readonly ModelEntry[], deployments: readonl
       family,
       models: list,
       variantCount: list.length,
-      deployedCount: list.filter((m) => deployments.some((d) => d.modelId === m.id)).length,
+      // "Deployed" follows the EFFECTIVE serving model (live-first), not the
+      // persisted recipe id — so a swapped endpoint deploys the live model.
+      deployedCount: list.filter((m) => servingModelIds.has(m.id)).length,
     }));
 }
 

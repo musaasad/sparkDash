@@ -3,6 +3,7 @@ import type { ModelEntry, RecipePublic, DeploymentStatus, SparkSnapshot } from "
 import type { Route } from "../../hooks/router";
 import {
   fetchModel,
+  fetchRecipes,
   archiveModel,
   archiveRecipe,
   restoreModel,
@@ -28,7 +29,7 @@ import { DeployControls } from "./DeployControls";
 import { LiveConsole } from "./LiveConsole";
 import { TimeSeriesChart, RangePicker, type Series } from "../ui/TimeSeriesChart";
 import { useTimedMetricsHistory, type MetricSample } from "../../hooks/metricsStore";
-import { externalConnectView, runtimeLabel, type ExternalConnect } from "./fleetModel";
+import { externalConnectView, runtimeLabel, primaryNodeOf, llmForNode, normalizeModelKey, derivedFamily, type ExternalConnect } from "./fleetModel";
 import { useRuntimeLabels, useRuntimeOptions } from "./runtimeLabels";
 
 const TABS = ["Overview", "Recipes", "Deployments", "Live Console", "Benchmarks"] as const;
@@ -147,10 +148,74 @@ export function ModelDetail({ modelId, initialTab, initialReqId, sparks, navigat
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modelId]);
 
-  const deps = useMemo(() => deployments.filter((d) => d.modelId === modelId), [deployments, modelId]);
+  // A model id that is NOT in the registry may still be a model discovered LIVE
+  // from a serving endpoint (the owner swapped DeepSeek→GLM without registering
+  // it). Resolve it from live telemetry so the detail view stays coherent, never
+  // 404. Runs reactively so it also fires once deployments/sparks populate.
+  useEffect(() => {
+    if (!error || model) return;
+    const k = normalizeModelKey(modelId);
+    if (!k) return;
+    const serving = deployments.find((d) => {
+      const l = llmForNode(primaryNodeOf(sparks, d), d.apiPort);
+      return l?.available && normalizeModelKey(l.modelId) === k;
+    });
+    if (!serving) return;
+    setModel({
+      id: modelId,
+      name: modelId,
+      family: derivedFamily(modelId),
+      discovered: true,
+      weightPaths: {},
+      tags: [],
+      notes: "Discovered live from a serving endpoint — not registered. Intentional registry metadata is preserved separately.",
+      archived: false,
+      createdAt: serving.updatedAt ?? 0,
+      updatedAt: serving.updatedAt ?? 0,
+    });
+    fetchRecipes(false)
+      .then(({ recipes: all }) => {
+        const recipe = all.find((r) => r.id === serving.recipeId) ?? null;
+        setRecipes(recipe ? [recipe] : []);
+      })
+      .catch(() => {});
+    setError(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [error, model, modelId, deployments, sparks]);
+
+  const deps = useMemo(() => {
+    const byId = deployments.filter((d) => d.modelId === modelId);
+    if (byId.length > 0 || !model?.discovered) return byId;
+    // Discovered live model: its deployment is the one whose endpoint reports it.
+    const k = normalizeModelKey(modelId);
+    return deployments.filter((d) => {
+      const l = llmForNode(primaryNodeOf(sparks, d), d.apiPort);
+      return l?.available && normalizeModelKey(l.modelId) === k;
+    });
+  }, [deployments, modelId, model, sparks]);
   const primaryRecipe = recipes.find((r) => !r.archived) ?? null;
   const primaryDep = deps.find((d) => d.recipeId === primaryRecipe?.id) ?? deps[0];
   const liveRecipes = useMemo(() => recipes.filter((r) => !r.archived), [recipes]);
+  // A REGISTERED model whose bound endpoint now serves a DIFFERENT live model is
+  // not actually serving — surface that honestly instead of a stale "Running".
+  // The live served-model-name is matched against THIS model's id/name (and the
+  // recipe's servedModelId) so a same-model alias (Qwen ↔ Qwen…-EXL3) is NOT
+  // mistaken for a swap.
+  const liveIdForBound = primaryDep
+    ? (() => {
+        const l = llmForNode(primaryNodeOf(sparks, primaryDep), primaryDep.apiPort);
+        return l?.available ? l.modelId ?? null : null;
+      })()
+    : null;
+  const servedId = primaryRecipe?.metadata?.servedModelId;
+  const liveIsThisModel =
+    liveIdForBound != null &&
+    model != null &&
+    (normalizeModelKey(liveIdForBound) === normalizeModelKey(model.id) ||
+      normalizeModelKey(liveIdForBound) === normalizeModelKey(model.name) ||
+      (typeof servedId === "string" && normalizeModelKey(liveIdForBound) === normalizeModelKey(servedId)));
+  const superseded = !model?.discovered && liveIdForBound != null && !liveIsThisModel;
+  const supersededBy = superseded ? liveIdForBound : null;
 
   if (error && !model) {
     return (
@@ -180,8 +245,9 @@ export function ModelDetail({ modelId, initialTab, initialReqId, sparks, navigat
         subtitle={model?.family ? `${model.family} · ${modelId}` : modelId}
         actions={
           <>
+            {model?.discovered ? <Chip tone="accent" title="Serving model discovered live from the endpoint; not registered.">live · discovered</Chip> : null}
             {model?.archived ? <Chip>archived · weights kept</Chip> : null}
-            {primaryDep ? <StatusPill status={primaryDep.display} /> : <Chip>not deployed</Chip>}
+            {superseded ? <Chip title={`Bound deployment now serves ${supersededBy} live`}>not serving</Chip> : primaryDep ? <StatusPill status={primaryDep.display} /> : <Chip>not deployed</Chip>}
           </>
         }
         overflow={
@@ -219,7 +285,7 @@ export function ModelDetail({ modelId, initialTab, initialReqId, sparks, navigat
       {/* Overview: deployment summary + folded History */}
       {tab === "Overview" ? (
         <div id="model-panel-Overview" role="tabpanel" aria-labelledby="model-panel-Overview-tab" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-          <OverviewTab model={model} recipes={recipes} deps={deps} sparks={sparks} onDeployChanged={() => { void load(); onDataChanged(); }} />
+          <OverviewTab model={model} recipes={recipes} deps={deps} sparks={sparks} supersededBy={supersededBy} onOpenModel={(id: string) => navigate({ section: "model", modelId: id })} onDeployChanged={() => { void load(); onDataChanged(); }} />
           <HistoryTab modelId={modelId} />
         </div>
       ) : null}
@@ -334,22 +400,48 @@ function OverviewTab({
   recipes,
   deps,
   sparks,
+  supersededBy,
+  onOpenModel,
   onDeployChanged,
 }: {
   model: ModelEntry | null;
   recipes: RecipePublic[];
   deps: DeploymentStatus[];
   sparks: SparkSnapshot[];
+  /** Live model id this registered model's bound endpoint now serves, if any. */
+  supersededBy?: string | null;
+  onOpenModel?: (id: string) => void;
   onDeployChanged: () => void;
 }) {
   const primary = recipes.find((r) => !r.archived) ?? null;
   const runtimeLabels = useRuntimeLabels();
-  const dep = deps.find((d) => d.recipeId === primary?.id);
+  const dep = deps.find((d) => d.recipeId === primary?.id) ?? deps[0];
   const nodeNames = (primary?.nodeIds || []).map((id) => sparks.find((s) => s.id === id)?.name || id);
   const connect = dep && primary ? externalConnectView(dep, primary, sparks, runtimeLabels) : null;
+  // Live context length from the serving endpoint wins over the recipe's declared
+  // value — the endpoint is authoritative (e.g. recipe says 600k, GLM serves 850k).
+  const liveCtx = dep ? (() => {
+    const l = llmForNode(primaryNodeOf(sparks, dep), dep.apiPort);
+    return l?.available ? l.contextLength ?? null : null;
+  })() : null;
+  const shownCtx = liveCtx ?? primary?.serving?.contextLength ?? null;
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {supersededBy ? (
+        <div className="cp-panel" style={{ borderLeft: "3px solid var(--color-accent)", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span>
+            Registered, but <strong>not currently serving</strong> — this deployment's endpoint now serves{" "}
+            <strong>{supersededBy}</strong> (discovered live).
+          </span>
+          {onOpenModel ? (
+            <button type="button" className="cp-btn ghost" onClick={() => onOpenModel(supersededBy)}>
+              View {supersededBy} →
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
       <div className="cp-panel">
         <div className="cp-panel-title">Deployment</div>
         {primary ? (
@@ -369,7 +461,12 @@ function OverviewTab({
               <dt>API port</dt>
               <dd>{primary.endpoint?.port ?? primary.apiPort}</dd>
               <dt>Context</dt>
-              <dd>{primary.serving?.contextLength != null ? primary.serving.contextLength.toLocaleString() : "—"}</dd>
+              <dd>
+                {shownCtx != null ? shownCtx.toLocaleString() : "—"}
+                {liveCtx != null && primary?.serving?.contextLength != null && liveCtx !== primary.serving.contextLength ? (
+                  <span className="cp-cell-sub" title={`Recipe declares ${primary.serving.contextLength.toLocaleString()}; the endpoint reports ${liveCtx.toLocaleString()} live.`}> · live</span>
+                ) : null}
+              </dd>
             </dl>
             {connect ? <ExternalConnectPanel connect={connect} recipe={primary} /> : null}
             <div style={{ marginTop: 14 }}>
@@ -402,6 +499,7 @@ function OverviewTab({
             ))}
           </>
         ) : null}
+      </div>
       </div>
     </div>
   );

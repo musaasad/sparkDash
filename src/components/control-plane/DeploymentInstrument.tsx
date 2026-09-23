@@ -136,6 +136,14 @@ export function DeploymentInstrument({
             {view.modelName}
           </h3>
           <span className="cp-inst-runtime">{runtime}</span>
+          {view.diverged ? (
+            <span
+              className="cp-inst-live mono"
+              title={`Serving model discovered live (${view.modelName}); this deployment's recipe is bound to ${view.configuredModelId}.`}
+            >
+              · live
+            </span>
+          ) : null}
         </div>
         <span className={`cp-inst-state tone-${tone}`}>
           <span className="cp-inst-state-dot" aria-hidden="true" />

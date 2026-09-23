@@ -14,6 +14,7 @@ import { setDeployments } from "../../hooks/domainStore";
 
 vi.mock("../../api/client", () => ({
   fetchModel: vi.fn(),
+  fetchRecipes: vi.fn(),
   fetchRuntimes: vi.fn(),
   fetchActivity: vi.fn(),
   listDecodeBench: vi.fn(),
@@ -104,7 +105,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   setDeployments([dep]);
   fetchModel.mockResolvedValue({ model, recipes: [recipe], deployments: [dep] });
-  fetchModel.mockResolvedValue({ model, recipes: [recipe], deployments: [dep] });
+  (client.fetchRecipes as ReturnType<typeof vi.fn>).mockResolvedValue({ recipes: [recipe] });
   (client.fetchRuntimes as ReturnType<typeof vi.fn>).mockResolvedValue({ runtimes: [{ id: "tabbyapi-exl3", label: "TabbyAPI", launchable: true }] });
   (client.fetchActivity as ReturnType<typeof vi.fn>).mockResolvedValue({ events: [] });
   (client.listDecodeBench as ReturnType<typeof vi.fn>).mockResolvedValue({ active: null, last: null, history: [], defaults: {} });
@@ -227,5 +228,52 @@ describe("PerformanceTab port association (F8)", () => {
     const served = [...container.querySelectorAll(".cp-metric")].find((m) => m.textContent?.includes("Model served"));
     expect(served?.textContent).toContain("—");
     expect(served?.textContent).not.toContain("WRONG-model");
+  });
+});
+
+describe("ModelDetail live-first model identity", () => {
+  const llmSpark = (modelId: string, contextLength: number, backend: string) =>
+    ({ id: "n1", name: "Node One", online: true, llmPorts: [8889], metrics: { llm: [{ available: true, modelId, contextLength, backend }] } }) as SparkSnapshot;
+  const boundDep = (modelId: string): DeploymentStatus => ({ ...dep, modelId, nodeIds: ["n1"], apiPort: 8889, recipeId: "r-glm" });
+  const glmRecipe = { ...recipe, id: "r-glm", modelId: "deepseek-v41-flash", serving: { contextLength: 600000 }, metadata: {} } as RecipePublic;
+
+  it("renders a discovered live model (not in the registry) as a coherent view", async () => {
+    cleanupRenders();
+    setDeployments([boundDep("deepseek-v41-flash")]);
+    fetchModel.mockRejectedValue(new Error("model not found"));
+    (client.fetchRecipes as ReturnType<typeof vi.fn>).mockResolvedValue({ recipes: [glmRecipe] });
+    const { container } = render(
+      <ModelDetail modelId="GLM-5.3-Flash-EXL3" sparks={[llmSpark("GLM-5.3-Flash-EXL3", 850000, "vllm")]} navigate={() => {}} onDataChanged={() => {}} />
+    );
+    await flush();
+    expect(container.textContent).toContain("GLM-5.3-Flash-EXL3");
+    expect(container.textContent).toContain("live · discovered");
+    expect(container.textContent).toContain("850,000"); // live context wins over recipe 600k
+    expect(container.textContent).not.toContain("Model not found");
+  });
+
+  it("does NOT flag a same-model live alias as superseded (Qwen keeps friendly name)", async () => {
+    cleanupRenders();
+    setDeployments([boundDep("qwen38-flash-next")]);
+    fetchModel.mockResolvedValue({ model: { ...model, id: "qwen38-flash-next", name: "Qwen 3.8 Flash Next", family: "Qwen" }, recipes: [recipe], deployments: [dep] });
+    const { container } = render(
+      <ModelDetail modelId="qwen38-flash-next" sparks={[llmSpark("Qwen3.8-Flash-Next-EXL3", 262144, "tabbyapi")]} navigate={() => {}} onDataChanged={() => {}} />
+    );
+    await flush();
+    expect(container.textContent).toContain("Qwen 3.8 Flash Next");
+    expect(container.textContent).not.toContain("not currently serving");
+    expect(container.textContent).not.toContain("not serving");
+  });
+
+  it("flags a registered model whose endpoint now serves a DIFFERENT live model", async () => {
+    cleanupRenders();
+    setDeployments([boundDep("deepseek-v41-flash")]);
+    fetchModel.mockResolvedValue({ model: { ...model, id: "deepseek-v41-flash", name: "DeepSeek V4.1 Flash", family: "DeepSeek" }, recipes: [glmRecipe], deployments: [boundDep("deepseek-v41-flash")] });
+    const { container } = render(
+      <ModelDetail modelId="deepseek-v41-flash" sparks={[llmSpark("GLM-5.3-Flash-EXL3", 850000, "vllm")]} navigate={() => {}} onDataChanged={() => {}} />
+    );
+    await flush();
+    expect(container.textContent).toContain("not currently serving");
+    expect(container.textContent).toContain("GLM-5.3-Flash-EXL3");
   });
 });

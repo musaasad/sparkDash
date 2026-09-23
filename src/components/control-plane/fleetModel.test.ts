@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeFleetHealth, computeFleetAlerts, attentionNodeIds, nodeHealthRail, nodeMatchesRail } from "./fleetModel";
+import { computeFleetHealth, computeFleetAlerts, attentionNodeIds, nodeHealthRail, nodeMatchesRail, resolveServingModel, normalizeModelKey, derivedFamily } from "./fleetModel";
 import { nodeOomEvents, nodeOomEventsRecent } from "./cockpitModel";
 import type { SparkSnapshot, DeploymentStatus } from "../../api/types";
 
@@ -253,7 +253,7 @@ describe("TP2 polish helpers", () => {
       { id: "b", name: "Alpha Two", family: "Alpha", notes: "", archived: false, createdAt: 0, updatedAt: 0 },
       { id: "c", name: "Lone", family: null, notes: "", archived: false, createdAt: 0, updatedAt: 0 },
     ];
-    const groups = familyGroups(models, []);
+    const groups = familyGroups(models, new Set());
     expect(groups.find((g) => g.family === "Alpha")?.variantCount).toBe(2);
     expect(groups[groups.length - 1].family).toBe("Other");
   });
@@ -520,5 +520,76 @@ describe("cumulative-since-boot NV_ERR_NO_MEMORY is not an active incident", () 
     });
     expect(nodeOomEventsRecent(legacy)).toBe(14);
     expect(computeFleetAlerts([legacy], []).filter((a) => a.condition === "oom")).toHaveLength(1);
+  });
+});
+
+describe("live-first model identity (resolveServingModel)", () => {
+  const glmSpark = spark({
+    id: "dgx-1",
+    name: "DGX Spark 1",
+    llmPorts: [8888],
+    metrics: { ...spark().metrics, llm: [{ available: true, modelId: "GLM-5.3-Flash-EXL3", contextLength: 850000, backend: "vllm" } as never] },
+  });
+  const qwenSpark = spark({
+    id: "dgx-3",
+    name: "DGX Spark 3",
+    llmPorts: [8889],
+    metrics: { ...spark().metrics, llm: [{ available: true, modelId: "Qwen3.8-Flash-Next-EXL3", contextLength: 262144, backend: "tabbyapi" } as never] },
+  });
+  const sparks = [glmSpark, qwenSpark];
+  const models = [
+    { id: "qwen38-flash-next", name: "Qwen 3.8 Flash Next", family: "Qwen", notes: "", archived: false, createdAt: 0, updatedAt: 0 },
+    { id: "deepseek-v41-flash", name: "DeepSeek V4.1 Flash", family: "DeepSeek", notes: "", archived: false, createdAt: 0, updatedAt: 0 },
+  ];
+  const v41Recipe = { id: "v41-tp2-vllm-dgx12", name: "vLLM TP2", runtime: "vllm", serving: { contextLength: 600000 }, metadata: { servedModelId: "DeepSeek-V4.1-Flash-UNCENSORED-EXL3" }, nodeIds: ["dgx-1"] } as never;
+  const qwenRecipe = { id: "qwen38-tabbyapi-dgx3", name: "TabbyAPI", runtime: "tabbyapi", serving: { contextLength: 262144 }, metadata: {}, nodeIds: ["dgx-3"] } as never;
+  const recipes = [v41Recipe, qwenRecipe];
+  const glmDep = { ...dep("v41-tp2-vllm-dgx12", "running", "deepseek-v41-flash"), nodeIds: ["dgx-1"], apiPort: 8888 };
+  const qwenDep = { ...dep("qwen38-tabbyapi-dgx3", "running", "qwen38-flash-next"), nodeIds: ["dgx-3"], apiPort: 8889 };
+
+  it("normalizes quant/version noise so a served alias matches the registry name", () => {
+    expect(normalizeModelKey("Qwen3.8-Flash-Next-EXL3")).toBe(normalizeModelKey("Qwen 3.8 Flash Next"));
+    expect(normalizeModelKey("GLM-5.3-Flash-EXL3")).not.toBe(normalizeModelKey("DeepSeek V4.1 Flash"));
+    expect(derivedFamily("GLM-5.3-Flash-EXL3")).toBe("GLM");
+  });
+
+  it("surfaces a swapped live model (GLM) as discovered, overriding stale DeepSeek config", () => {
+    const s = resolveServingModel(glmDep, sparks, v41Recipe, models);
+    expect(s.modelId).toBe("GLM-5.3-Flash-EXL3");
+    expect(s.name).toBe("GLM-5.3-Flash-EXL3");
+    expect(s.source).toBe("live");
+    expect(s.diverged).toBe(true);
+    expect(s.configuredModelId).toBe("deepseek-v41-flash");
+    expect(s.contextLength).toBe(850000);
+  });
+
+  it("keeps the friendly registry name when the live alias is the SAME model (Qwen)", () => {
+    const s = resolveServingModel(qwenDep, sparks, qwenRecipe, models);
+    expect(s.modelId).toBe("qwen38-flash-next");
+    expect(s.name).toBe("Qwen 3.8 Flash Next");
+    expect(s.diverged).toBe(false);
+    expect(s.source).toBe("live");
+    expect(s.contextLength).toBe(262144);
+  });
+
+  it("falls back to the persisted config identity when the endpoint is offline", () => {
+    const offline = spark({ id: "dgx-1", llmPorts: [8888], metrics: { ...spark().metrics, llm: [{ available: false } as never] } });
+    const s = resolveServingModel(glmDep, [offline, qwenSpark], v41Recipe, models);
+    expect(s.modelId).toBe("deepseek-v41-flash");
+    expect(s.name).toBe("DeepSeek V4.1 Flash");
+    expect(s.source).toBe("config");
+    expect(s.diverged).toBe(false);
+    expect(s.contextLength).toBe(600000); // recipe fallback, never fabricated
+  });
+
+  it("deploymentViews shows the live model name + context for the swapped deployment", () => {
+    const views = deploymentViews(sparks, [glmDep, qwenDep], recipes, models);
+    const glm = views.find((v) => v.rawModelId === "GLM-5.3-Flash-EXL3");
+    expect(glm?.modelName).toBe("GLM-5.3-Flash-EXL3");
+    expect(glm?.contextLength).toBe(850000);
+    expect(glm?.diverged).toBe(true);
+    const qwen = views.find((v) => v.rawModelId === "qwen38-flash-next");
+    expect(qwen?.modelName).toBe("Qwen 3.8 Flash Next");
+    expect(qwen?.diverged).toBe(false);
   });
 });

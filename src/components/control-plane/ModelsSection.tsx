@@ -11,6 +11,7 @@ import { fetchActivity } from "../../api/client";
 import { ModelWizard } from "./ModelWizard";
 import {
   deploymentViews,
+  derivedFamily,
   deploymentTabCounts,
   deploymentMatchesTab,
   isErrorRow,
@@ -74,6 +75,33 @@ export function ModelsSection({ models, recipes, deployments, navigate, onSaved,
   const views = useMemo(() => deploymentViews(sparks, deployments, recipes, models), [sparks, deployments, recipes, models]);
   const nodeNames = useMemo(() => new Map(sparks.map((s) => [s.id, s.name])), [sparks]);
 
+  // The EFFECTIVE serving model per deployment (live-first). The catalog's
+  // "deployed" state and the discovered-model list both key off this, so a
+  // swapped endpoint (e.g. DeepSeek stopped, GLM started) deploys the LIVE model
+  // and the stale recipe model no longer claims to be serving.
+  const servingModelIds = useMemo(() => new Set(views.map((v) => v.rawModelId)), [views]);
+  const catalogModels = useMemo(() => {
+    const byId = new Map(active.map((m) => [m.id, m]));
+    for (const v of views) {
+      // A diverged live view whose serving id is not a registry model => discovered.
+      if (v.modelSource === "live" && v.diverged && !byId.has(v.rawModelId)) {
+        byId.set(v.rawModelId, {
+          id: v.rawModelId,
+          name: v.rawModelId,
+          family: derivedFamily(v.rawModelId),
+          discovered: true,
+          weightPaths: {},
+          tags: [],
+          notes: "Discovered live from a serving endpoint; not registered.",
+          archived: false,
+          createdAt: v.deployment.updatedAt ?? 0,
+          updatedAt: v.deployment.updatedAt ?? 0,
+        });
+      }
+    }
+    return [...byId.values()];
+  }, [active, views]);
+
   const tabCounts = useMemo(() => deploymentTabCounts(deployments), [deployments]);
 
   const filtered = useMemo(() => {
@@ -121,7 +149,9 @@ export function ModelsSection({ models, recipes, deployments, navigate, onSaved,
         header: "Deployment",
         align: "right",
         render: (m) => {
-          const deps = deployments.filter((d) => d.modelId === m.id);
+          // Key off the EFFECTIVE serving model (live-first), not the persisted
+          // recipe id — so a swapped endpoint deploys the live model here.
+          const deps = views.filter((v) => v.rawModelId === m.id).map((v) => v.deployment);
           if (deps.length === 0) return <span className="muted">not deployed</span>;
           // Worst-first: degraded outranks expected-missing outranks running.
           const worst =
@@ -145,7 +175,7 @@ export function ModelsSection({ models, recipes, deployments, navigate, onSaved,
     [recipes, deployments, now]
   );
 
-  const groups = useMemo(() => familyGroups(active, deployments), [active, deployments]);
+  const groups = useMemo(() => familyGroups(catalogModels, servingModelIds), [catalogModels, servingModelIds]);
   const shownColumns = useMemo(() => catalogColumns.filter((c) => visibleCols.has(c.key)), [catalogColumns, visibleCols]);
 
   function toggleOpen(key: string) {
@@ -404,7 +434,7 @@ export function ModelsSection({ models, recipes, deployments, navigate, onSaved,
 
       {/* Model catalog — family grouping with variant counts */}
       <div className="cp-section-block">
-        <SectionBand icon={<BotIcon />} title="Model catalog" count={active.length} />
+        <SectionBand icon={<BotIcon />} title="Model catalog" count={catalogModels.length} />
         {groups.length === 0 ? (
           <EmptyState
             icon={<BotIcon />}
