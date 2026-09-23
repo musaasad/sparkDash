@@ -119,6 +119,9 @@ export function DeploymentInstrument({
   const thermal = hottestThermal(view.nodes, temperatureUnit);
   const agg = view.telemetry?.aggregation ?? aggregationLegend(view.telemetry?.membersReporting ?? 0, view.nodes.length);
   const missing = view.telemetry?.membersMissingTelemetry ?? [];
+  // TP worker ranks online but API-served by the head — expected, shown calmly,
+  // never lumped into the "no endpoint" fault wording.
+  const headServed = view.telemetry?.membersHeadServedApi ?? [];
 
   // Latency/queue micro-gauges first, then the hottest node's physical read-outs
   // — subordinate to the dominant throughput number, never competing with it.
@@ -174,6 +177,11 @@ export function DeploymentInstrument({
         <div className="cp-inst-agg mono">
           AGGREGATE · {agg}
           {missing.length > 0 ? <span className="cp-inst-agg-missing"> · no endpoint: {missing.join(", ")}</span> : null}
+          {headServed.length > 0 ? (
+            <span className="cp-inst-agg-worker" title="TP worker rank — the head serves the OpenAI API for the whole group; this rank still reports its own physical telemetry, so this is expected, not a fault">
+              {" "}· API via head: {headServed.join(", ")}
+            </span>
+          ) : null}
         </div>
       ) : null}
 
@@ -271,6 +279,33 @@ export function DeploymentInstrument({
           </div>
         ) : null}
       </div>
+
+      {/* TP / multi-node: report each participating rank INDEPENDENTLY underneath
+          the logical deployment — head vs worker, each with its own physical
+          telemetry. A worker showing api·head is expected, not a fault. */}
+      {view.nodes.length > 1 ? (
+        <div className="cp-inst-ranks mono">
+          <span className="cp-inst-ranks-label">RANKS · {view.nodes.length}</span>
+          {view.nodes.map((n) => {
+            const isHead = node != null && n.id === node.id;
+            const g = n.metrics?.gpu;
+            const um = n.metrics?.unifiedMemory;
+            const mem = um?.total ? Math.round(((um.used ?? 0) / um.total) * 100) : null;
+            return (
+              <span key={n.id} className={`cp-inst-rank${n.online ? "" : " is-offline"}`}>
+                <span className="cp-inst-rank-dot" aria-hidden="true" />
+                <span className="cp-inst-rank-name">{n.name || n.id}</span>
+                <span className="cp-inst-rank-role">{isHead ? "head" : "worker"}</span>
+                <span className="cp-inst-rank-metric">{g?.temperature != null ? `${g.temperature}°C` : "—"}</span>
+                <span className="cp-inst-rank-metric">{g?.usage != null ? `util ${g.usage}%` : "util —"}</span>
+                <span className="cp-inst-rank-metric">{mem != null ? `mem ${mem}%` : "mem —"}</span>
+                {isHead ? null : <span className="cp-inst-rank-api" title="No own OpenAI endpoint — API served by the head (expected for a TP worker)">api·head</span>}
+                {!n.online ? <span className="cp-inst-rank-off">OFFLINE</span> : null}
+              </span>
+            );
+          })}
+        </div>
+      ) : null}
     </div>
   );
 }

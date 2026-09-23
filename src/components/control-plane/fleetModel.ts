@@ -152,6 +152,13 @@ export interface DeploymentTelemetry {
   membersReporting: number;
   /** Member node names with NO readable probe — named honestly, never treated as 0. */
   membersMissingTelemetry: string[];
+  /**
+   * TP worker ranks that are ONLINE but expose no own OpenAI endpoint because the
+   * TP HEAD serves the API for the whole group. This is EXPECTED for vLLM TP2
+   * (rank 1 does not serve HTTP) — NOT a fault, so it is kept separate from
+   * membersMissingTelemetry and never reads as an unhealthy "no endpoint".
+   */
+  membersHeadServedApi?: string[];
 }
 
 /** Coarse operational state a deployment row can render (canonical vocabulary). */
@@ -477,9 +484,13 @@ function ageMsFor(s: SparkSnapshot | undefined, domain: string, now = Date.now()
  * A member node that exposes NO probe series is NAMED (`membersMissingTelemetry`)
  * and excluded from the aggregation — never folded in as 0.
  */
-export function deploymentTelemetry(sparks: SparkSnapshot[], d: DeploymentStatus): DeploymentTelemetry | null {
+export function deploymentTelemetry(sparks: SparkSnapshot[], d: DeploymentStatus, topology?: RecipeTopology | null): DeploymentTelemetry | null {
   const primary = primaryNodeOf(sparks, d);
   const llm = llmForNode(primary, d.apiPort);
+  // A TP group serves its OpenAI API from the head only; worker ranks legitimately
+  // expose no own endpoint. Any OTHER multi-node binding (replica, unknown) with a
+  // member that has no probe is a genuine gap and stays named as missing.
+  const isTp = typeof topology === "string" && /^tp\d?/i.test(topology);
 
   let genTotal = 0;
   let genSeen = false;
@@ -490,6 +501,7 @@ export function deploymentTelemetry(sparks: SparkSnapshot[], d: DeploymentStatus
   let kvMax: number | null = null;
   let gpuMax: number | null = null;
   const missing: string[] = [];
+  const headServed: string[] = [];
   let reporting = 0;
   let ageMax: number | null = null;
 
@@ -497,7 +509,14 @@ export function deploymentTelemetry(sparks: SparkSnapshot[], d: DeploymentStatus
     const node = sparks.find((s) => s.id === id);
     const series = llmForNode(node, d.apiPort);
     if (!series?.available) {
-      if (node) missing.push(node.name || node.id);
+      if (node) {
+        // An ONLINE non-head member with no own probe is a TP worker rank whose
+        // API is served by the head — expected, not a fault. Only the head losing
+        // its API, or an offline/unreachable member, is a genuine "missing".
+        const isHead = primary != null && node.id === primary.id;
+        if (!isHead && node.online && isTp) headServed.push(node.name || node.id);
+        else missing.push(node.name || node.id);
+      }
       continue;
     }
     reporting++;
@@ -559,6 +578,7 @@ export function deploymentTelemetry(sparks: SparkSnapshot[], d: DeploymentStatus
     aggregation: aggregationLegend(reporting, d.nodeIds.length),
     membersReporting: reporting,
     membersMissingTelemetry: missing,
+    membersHeadServedApi: headServed,
   };
 }
 
@@ -656,7 +676,7 @@ export function deploymentViews(
       contextLength: serving.contextLength,
       port: deployment.apiPort,
       decodeTps: deploymentDecodeTps(sparks, deployment),
-      telemetry: deploymentTelemetry(sparks, deployment),
+      telemetry: deploymentTelemetry(sparks, deployment, recipe?.topology ?? null),
       uptime: primary?.uptime ?? null,
     };
   });

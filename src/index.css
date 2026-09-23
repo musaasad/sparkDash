@@ -4634,6 +4634,24 @@ button.cp-link { background: none; border: none; padding: 0; cursor: pointer; fo
 .cp-inst-cell-value { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .cp-inst-cell-unit { font-size: 10px; color: var(--color-muted); font-weight: 400; }
 
+/* TP rank breakdown — each participating node reported INDEPENDENTLY under the
+   logical deployment (head vs worker, own physical telemetry). Subordinate to
+   the gauge; a worker's api·head marker is calm (expected), not a warning. */
+.cp-inst-ranks {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3);
+  border-top: 1px solid var(--color-border); padding-top: var(--space-2);
+}
+.cp-inst-ranks-label { font-size: 10px; letter-spacing: 0.1em; color: var(--color-muted); }
+.cp-inst-rank { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--color-fg); }
+.cp-inst-rank.is-offline { opacity: 0.5; }
+.cp-inst-rank-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-ok); flex: 0 0 auto; }
+.cp-inst-rank.is-offline .cp-inst-rank-dot { background: var(--color-danger); }
+.cp-inst-rank-name { font-weight: 600; }
+.cp-inst-rank-role { font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-muted); border: 1px solid var(--color-border); border-radius: 3px; padding: 0 4px; }
+.cp-inst-rank-metric { color: var(--color-muted); font-variant-numeric: tabular-nums; }
+.cp-inst-rank-api { font-size: 9px; letter-spacing: 0.04em; color: var(--color-accent); opacity: 0.8; }
+.cp-inst-rank-off { font-size: 9px; letter-spacing: 0.08em; color: var(--color-danger); }
+
 /* ─── Throughput gauge ─────────────────────────────────── */
 .cp-gauge { position: relative; display: grid; place-items: center; flex: 0 0 auto; }
 .cp-gauge svg { position: absolute; inset: 0; }
@@ -4904,6 +4922,8 @@ button.cp-link { background: none; border: none; padding: 0; cursor: pointer; fo
 /* Aggregation legend — explicit MAX/SUM, named missing ranks. */
 .cp-inst-agg { font-size: 10px; letter-spacing: 0.08em; color: var(--color-muted); }
 .cp-inst-agg-missing { color: var(--color-warning); }
+/* TP worker whose API is served by the head — calm/neutral, NOT a warning. */
+.cp-inst-agg-worker { color: var(--color-muted); opacity: 0.85; }
 
 /* Thermal readout — NORMAL by default, amber only when genuinely warranted. */
 .cp-inst-thermal { font-size: 12px; font-weight: 600; letter-spacing: 0.04em; }

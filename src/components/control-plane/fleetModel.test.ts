@@ -390,6 +390,33 @@ describe("deploymentTelemetry", () => {
     expect(t.aggregation).toContain("MAX kv/vram");
   });
 
+  it("TP worker rank online with no own endpoint is head-served, not a fault", () => {
+    const d = { ...dep("r1", "running"), nodeIds: ["head", "worker"] };
+    const sparks = [
+      nodeWithLlm("head", { role: "head", name: "dgx-1" }, { generationTps: 40 }),
+      // TP worker is ONLINE but exposes no probe — the head serves the whole group's API.
+      spark({ id: "worker", name: "dgx-2", online: true, llmPorts: [], metrics: { ...spark().metrics, llm: [] } }),
+    ];
+    const t = deploymentTelemetry(sparks, d, "tp2")!;
+    // Named as head-served (expected), NOT as a missing/no-endpoint fault.
+    expect(t.membersMissingTelemetry).toEqual([]);
+    expect(t.membersHeadServedApi).toEqual(["dgx-2"]);
+    // Head reports → the logical deployment is healthy, not degraded.
+    expect(t.available).toBe(true);
+    expect(t.membersReporting).toBe(1);
+  });
+
+  it("same online no-probe member is a genuine MISSING (not head-served) when topology is not TP", () => {
+    const d = { ...dep("r1", "running"), nodeIds: ["head", "replica"] };
+    const sparks = [
+      nodeWithLlm("head", { role: "head", name: "dgx-1" }, { generationTps: 40 }),
+      spark({ id: "replica", name: "dgx-9", online: true, llmPorts: [], metrics: { ...spark().metrics, llm: [] } }),
+    ];
+    const t = deploymentTelemetry(sparks, d, "single")!;
+    expect(t.membersMissingTelemetry).toEqual(["dgx-9"]);
+    expect(t.membersHeadServedApi ?? []).toEqual([]);
+  });
+
   it("F2: aggregate.available is true when ANY member reports (primary down)", () => {
     const d = { ...dep("r1", "running"), nodeIds: ["a", "b"] };
     const a = spark({ id: "a", llmPorts: [8889], metrics: { ...spark().metrics, llm: [llm({ available: false })] } });
