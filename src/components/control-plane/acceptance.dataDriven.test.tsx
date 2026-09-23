@@ -18,7 +18,7 @@ import { OverviewSection } from "./OverviewSection";
 import { DeploymentInstrument } from "./DeploymentInstrument";
 import { FabricPanel } from "./FabricPanel";
 import { computeFleetHealth, deploymentViews, deriveRuntimeState, type DeploymentView, type DeploymentTelemetry } from "./fleetModel";
-import { deriveFabric, fabricLayout } from "./fabricModel";
+import { deriveFabric, deriveFabricTopology, fabricLayout } from "./fabricModel";
 import { nodeTelemetryRow, roleOf, primaryView, fabricHealthSummary } from "./cockpitModel";
 import { evaluateTopology, type TopologyDescriptor } from "./topologyCapability";
 import type { RecipeDraft } from "./RecipeEditor";
@@ -120,9 +120,9 @@ describe("79 fleet size is data-driven (4th node, no slot assumption)", () => {
     expect(fabric.nodes.map((n) => n.id)).toContain("dgx-4");
     expect(fabric.links.some((l) => [l.from, l.to].includes("dgx-4"))).toBe(true);
 
-    const positions = fabricLayout(4);
-    expect(positions).toHaveLength(4);
-    expect(new Set(positions.map((p) => `${p.x},${p.y}`)).size).toBe(4);
+    const layout = fabricLayout(fabric, deriveFabricTopology(fabric));
+    expect(layout.positions).toHaveLength(4);
+    expect(new Set(layout.positions.map((p) => `${p.x},${p.y}`)).size).toBe(4);
 
     const v = deploymentViews(nodes, [dep({ nodeIds: ["dgx-1", "dgx-2", "dgx-3", "dgx-4"] })], [], []);
     expect(v[0].nodes.map((n) => n.id)).toEqual(["dgx-1", "dgx-2", "dgx-3", "dgx-4"]);

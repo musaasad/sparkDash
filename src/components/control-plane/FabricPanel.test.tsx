@@ -171,3 +171,118 @@ describe("FabricPanel honesty", () => {
     }
   });
 });
+
+describe("FabricPanel topology + interactivity", () => {
+  const clickBy = (container: HTMLElement, text: string) => {
+    const btn = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === text)!;
+    act(() => btn.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    return btn;
+  };
+
+  it("labels a fully configured triangle as PHYSICAL · TRIANGLE, not from node count", () => {
+    cleanupRenders();
+    const nodes = [...Array(3).keys()].map((i) =>
+      spark({ id: `n${i}`, fabricLinks: [0, 1, 2].filter((o) => o !== i).map((to) => ({ to: `n${to}`, medium: "cx7" as const })) })
+    );
+    const { container } = render(<FabricPanel sparks={nodes} views={[]} navigate={() => {}} />);
+    expect(container.querySelector(".cp-fabric-wiring")?.getAttribute("data-topology")).toBe("triangle");
+    expect(container.querySelector(".cp-fabric-wiring")?.textContent).toContain("PHYSICAL · TRIANGLE");
+    expect(container.querySelectorAll(".cp-fabric-link")).toHaveLength(3);
+  });
+
+  it("says WIRING NOT DISCOVERED with an unknown topology when 3 nodes are unlinked", () => {
+    cleanupRenders();
+    const nodes = [spark({ id: "a" }), spark({ id: "b" }), spark({ id: "c" })];
+    const { container } = render(<FabricPanel sparks={nodes} views={[]} navigate={() => {}} />);
+    expect(container.querySelector(".cp-fabric-wiring")?.getAttribute("data-topology")).toBe("unknown");
+    expect(container.querySelector(".cp-fabric-wiring")?.textContent).toContain("WIRING NOT DISCOVERED");
+  });
+
+  it("renders the graph inside a viewBox SVG that scales", () => {
+    cleanupRenders();
+    const nodes = [spark({ id: "a", cx7Ip: "10.0.0.1" }), spark({ id: "b", cx7Ip: "10.0.0.2" })];
+    const { container } = render(<FabricPanel sparks={nodes} views={[]} navigate={() => {}} />);
+    const svg = container.querySelector("svg.cp-fabric-links")!;
+    expect(svg.getAttribute("viewBox")?.startsWith("0 0 ")).toBe(true);
+    expect(svg.getAttribute("preserveAspectRatio")).toBe("xMidYMid meet");
+    expect(svg.getAttribute("width")).toBe("100%");
+  });
+
+  it("zooms the graph in/out without replacing the topology", () => {
+    cleanupRenders();
+    const nodes = [spark({ id: "a", cx7Ip: "10.0.0.1" }), spark({ id: "b", cx7Ip: "10.0.0.2" })];
+    const { container } = render(<FabricPanel sparks={nodes} views={[]} navigate={() => {}} />);
+    const before = container.querySelector("svg.cp-fabric-links g")!.getAttribute("transform")!;
+    clickBy(container, "+");
+    const after = container.querySelector("svg.cp-fabric-links g")!.getAttribute("transform")!;
+    expect(after).not.toBe(before);
+    expect(after).toContain("scale(1.25");
+    expect(container.querySelector(".cp-fabric-wiring")?.getAttribute("data-topology")).toBe("pair");
+  });
+
+  it("selects a node on click and shows a compact detail (name, role, health, links)", () => {
+    cleanupRenders();
+    const nodes = [
+      spark({ id: "head1", name: "Head One", role: "head", fabricLinks: [{ to: "w1", medium: "cx7" }] }),
+      spark({ id: "w1", name: "Worker One", role: "worker" }),
+    ];
+    const { container } = render(<FabricPanel sparks={nodes} views={[]} navigate={() => {}} />);
+    act(() => container.querySelector<HTMLButtonElement>(".cp-fabric-node")!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    const detail = container.querySelector(".cp-fabric-detail")!;
+    expect(detail.textContent).toContain("Head One");
+    expect(detail.textContent).toContain("HEAD");
+    expect(detail.textContent).toContain("NOMINAL");
+    expect(detail.textContent).toContain("CONFIGURED");
+    expect(container.querySelector(".cp-fabric-node")?.classList.contains("is-selected")).toBe(true);
+  });
+
+  it("shows which models are placed on a selected node", () => {
+    cleanupRenders();
+    const nodes = [spark({ id: "a" }), spark({ id: "b" })];
+    const { container } = render(<FabricPanel sparks={nodes} views={[view("Llama 3", "a")]} navigate={() => {}} />);
+    act(() => container.querySelector<HTMLButtonElement>(".cp-fabric-node")!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(container.querySelector(".cp-fabric-detail")?.textContent).toContain("Llama 3");
+  });
+
+  it("offers an explicit List fallback toggle that lists nodes and their links as rows", () => {
+    cleanupRenders();
+    const nodes = [
+      spark({ id: "a", name: "Alpha", cx7Ip: "10.0.0.1" }),
+      spark({ id: "b", name: "Beta", cx7Ip: "10.0.0.2" }),
+    ];
+    const { container } = render(<FabricPanel sparks={nodes} views={[]} navigate={() => {}} />);
+    clickBy(container, "List");
+    expect(container.querySelectorAll(".cp-fabric-node")).toHaveLength(0);
+    const rows = container.querySelectorAll(".cp-fabric-list-row:not(.is-head)");
+    expect(rows).toHaveLength(2);
+    expect(container.querySelector(".cp-fabric-list")?.textContent).toContain("Alpha");
+    expect(container.querySelector(".cp-fabric-list")?.textContent).toContain("DISCOVERED");
+    expect(container.querySelector(".cp-fabric-list-row .cp-fabric-list-links")?.textContent).not.toContain("no link discovered");
+  });
+
+  it("auto-falls back to the list at high node counts", () => {
+    cleanupRenders();
+    const nodes = [...Array(10).keys()].map((i) => spark({ id: `n${i}` }));
+    const { container } = render(<FabricPanel sparks={nodes} views={[]} navigate={() => {}} />);
+    expect(container.querySelectorAll(".cp-fabric-list-row:not(.is-head)")).toHaveLength(10);
+    expect(container.querySelectorAll(".cp-fabric-node")).toHaveLength(0);
+  });
+
+  it("lists placed models in the fallback when in deployment mode", () => {
+    cleanupRenders();
+    const nodes = [spark({ id: "a" }), spark({ id: "b" })];
+    const { container } = render(<FabricPanel sparks={nodes} views={[view("Llama 3", "a")]} navigate={() => {}} />);
+    clickBy(container, "Deployment");
+    clickBy(container, "List");
+    expect(container.querySelector(".cp-fabric-list")?.textContent).toContain("Llama 3");
+    expect(container.querySelectorAll(".cp-fabric-link")).toHaveLength(0);
+  });
+
+  it("keeps the provenance legend honest in list mode too", () => {
+    cleanupRenders();
+    const { container } = render(<FabricPanel sparks={[spark()]} views={[]} navigate={() => {}} />);
+    clickBy(container, "List");
+    expect(container.querySelector(".cp-fabric-legend")?.textContent).toContain("configured link");
+    expect(container.querySelector(".cp-fabric-legend")?.textContent).toContain("wiring honest when unknown");
+  });
+});

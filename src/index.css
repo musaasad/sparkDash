@@ -4622,29 +4622,37 @@ button.cp-link { background: none; border: none; padding: 0; cursor: pointer; fo
   border: 1px solid var(--color-border); border-radius: var(--radius-card);
   background: var(--color-surface); padding: var(--space-4);
   display: flex; flex-direction: column; gap: var(--space-3);
-  height: 100%;
+  height: 100%; min-width: 0;
 }
-.cp-fabric-head { display: flex; align-items: baseline; gap: var(--space-2); }
+.cp-fabric-head { display: flex; align-items: baseline; gap: var(--space-2); flex-wrap: wrap; }
 .cp-fabric-title { font-size: 11px; font-weight: 600; letter-spacing: 0.12em; color: var(--color-muted-strong); }
 .cp-fabric-count { font-size: 12px; color: var(--color-muted); }
 .cp-fabric-wiring { margin-left: auto; font-size: 10px; letter-spacing: 0.1em; color: var(--color-muted-strong); }
 .cp-fabric-wiring.is-honest { color: var(--color-warning); }
-/* Centre the graph in the leftover panel space so no empty band remains. */
-.cp-fabric-canvas { position: relative; align-self: center; margin-block: auto; }
-.cp-fabric-links { position: absolute; inset: 0; }
-.cp-fabric-placeholders { position: absolute; inset: 0; }
+/* Graph fills the leftover panel space; SVG viewBox scales, never spills. */
+.cp-fabric-canvas {
+  position: relative; align-self: center; margin-block: auto;
+  width: 100%; min-width: 0; max-height: 100%;
+}
+.cp-fabric-graph { position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; }
+.cp-fabric-graph:active { cursor: grabbing; }
 .cp-fabric-placeholders line { stroke: var(--color-border); stroke-width: 1; stroke-dasharray: 2 5; }
 .cp-fabric-link line { stroke: var(--color-border-strong); stroke-width: 1; }
+.cp-fabric-link.prov-discovered line { stroke: var(--color-border); }
 .cp-fabric-link.is-degraded line { stroke: var(--color-warning); stroke-dasharray: 3 3; }
+.cp-fabric-link.tone-warn line { stroke: var(--color-warning); }
+.cp-fabric-link.tone-alert line { stroke: var(--inst-tone-alert); }
+.cp-fabric-link.tone-off line { opacity: 0.5; }
 .cp-fabric-link-speed { font-size: 9px; fill: var(--color-muted); letter-spacing: 0.06em; }
 .cp-fabric-node {
-  position: absolute; display: flex; flex-direction: column; gap: 3px;
+  position: absolute; left: 0; top: 0; display: flex; flex-direction: column; gap: 3px;
   padding: 10px 12px; text-align: left;
   border: 1px solid var(--color-border); border-left: 2px solid var(--inst-tone-calm);
   border-radius: var(--radius-control); background: var(--color-surface-elevated, var(--color-surface));
   cursor: pointer; overflow: hidden;
 }
 .cp-fabric-node:hover { border-color: var(--color-border-strong); }
+.cp-fabric-node.is-selected { border-color: var(--color-accent); box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-accent) 35%, transparent); }
 .cp-fabric-node.tone-live { border-left-color: var(--inst-tone-live); }
 .cp-fabric-node.tone-warn { border-left-color: var(--inst-tone-warn); }
 .cp-fabric-node.tone-alert { border-left-color: var(--inst-tone-alert); }
@@ -4770,6 +4778,39 @@ button.cp-link { background: none; border: none; padding: 0; cursor: pointer; fo
 .cp-fabric-link.prov-configured line { stroke: var(--color-border-strong); }
 .cp-fabric-link.prov-discovered line { stroke: var(--color-border); }
 .cp-fabric-node-models.is-empty { font-style: italic; }
+
+/* Zoom/pan controls, list/table fallback, and selected-node detail. */
+.cp-fabric-view { display: flex; gap: 2px; }
+.cp-fabric-list { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.cp-fabric-list-row {
+  display: grid; grid-template-columns: minmax(140px, 1.4fr) 90px 90px minmax(0, 2.6fr);
+  gap: var(--space-3); align-items: center; width: 100%;
+  padding: 7px var(--space-3); text-align: left;
+  background: transparent; border: 1px solid var(--color-border); border-radius: var(--radius-control);
+  color: var(--color-text); cursor: pointer;
+}
+.cp-fabric-list-row.is-head {
+  background: var(--color-surface-secondary, var(--color-surface));
+  letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-muted); cursor: default;
+}
+.cp-fabric-list-row:not(.is-head):hover { border-color: var(--color-border-strong); }
+.cp-fabric-list-row.is-selected { border-color: var(--color-accent); }
+.cp-fabric-list-row.tone-warn { border-left: 2px solid var(--inst-tone-warn); }
+.cp-fabric-list-row.tone-alert { border-left: 2px solid var(--inst-tone-alert); }
+.cp-fabric-list-row.tone-off { border-left: 2px solid var(--inst-tone-off); opacity: 0.72; }
+.cp-fabric-list-name { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; font-weight: 600; }
+.cp-fabric-list-links { font-size: 10px; color: var(--color-muted); overflow-wrap: anywhere; }
+.cp-fabric-detail {
+  display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap;
+  padding: 8px var(--space-3); border: 1px solid var(--color-border);
+  border-radius: var(--radius-control); font-size: 11px; min-width: 0;
+}
+.cp-fabric-detail-name { font-weight: 700; font-size: 12px; }
+.cp-fabric-list-row.is-head span { font-size: 9px; }
+@media (max-width: 900px) {
+  .cp-fabric-list-row:not(.is-head) { grid-template-columns: 1fr; row-gap: 4px; }
+  .cp-fabric-list-row.is-head { display: none; }
+}
 
 .cp-add-compute { display: flex; flex-direction: column; gap: 8px; }
 .cp-issue-list { font-size: 12px; }

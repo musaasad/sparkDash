@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { deriveFabric, fabricLayout, fabricLinkProvenanceLabel } from "./fabricModel";
+import { deriveFabric, deriveFabricTopology, fabricLayout, fabricLinkProvenanceLabel, fabricTopologyLabel } from "./fabricModel";
 import type { DeploymentView } from "./fleetModel";
 import type { SparkSnapshot, DeploymentStatus } from "../../api/types";
 
@@ -169,25 +169,114 @@ describe("deriveFabric", () => {
   });
 });
 
-describe("fabricLayout", () => {
-  it("returns [] for 0 and one position per node for 1..5", () => {
-    expect(fabricLayout(0)).toEqual([]);
-    for (const n of [1, 2, 3, 4, 5]) expect(fabricLayout(n)).toHaveLength(n);
+describe("deriveFabricTopology — classified from the EDGE SET, never node count", () => {
+  const nodes = (n: number) => [...Array(n).keys()].map((i) => ({ id: `n${i}` }));
+  const links = (pairs: Array<[string, string]>) => pairs.map(([from, to], i) => ({ id: `l${i}`, from, to }));
+
+  it("single for 1 node", () => {
+    expect(deriveFabricTopology({ nodes: nodes(1), links: [] })).toBe("single");
   });
 
-  it("keeps 1..5 coherent — distinct, deterministic, capped at 2 columns", () => {
-    for (const n of [1, 2, 3, 4, 5]) {
-      const pos = fabricLayout(n);
-      expect(pos.map((p) => `${p.x},${p.y}`).length).toBe(new Set(pos.map((p) => `${p.x},${p.y}`)).size);
-      expect(pos.map((p) => p.index)).toEqual([...Array(n).keys()]);
-      for (const p of pos) {
+  it("unknown when nodes>=2 but no link is discovered/configured", () => {
+    for (const n of [2, 3, 4, 6, 8]) {
+      expect(deriveFabricTopology({ nodes: nodes(n), links: [] })).toBe("unknown");
+    }
+  });
+
+  it("pair for 2 nodes joined", () => {
+    expect(deriveFabricTopology({ nodes: nodes(2), links: links([["n0", "n1"]]) })).toBe("pair");
+  });
+
+  it("triangle ONLY when all 3 pairs are present", () => {
+    expect(deriveFabricTopology({ nodes: nodes(3), links: links([["n0", "n1"], ["n1", "n2"], ["n0", "n2"]]) })).toBe("triangle");
+    // 2 edges on 3 nodes is a path, i.e. a star — NOT a triangle (node count does not decide)
+    expect(deriveFabricTopology({ nodes: nodes(3), links: links([["n0", "n1"], ["n1", "n2"]]) })).toBe("star");
+    // a single edge on 3 nodes is neither triangle nor star
+    expect(deriveFabricTopology({ nodes: nodes(3), links: links([["n0", "n1"]]) })).toBe("custom");
+  });
+
+  it("ring ONLY when every node joins exactly two others in one cycle", () => {
+    expect(deriveFabricTopology({ nodes: nodes(4), links: links([["n0", "n1"], ["n1", "n2"], ["n2", "n3"], ["n3", "n0"]]) })).toBe("ring");
+    // 4 nodes fully linked is a MESH, not a ring
+    expect(
+      deriveFabricTopology({ nodes: nodes(4), links: links([["n0", "n1"], ["n0", "n2"], ["n0", "n3"], ["n1", "n2"], ["n1", "n3"], ["n2", "n3"]]) })
+    ).toBe("mesh");
+  });
+
+  it("mesh/full ONLY for a complete graph >3", () => {
+    expect(
+      deriveFabricTopology({ nodes: nodes(5), links: links([["n0", "n1"], ["n0", "n2"], ["n0", "n3"], ["n0", "n4"], ["n1", "n2"], ["n1", "n3"], ["n1", "n4"], ["n2", "n3"], ["n2", "n4"], ["n3", "n4"]]) })
+    ).toBe("mesh");
+  });
+
+  it("star ONLY when one hub joins all and leaves touch only the hub", () => {
+    expect(deriveFabricTopology({ nodes: nodes(4), links: links([["n0", "n1"], ["n0", "n2"], ["n0", "n3"]]) })).toBe("star");
+    // same degree spread but with a leaf-leaf extra edge => custom
+    expect(deriveFabricTopology({ nodes: nodes(4), links: links([["n0", "n1"], ["n0", "n2"], ["n0", "n3"], ["n1", "n2"]]) })).toBe("custom");
+  });
+
+  it("custom for a real but other-shaped graph (a path)", () => {
+    expect(deriveFabricTopology({ nodes: nodes(4), links: links([["n0", "n1"], ["n1", "n2"], ["n2", "n3"]]) })).toBe("custom");
+  });
+
+  it("duplicate + self links never inflate the shape", () => {
+    expect(deriveFabricTopology({ nodes: nodes(3), links: links([["n0", "n1"], ["n1", "n0"], ["n2", "n2"]]) })).toBe("custom");
+    expect(deriveFabricTopology({ nodes: nodes(3), links: links([["n0", "n1"], ["n1", "n0"], ["n1", "n2"], ["n0", "n2"]]) })).toBe("triangle");
+  });
+
+  it("labels the physical topology with honest provenance", () => {
+    expect(fabricTopologyLabel("triangle", [{ provenance: "configured" }, { provenance: "configured" }, { provenance: "configured" }])).toBe(
+      "PHYSICAL · TRIANGLE · 3 LINKS · CONFIGURED"
+    );
+    expect(fabricTopologyLabel("unknown", [])).toBe("PHYSICAL · UNKNOWN · WIRING NOT DISCOVERED");
+  });
+});
+
+describe("fabricLayout — topology-aware, viewBox-scaled", () => {
+  const nodes = (n: number) => [...Array(n).keys()].map((i) => ({ id: `n${i}` }));
+  const links = (pairs: Array<[string, string]>) => pairs.map(([from, to], i) => ({ id: `l${i}`, from, to }));
+  const triangle = links([["n0", "n1"], ["n1", "n2"], ["n0", "n2"]]);
+  const ring4 = links([["n0", "n1"], ["n1", "n2"], ["n2", "n3"], ["n3", "n0"]]);
+
+  it("returns empty for 0 nodes; one position per node for 1..8", () => {
+    const empty = fabricLayout({ nodes: [], links: [] }, "unknown");
+    expect(empty.positions).toEqual([]);
+    expect(empty.viewBox).toBe("0 0 0 0");
+    for (const n of [1, 2, 3, 4, 6, 8]) {
+      expect(fabricLayout({ nodes: nodes(n), links: [] }, "unknown").positions).toHaveLength(n);
+    }
+  });
+
+  it("reflects the topology: triangle is 3 distinct points, distinct from a grid", () => {
+    const tri = fabricLayout({ nodes: nodes(3), links: triangle }, "triangle");
+    expect(new Set(tri.positions.map((p) => `${p.x},${p.y}`)).size).toBe(3);
+    const grid = fabricLayout({ nodes: nodes(3), links: triangle }, "custom");
+    expect(tri.positions.map((p) => `${p.x},${p.y}`)).not.toEqual(grid.positions.map((p) => `${p.x},${p.y}`));
+  });
+
+  it("ring and mesh arrange on a circle, pair side by side, star hubs centre", () => {
+    const ring = fabricLayout({ nodes: nodes(4), links: ring4 }, "ring");
+    const pair = fabricLayout({ nodes: nodes(2), links: links([["n0", "n1"]]) }, "pair");
+    expect(pair.positions[0].y).toBe(pair.positions[1].y);
+    // ring: all four on a circle => 2 distinct y bands
+    expect(new Set(ring.positions.map((p) => p.y)).size).toBeGreaterThan(1);
+    const star = fabricLayout({ nodes: nodes(4), links: links([["n0", "n1"], ["n0", "n2"], ["n0", "n3"]]) }, "star");
+    expect(star.positions).toHaveLength(4);
+  });
+
+  it("is deterministic, non-negative, inside the viewBox, and never overlapping", () => {
+    for (const [n, topo] of [[1, "single"], [3, "triangle"], [4, "ring"], [6, "mesh"], [8, "unknown"], [12, "custom"]] as const) {
+      const l = fabricLayout({ nodes: nodes(n), links: [] }, topo as never);
+      expect(l.positions).toHaveLength(n);
+      const keys = l.positions.map((p) => `${p.x},${p.y}`);
+      expect(new Set(keys).size).toBe(n);
+      for (const p of l.positions) {
         expect(p.x).toBeGreaterThanOrEqual(0);
         expect(p.y).toBeGreaterThanOrEqual(0);
+        expect(p.x).toBeLessThan(l.width);
+        expect(p.y).toBeLessThan(l.height);
       }
-      // never more than two nodes share a row
-      const rows = new Map<number, number>();
-      for (const p of pos) rows.set(p.y, (rows.get(p.y) ?? 0) + 1);
-      for (const count of rows.values()) expect(count).toBeLessThanOrEqual(2);
+      expect(l.viewBox).toBe(`0 0 ${l.width} ${l.height}`);
     }
   });
 });
