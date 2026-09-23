@@ -30,6 +30,8 @@ import { detectRuntime, healthClassify, providerFor, RUNTIME_TYPES, processEvide
 import { DiscoveryService } from "./domain/discovery.js";
 import { ComputeDiscoveryService } from "./domain/computeDiscovery.js";
 import { validateComputeDraft } from "./domain/computeValidate.js";
+import { WeightsScanService } from "./domain/weightsScan.js";
+import { loadSettings } from "./settings.js";
 import { sshExec } from "./collectors/ssh.js";
 import { llmProbeHost } from "./collectors/llmHost.js";
 import {
@@ -155,6 +157,28 @@ export function createControlPlane(deps) {
     sparkRegistry,
     fetchImpl: deps.fetchImpl || fetch,
     sshExecFn: sshExec,
+  });
+
+  // ─── Local weights discovery (read-only, bounded, never a sweep) ──
+  // Sources ONLY operator-configured paths: settings.weightsDirs + every
+  // configured model.weightPaths value (plus bounded ad-hoc typed dirs).
+  const weightsScan = new WeightsScanService({
+    getConfiguredDirs: () => {
+      const configured = [];
+      try {
+        configured.push(...(loadSettings().weightsDirs || []));
+      } catch {
+        /* settings unavailable — fall through */
+      }
+      try {
+        for (const m of modelRegistry.list()) {
+          for (const p of Object.values(m.weightPaths || {})) if (p) configured.push(p);
+        }
+      } catch {
+        /* registry unavailable — fall through */
+      }
+      return configured;
+    },
   });
 
   // ─── Live Console ──────────────────────────────────────
@@ -610,6 +634,23 @@ export function createControlPlane(deps) {
           modelId: b.modelId,
         })
       );
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message });
+    }
+  });
+
+  // Local weights scan (read-only): configured dirs only, bounded, no sweep.
+  app.post("/api/models/scan-weights", async (req, res) => {
+    try {
+      const b = req.body || {};
+      const result = await weightsScan.scan({ dirs: b.dirs });
+      activity.push({
+        kind: "discovery",
+        subject: "weights",
+        summary: `local weights scanned (read-only, bounded)`,
+        meta: { configured: result.configured, matches: result.matches.length, truncated: result.truncated },
+      });
+      res.json(result);
     } catch (err) {
       res.status(err.status || 400).json({ error: err.message });
     }

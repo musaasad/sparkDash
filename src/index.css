@@ -4246,6 +4246,36 @@ html {
 .cp-pick.is-selected { border-color: var(--color-accent); background: var(--color-selected); color: var(--color-text-strong); }
 .cp-pick:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: 1px; }
 
+/* ─── Add-Model five-path cards. Discovery paths are the emphasised primaries;
+   the manual/Advanced card is de-emphasised but still reachable. Wrapping
+   cards keep scrollWidth <= clientWidth at every target width. */
+.cp-path-card {
+  flex: 1 1 210px;
+  min-width: 0;
+  max-width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text);
+}
+.cp-path-card:hover { border-color: var(--color-accent); }
+.cp-path-card:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: 1px; }
+.cp-path-card.is-discovery {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-raised, transparent);
+  border-left: 3px solid var(--color-accent);
+}
+.cp-path-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  font-weight: 600;
+}
+
 /* ─── Node rail: cp text rail replacing the legacy pill-nav ─── */
 .cp-node-rail { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; }
 .cp-node-tab {

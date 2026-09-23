@@ -1288,8 +1288,50 @@ export interface DiscoveredSeed extends DiscoveryProbeResult {
   port: number;
   scheme: "http" | "https";
   credRef: string | null;
+  /** Optional endpoint path when the operator typed a full base URL. */
+  endpointPath?: string | null;
   /** Optional opt-in capability result; null when the operator skipped it. */
   capabilities: ProbeCapabilitiesResult | null;
+}
+
+// ─── Local weights discovery (discovery-first Add Model path) ───────────────
+/** One discovered weight artifact. Provenance is `configured` | `user`. */
+export interface WeightsScanMatch {
+  path: string;
+  name: string;
+  dir: string;
+  sizeBytes: number | null;
+  ext: string | null;
+  provenance: "configured" | "user";
+}
+
+export interface WeightsScanRequest {
+  /** Optional ad-hoc operator-typed dirs; configured dirs are scanned anyway. */
+  dirs?: string[];
+}
+
+/**
+ * Read-only, bounded scan of CONFIGURED weight directories. `configured:false`
+ * is an honest state — never a fake empty success. No file is moved or copied.
+ */
+export interface WeightsScanResult {
+  configured: boolean;
+  configuredDirs: string[];
+  scannedDirs: string[];
+  missingDirs: string[];
+  matches: WeightsScanMatch[];
+  truncated: boolean;
+  notes: string[];
+  steps: string[];
+  readOnly: true;
+}
+
+/** Seed handed to ModelWizard from the local-weights path. */
+export interface LocalWeightsSeed {
+  path: string;
+  name: string;
+  dir: string;
+  provenance: "configured" | "user";
 }
 
 // ─── Guided Add Compute (read-only discovery + config-only validation) ───────

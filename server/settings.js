@@ -33,6 +33,12 @@ const DEFAULTS = Object.freeze({
    * does not want it can turn it off here (see the README's settings table).
    */
   benchShareImage: true,
+  /**
+   * Absolute directories the operator has CONFIGURED as model-weight locations.
+   * Discovery scans ONLY these (plus any dir an operator types ad-hoc) — bounded
+   * and read-only; never a whole-filesystem sweep.
+   */
+  weightsDirs: [],
 });
 
 /** @type {typeof DEFAULTS} */
@@ -51,6 +57,10 @@ function _clampSettings(settings) {
   // Ensure autoHideOffline is boolean
   s.autoHideOffline = Boolean(s.autoHideOffline);
   s.hideWorkers = Boolean(s.hideWorkers);
+  // Configured weight directories: absolute POSIX strings, bounded in count.
+  s.weightsDirs = Array.isArray(s.weightsDirs)
+    ? s.weightsDirs.filter((d) => typeof d === "string" && d.trim().startsWith("/")).slice(0, 12)
+    : [];
   // Ensure benchDebugTraces is boolean
   s.benchDebugTraces = Boolean(s.benchDebugTraces);
   s.showFleetEnergy = Boolean(s.showFleetEnergy);

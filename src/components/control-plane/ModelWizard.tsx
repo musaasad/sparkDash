@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { DeploymentRole, DiscoveredSeed, ModelEntry, RecipePublic, RecipeRuntime, SeedProvenance, SparkSnapshot } from "../../api/types";
+import type { DeploymentRole, DiscoveredSeed, LocalWeightsSeed, ModelEntry, RecipePublic, RecipeRuntime, SeedProvenance, SparkSnapshot } from "../../api/types";
 import type { DeploymentView } from "./fleetModel";
 import type { Route } from "../../hooks/router";
 import { upsertModel, upsertRecipe, duplicateRecipe, validateRecipe, validateDraftRecipe, createDeployment, archiveModel } from "../../api/client";
@@ -24,11 +24,14 @@ import {
 } from "./RecipeEditor";
 import { useRuntimeOptions } from "./runtimeLabels";
 import { DiscoveryForm, SUGGESTION_TO_TEMPLATE } from "./DiscoveryForm";
+import { LocalWeightsForm } from "./LocalWeightsForm";
+import { ExternalEndpointForm } from "./ExternalEndpointForm";
 import { ProvenanceBadge } from "./ProvenanceBadge";
 import { TopologySummary } from "./TopologySummary";
 import { DEPLOYMENT_ROLE_OPTIONS, roleToSave } from "./deploymentRoles";
 import { TOPOLOGY_STRATEGIES, evaluateTopology, strategyTier, type TopologyDescriptor, type TopologyStrategy } from "./topologyCapability";
 import { buildValidateReport, reportSymbol } from "./validateReport";
+import { fleetInventory } from "../../shared/inventory.js";
 
 /**
  * Explicit flow: MODEL → RECIPE → RUNTIME → COMPUTE → TOPOLOGY → ROLE/OPTIONS →
@@ -37,15 +40,15 @@ import { buildValidateReport, reportSymbol } from "./validateReport";
  * cleanly (no pointless churn).
  */
 const STEPS = [
-  { id: "model", label: "Model" },
-  { id: "recipe", label: "Recipe" },
-  { id: "runtime", label: "Runtime" },
-  { id: "compute", label: "Compute" },
-  { id: "topology", label: "Topology" },
-  { id: "role", label: "Role & options" },
-  { id: "validate", label: "Validate" },
-  { id: "review", label: "Review" },
-  { id: "save", label: "Save" },
+  { id: "model", label: "Model", hint: "Who/what it is. Family and weight path stay blank (UNKNOWN) unless a probe proved them — SparkDash never guesses." },
+  { id: "recipe", label: "Recipe", hint: "How it CAN run: runtime, context, env, launch shape. Nothing here starts a process." },
+  { id: "runtime", label: "Runtime", hint: "Confirm the serving protocol and endpoint. External runtimes keep their desired state unknown." },
+  { id: "compute", label: "Compute", hint: "Which fleet nodes this MAY bind to. Placement is config only — no node is touched." },
+  { id: "topology", label: "Topology", hint: "Explicit TP/PP/DP/EP degrees. A blank degree is UNKNOWN — never inferred from node count." },
+  { id: "role", label: "Role & options", hint: "A pure config role + serving options. Changeable later via PATCH, never by recreation." },
+  { id: "validate", label: "Validate", hint: "Dry-run compile against config. No remote call is executed; UNKNOWN stays '?'." },
+  { id: "review", label: "Review", hint: "The operator's safety confirmation — a plain WILL / WON'T summary before anything is written." },
+  { id: "save", label: "Save", hint: "Writes CONFIG entities only: model, recipe, binding. Weights and remote processes stay untouched." },
 ];
 
 const STEP_INDEX = Object.fromEntries(STEPS.map((s, i) => [s.id, i])) as Record<string, number>;
@@ -108,6 +111,74 @@ const TEMPLATE_PRESETS: Record<string, Partial<RecipeDraft>> = {
   "vllm-dp": { runtime: "vllm", topoMode: "dp", parallelism: "2", minNodes: "2", maxNodes: "4" },
 };
 
+type ModelPathId = "discover" | "weights" | "template" | "external" | "advanced";
+
+interface ModelPath {
+  id: ModelPathId;
+  label: string;
+  summary: string;
+  /** Plain-language: what SparkDash will NOT do on this path. */
+  willNot: string;
+  /** Visual tier — discovery leads, manual is de-emphasised. */
+  tier: "discovery" | "support";
+}
+
+/**
+ * FIVE discovery-first entry paths. Discovery paths are the visually emphasised
+ * primaries; template is support; Advanced (the manual form) is de-emphasised but
+ * reachable. Every path names what SparkDash will NOT do.
+ */
+const MODEL_PATHS: ModelPath[] = [
+  {
+    id: "discover",
+    label: "Discover running model",
+    summary: "Probe an endpoint that is already loaded and register it as observed / external.",
+    willNot: "SparkDash reads the endpoint's model list. It does not start, stop or reconfigure anything.",
+    tier: "discovery",
+  },
+  {
+    id: "weights",
+    label: "Discover local weights",
+    summary: "Read configured weight directories for gguf / safetensors / bin files and register one.",
+    willNot: "SparkDash only reads directories. It never moves, copies, renames or downloads weight files.",
+    tier: "discovery",
+  },
+  {
+    id: "template",
+    label: "Start from proven template",
+    summary: "Data-driven serving shapes (vLLM / TabbyAPI / SGLang …) as an editable starting point.",
+    willNot: "A template is a starting shape, never a limit — every field stays editable.",
+    tier: "support",
+  },
+  {
+    id: "external",
+    label: "Connect external endpoint",
+    summary: "Type an OpenAI-compatible base URL, probe it read-only and bind it as managedBy=external.",
+    willNot: "SparkDash observes only — no lifecycle, no remote mutation, no secret value echoed.",
+    tier: "discovery",
+  },
+  {
+    id: "advanced",
+    label: "Advanced",
+    summary: "The full manual form — build everything by hand when discovery cannot help.",
+    willNot: "Still config only: no process is started or stopped, no remote is mutated.",
+    tier: "support",
+  },
+];
+
+/** The operator's safety confirmation block shown on REVIEW, before Save. */
+const WILL_LIST = [
+  "Create/update CONFIG entities: model, recipe, deployment binding",
+  "Observe the chosen endpoint (read-only) and record discovery provenance",
+  "Bind to the selected compute nodes and write the selected role",
+];
+const WONT_LIST = [
+  "Start / stop / restart / signal / reconfigure any runtime or container",
+  "Move, copy or download weight files",
+  "Mutate the remote host in any way",
+  "Touch or echo secret values (credential refs stay names only)",
+];
+
 /** Initial draft from a discovery seed — discovered values pre-filled, editable. */
 function seedDraft(seed?: DiscoveredSeed): RecipeDraft {
   const d = emptyRecipeDraft("");
@@ -123,6 +194,8 @@ function seedDraft(seed?: DiscoveredSeed): RecipeDraft {
   merged.apiPort = String(seed.port);
   merged.contextLength = seed.contextLength != null ? String(seed.contextLength) : merged.contextLength;
   merged.quantization = seed.quantization ?? merged.quantization;
+  // A full base URL carries a path; keep it on the endpoint (operator-typed).
+  if (seed.endpointPath) merged.endpointPath = seed.endpointPath;
   return merged;
 }
 
@@ -137,6 +210,8 @@ function seedProv(seed?: DiscoveredSeed): Record<string, SeedProvenance> {
   if (!seed) return {};
   const p: Record<string, SeedProvenance> = { ...seed.provenance };
   for (const k of SEED_UNKNOWN_FIELDS) if (!p[k]) p[k] = "unknown";
+  // A typed base URL is the operator's, not a discovery find.
+  if (seed.endpointPath) p.endpointPath = "user";
   return p;
 }
 
@@ -163,8 +238,8 @@ interface ModelWizardProps {
   initialModelId?: string;
   /** Discovery seed — pre-fills Model/Recipe/Runtime/Compute/Options + provenance. */
   seed?: DiscoveredSeed;
-  /** Open directly on the discovery form instead of the template picker. */
-  initialPath?: "pick" | "discover";
+  /** Open directly on one path instead of the path picker. */
+  initialPath?: "pick" | ModelPathId;
 }
 
 /**
@@ -190,11 +265,15 @@ export function ModelWizard({
   const [errors, setErrors] = useState<string[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [cancelOpen, setCancelOpen] = useState(false);
-  const [path, setPath] = useState<"pick" | "discover" | "form">(
-    seed ? "form" : initialPath === "discover" ? "discover" : initialModelId ? "form" : "pick"
+  type PathState = "pick" | "form" | ModelPathId;
+  const [path, setPath] = useState<PathState>(() =>
+    seed || initialModelId ? "form" : initialPath && initialPath !== "pick" ? initialPath : "pick"
   );
 
   const [modelMode, setModelMode] = useState<"existing" | "new">(initialModelId ? "existing" : "new");
+  /** Canonical compute inventory (src/shared/inventory.js) — never positional. */
+  const fleet = fleetInventory(sparks);
+
   const [modelId, setModelId] = useState(initialModelId ?? "");
   const [model, setModel] = useState<WizardModel>(() => seedModel(seed));
 
@@ -204,7 +283,7 @@ export function ModelWizard({
   const [draft, setDraft] = useState<RecipeDraft>(() => {
     const d = seedDraft(seed);
     if (seed) {
-      d.nodeIds = sparks.filter((s) => s.lanIp === seed.host).map((s) => s.id).slice(0, topologyNodeRange(d).max);
+      d.nodeIds = fleet.filter((s) => s.lanIp === seed.host).map((s) => s.id).slice(0, topologyNodeRange(d).max);
     }
     return d;
   });
@@ -218,7 +297,6 @@ export function ModelWizard({
 
   /** DEPLOYMENT role — pure config selection, default none/null (never primary). */
   const [role, setRole] = useState<DeploymentRole | "">("");
-  const [templateOpen, setTemplateOpen] = useState(true);
 
   /** Entity ids materialised at validate time (config only). */
   const [savedModelId, setSavedModelId] = useState<string | null>(initialModelId ?? null);
@@ -296,24 +374,61 @@ export function ModelWizard({
   /** Synthetic deployment view so the WS-4 TopologySummary renders in-wizard. */
   const topoView = {
     deployment: { nodeIds: draft.nodeIds },
-    nodes: sparks.filter((s) => draft.nodeIds.includes(s.id)),
+    nodes: fleet.filter((s) => draft.nodeIds.includes(s.id)),
     recipe: { id: draft.id, topologyBlock: topologyBlockFromDraft(draft) },
   } as unknown as DeploymentView;
 
-  /** Hand-off from the discovery form: pre-fill, then jump to step 1. */
-  function applySeed(s: DiscoveredSeed) {
+  /** Hand-off from a discovery form: pre-fill, then jump to step 1. */
+  function applySeed(s: DiscoveredSeed, opts: { external?: boolean } = {}) {
     setPath("form");
     setStep(0);
     setModelMode("new");
     setModel(seedModel(s));
     setDraft(() => {
       const d = seedDraft(s);
-      d.nodeIds = sparks.filter((sp) => sp.lanIp === s.host).map((sp) => sp.id).slice(0, topologyNodeRange(d).max);
+      if (opts.external) {
+        // External endpoint → ownership stays external/observed, path kept.
+        d.mechanism = "external";
+        d.endpointPath = s.endpointPath || "";
+      }
+      d.nodeIds = fleet.filter((sp) => sp.lanIp === s.host).map((sp) => sp.id).slice(0, topologyNodeRange(d).max);
       return d;
     });
     setProv(seedProv(s));
     setCapabilities(s.capabilities);
     setSeedOrigin(s.endpoint);
+  }
+
+  /**
+   * Hand-off from the local-weights form. The weight path IS discovered (real
+   * readdir), so it carries provenance; name is the real filename; family stays
+   * BLANK + UNKNOWN because a filename is not proof.
+   */
+  function applyWeightsSeed(s: LocalWeightsSeed) {
+    const nm =
+      s.name
+        .replace(/\.(safetensors|gguf|bin|pt|pth|onnx|exl3|awq|gptq|npz)(\.index\.json)?$/i, "")
+        .replace(/[-_]+/g, " ")
+        .trim() || s.name;
+    setPath("form");
+    setStep(0);
+    setModelMode("new");
+    setModel({ id: slugify(nm), name: nm, family: "", weightPath: s.path, variants: [] });
+    setDraft(() => {
+      const d = emptyRecipeDraft(slugify(nm));
+      d.name = `${nm} (local weights)`;
+      d.mechanism = "command";
+      return d;
+    });
+    setProv({
+      name: "detected",
+      modelId: "detected",
+      weightPath: s.provenance === "user" ? "user" : "detected",
+      family: "unknown",
+      runtime: "unknown",
+    });
+    setCapabilities(null);
+    setSeedOrigin(s.path);
   }
 
   function toggleNode(id: string) {
@@ -531,10 +646,47 @@ export function ModelWizard({
 
   const activeRecipe = externalRecipe;
 
-  // Spec §7: creation opens a template picker before the blank form.
-  // Discovery is a first-class path alongside Template and Manual (scratch).
+  /** Five discovery-first paths: discovery leads, manual is de-emphasised. */
+  function pickPath(id: ModelPathId) {
+    setPath(id === "advanced" ? "form" : id);
+  }
+
   if (path === "discover") {
     return <DiscoveryForm recipes={recipes} onSeed={applySeed} onBack={() => setPath("pick")} />;
+  }
+  if (path === "weights") {
+    return <LocalWeightsForm onSeed={applyWeightsSeed} onBack={() => setPath("pick")} />;
+  }
+  if (path === "external") {
+    return <ExternalEndpointForm recipes={recipes} onSeed={(s) => applySeed(s, { external: true })} onBack={() => setPath("pick")} />;
+  }
+  if (path === "template") {
+    return (
+      <div className="cp-panel">
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+          <span style={{ fontSize: 14, fontWeight: 600 }}>Start from proven template</span>
+          <Chip tone="default">support path</Chip>
+        </div>
+        <p className="muted" style={{ fontSize: 12, margin: "0 0 4px", maxWidth: 560 }}>
+          Pick a proven serving shape. It pre-fills recipe fields only so you get a working starting point fast.
+        </p>
+        <p className="cp-field-hint" style={{ margin: "0 0 12px", maxWidth: 560 }}>
+          SparkDash will NOT lock you in — a template is a shape, every field stays editable afterwards.
+        </p>
+        <TemplatePicker
+          title="Templates (data-driven — a new runtime is a provider, never a code edit)"
+          templates={MODEL_TEMPLATES}
+          onPick={applyTemplate}
+          onScratch={() => setPath("form")}
+          onDiscover={() => setPath("discover")}
+        />
+        <FormFooter onCancel={onCancel} cancelLabel="Cancel wizard">
+          <button type="button" className="cp-btn" onClick={() => setPath("pick")}>
+            Back to paths
+          </button>
+        </FormFooter>
+      </div>
+    );
   }
   if (path === "pick") {
     return (
@@ -543,41 +695,49 @@ export function ModelWizard({
           <span style={{ fontSize: 14, fontWeight: 600 }}>Guided add model</span>
           <Chip tone="accent">config only · dry-run</Chip>
         </div>
-        <p className="muted" style={{ fontSize: 12, margin: "0 0 12px", maxWidth: 560 }}>
-          Three equal paths: discover what is already running, start from a proven template shape, or create from
-          scratch. Save writes CONFIG entities only — no process is started or stopped.
+        <p className="muted" style={{ fontSize: 12, margin: "0 0 4px", maxWidth: 560 }}>
+          Discovery leads: find what is already there and let SparkDash observe it. Save writes CONFIG entities only —
+          no process is started or stopped, no weight is moved.
+        </p>
+        <p className="cp-field-hint" style={{ margin: "0 0 12px", maxWidth: 560 }}>
+          Pick one path. Each opens a compact first screen and expands only as you proceed.
         </p>
 
-        {/* Three explicit, equally-weighted entry paths. */}
-        <div role="radiogroup" aria-label="Add model path" style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
-          <button type="button" className="cp-btn primary" onClick={() => setPath("discover")}>
-            Discover running model
-          </button>
-          <button
-            type="button"
-            className="cp-btn"
-            aria-pressed={templateOpen}
-            onClick={() => setTemplateOpen((v) => !v)}
-          >
-            Start from template
-          </button>
-          <button type="button" className="cp-btn" onClick={() => setPath("form")}>
-            Create from scratch
-          </button>
+        {/* Five explicit paths — discovery first and visually emphasised. */}
+        <div role="radiogroup" aria-label="Add model path" style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
+          {MODEL_PATHS.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              role="radio"
+              aria-checked={false}
+              className={`cp-path-card${p.tier === "discovery" ? " is-discovery" : ""}`}
+              onClick={() => pickPath(p.id)}
+            >
+              <span className="cp-path-title">
+                {p.label}
+                {p.tier === "discovery" ? <Chip tone="accent">discovery</Chip> : null}
+              </span>
+              <span className="cp-field-hint" style={{ display: "block", marginTop: 2 }}>{p.summary}</span>
+              <span className="cp-field-hint" style={{ display: "block", marginTop: 4, color: "var(--color-muted-strong)" }}>
+                Won't: {p.willNot}
+              </span>
+            </button>
+          ))}
         </div>
 
-        {templateOpen ? (
-          <TemplatePicker
-            title="Templates (data-driven — a new runtime is a provider, never a code edit)"
-            templates={MODEL_TEMPLATES}
-            onPick={applyTemplate}
-            onScratch={() => setPath("form")}
-            onDiscover={() => setPath("discover")}
-          />
-        ) : null}
+        {/* Template cards stay available on the picker: a proven shape is one
+            click away and every field remains editable. */}
+        <TemplatePicker
+          title="Templates (data-driven — a new runtime is a provider, never a code edit)"
+          templates={MODEL_TEMPLATES}
+          onPick={applyTemplate}
+          onScratch={() => setPath("form")}
+          onDiscover={() => setPath("discover")}
+        />
 
         <FormFooter onCancel={onCancel} cancelLabel="Cancel wizard">
-          <span className="muted" style={{ fontSize: 12 }}>Pick a path above; every template field stays editable.</span>
+          <span className="muted" style={{ fontSize: 12 }}>Discovery paths first; Advanced is the full manual form.</span>
         </FormFooter>
       </div>
     );
@@ -593,7 +753,11 @@ export function ModelWizard({
         Creates and associates CONFIG entities only. No process is started, stopped, signalled or reconfigured.
       </p>
 
-      <Stepper steps={STEPS} current={step} onSelect={setStep} ariaLabel="Add model steps" />
+      {/* Compact: modal-safe rail, no label collision, current title + on-demand list. */}
+      <Stepper variant="compact" steps={STEPS} current={step} onSelect={setStep} ariaLabel="Add model steps" />
+      <p className="cp-field-hint" style={{ margin: "2px 0 12px" }} data-step-hint>
+        {STEPS[step]?.hint}
+      </p>
 
       {errors.length > 0 ? (
         <div className="cp-panel" style={{ borderColor: "var(--color-danger)", marginBottom: 14 }} role="alert">
@@ -901,7 +1065,7 @@ export function ModelWizard({
             <span className="cp-field-hint">No nodes registered — add one in Settings.</span>
           ) : (
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {sparks.map((n) => (
+              {fleet.map((n) => (
                 <button
                   key={n.id}
                   type="button"
@@ -919,7 +1083,7 @@ export function ModelWizard({
             <Field label="Head / coordinator" htmlFor="w-head" hint="Optional — must be a selected node">
               <Select id="w-head" value={draft.coordinator} onChange={(e) => set("coordinator", e.target.value)}>
                 <option value="">none</option>
-                {sparks.filter((s) => draft.nodeIds.includes(s.id)).map((s) => (
+                {fleet.filter((s) => draft.nodeIds.includes(s.id)).map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name}
                   </option>
@@ -1157,6 +1321,38 @@ export function ModelWizard({
       {/* 8. Review */}
       {step === STEP_INDEX.review ? (
         <div className="cp-panel">
+          {/* Operator's safety confirmation — honest and prominent, before Save. */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }} data-will-wont>
+            <div className="cp-panel" style={{ borderColor: "var(--color-success)", margin: 0 }} aria-label="SparkDash WILL">
+              <div className="cp-panel-title" style={{ color: "var(--color-success)" }}>
+                SparkDash WILL
+              </div>
+              <ul style={{ margin: 0, paddingLeft: 16, fontSize: 12 }}>
+                {WILL_LIST.map((w) => (
+                  <li key={w} style={{ marginBottom: 4 }}>
+                    {w}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div className="cp-panel" style={{ borderColor: "var(--color-warning)", margin: 0 }} aria-label="SparkDash WON'T">
+              <div className="cp-panel-title" style={{ color: "var(--color-warning)" }}>
+                SparkDash WON'T
+              </div>
+              <ul style={{ margin: 0, paddingLeft: 16, fontSize: 12 }}>
+                {WONT_LIST.map((w) => (
+                  <li key={w} style={{ marginBottom: 4 }}>
+                    {w}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+          <p className="cp-field-hint" style={{ margin: "0 0 12px" }}>
+            This is the safety confirmation: everything below is config, nothing below touches a running process, a
+            weight file or a secret value.
+          </p>
+
           <div className="cp-panel-title">Exactly what will be created / associated</div>
           <dl className="cp-kv">
             <dt>Model</dt>

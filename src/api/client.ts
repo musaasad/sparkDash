@@ -471,6 +471,8 @@ import type {
   ComputeDiscoveryRequest,
   ComputeDiscoveryResult,
   ComputeValidateResult,
+  WeightsScanRequest,
+  WeightsScanResult,
 } from "./types";
 
 export function fetchModels(includeArchived = false): Promise<{ models: ModelEntry[] }> {
@@ -643,6 +645,14 @@ export function probeDiscoveryEndpoint(body: DiscoveryProbeRequest): Promise<Dis
  */
 export function probeDiscoveryCapabilities(body: ProbeCapabilitiesRequest): Promise<ProbeCapabilitiesResult> {
   return apiFetch("/api/discovery/probe-capabilities", { method: "POST", body: JSON.stringify(body) });
+}
+
+/**
+ * Read-only scan of CONFIGURED weight directories (bounded, no sweep). Returns
+ * weight artifacts only; nothing is moved or copied.
+ */
+export function scanLocalWeights(body: WeightsScanRequest = {}): Promise<WeightsScanResult> {
+  return apiFetch("/api/models/scan-weights", { method: "POST", body: JSON.stringify(body) });
 }
 
 // ─── Guided Add Compute (read-only discover + config-only validate) ─────────
