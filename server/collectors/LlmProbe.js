@@ -66,7 +66,7 @@ export class LlmProbe {
     this.baseUrl = `http://${llmProbeHost(spark)}:${port}`;
 
     // State
-    this.backendType = null; // 'vllm' | 'llama.cpp' | 'sglang' | 'ds4' | 'exl3' | 'q27' | null
+    this.backendType = null; // 'vllm' | 'llama.cpp' | 'sglang' | 'ds4' | 'exl3' | 'q27' | 'tabbyapi' | null
     this.serverIsOpenAI = null; // true = OpenAI-compatible
     /** Whether /v1/models (or /slots) answered without credentials. null = unknown. */
     this.authOpen = null;
@@ -325,7 +325,8 @@ export class LlmProbe {
       this.backendType !== "sglang" &&
       this.backendType !== "ds4" &&
       this.backendType !== "exl3" &&
-      this.backendType !== "q27"
+      this.backendType !== "q27" &&
+      this.backendType !== "tabbyapi"
     ) {
       const slotUrl = `${this.baseUrl}/slots`;
       try {
@@ -372,9 +373,9 @@ export class LlmProbe {
   }
 
   /**
-   * Classify an OpenAI-compatible server: ds4, SGLang, EXL3, q27, or vLLM (default).
+   * Classify an OpenAI-compatible server: ds4, SGLang, EXL3, q27, tabbyapi, or vLLM (default).
    * @param {unknown} ownedBy
-   * @returns {Promise<"ds4" | "sglang" | "exl3" | "q27" | "vllm">}
+   * @returns {Promise<"ds4" | "sglang" | "exl3" | "q27" | "tabbyapi" | "vllm">}
    */
   async _classifyOpenAIBackend(ownedBy) {
     if (typeof ownedBy === "string") {
@@ -383,6 +384,9 @@ export class LlmProbe {
       if (/exl3/i.test(ownedBy)) return "exl3";
       // q27's /v1/models reports owned_by: "q27" (signalnine/q27 engine).
       if (/q27/i.test(ownedBy)) return "q27";
+      // TabbyAPI reports owned_by: "tabbyAPI" — OpenAI-compatible but with no
+      // Prometheus /metrics and no /server_info.
+      if (/tabby/i.test(ownedBy)) return "tabbyapi";
     }
     if (await this._probeIsDs4()) return "ds4";
     if (await this._probeIsSglang()) return "sglang";
@@ -498,9 +502,15 @@ export class LlmProbe {
         this.modelId = servedModelId;
         // Drop HF hub cache paths from modelPath if /v1/models id was a cache dir
         if (isHfHubCachePath(model?.id)) this.modelPath = null;
-        // ds4-server uses context_length; vLLM uses max_model_len
+        // ds4-server uses context_length; vLLM uses max_model_len.
+        // TabbyAPI/OpenAI metadata nests the trained context window under
+        // meta.n_ctx (falling back to n_ctx_train) — additive last resort.
         this.contextLength =
-          model?.max_model_len ?? model?.context_length ?? this.contextLength;
+          model?.max_model_len ??
+          model?.context_length ??
+          model?.meta?.n_ctx ??
+          model?.meta?.n_ctx_train ??
+          this.contextLength;
         owned = model?.owned_by;
       }
     } catch {}
@@ -516,7 +526,23 @@ export class LlmProbe {
         this.backendType = "sglang";
       } else if (/exl3/i.test(owned) && this.backendType !== "ds4") {
         this.backendType = "exl3";
+      } else if (/tabby/i.test(owned) && this.backendType !== "ds4") {
+        this.backendType = "tabbyapi";
       }
+    }
+
+    // TabbyAPI (DGX Spark Qwen/EXL3 deployments): OpenAI-compatible /v1/models
+    // with meta context, but NO Prometheus /metrics and NO /server_info. /health
+    // is an API-health endpoint only ({status:'healthy'}), NOT exl3 perf. Every
+    // inference-performance field must read null (never the default 0).
+    if (this.backendType === "tabbyapi") {
+      try {
+        // Auth-less liveness ping; never treated as a perf source.
+        await this._fetch(`${this.baseUrl}/health`);
+      } catch {
+        /* /health is optional — model visibility already proved the API */
+      }
+      return this._getSnapshot();
     }
 
     // EXL3 serve_openai.py: live tok/s from /health cumulative counters (no Prometheus).
@@ -1597,7 +1623,12 @@ export class LlmProbe {
     // numeric telemetry is UNKNOWN — never a stale or default 0. The UI renders
     // "—", not a fabricated "0 TOK/S". contextLength/modelId stay whatever was
     // last legitimately read (null when never fetched).
-    const num = (v) => (metricsLive ? v : null);
+    //
+    // TabbyAPI exposes NO Prometheus metrics and NO /server_info, so EVERY
+    // inference-performance field is a genuine unknown: never let the
+    // constructor-default 0 masquerade as a measurement.
+    const noPerf = this.backendType === "tabbyapi";
+    const num = (v) => (metricsLive && !noPerf ? v : null);
     return {
       available: metricsLive,
       port: this.port,

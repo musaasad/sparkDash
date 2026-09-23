@@ -117,12 +117,27 @@ export function nodeThermalLevel(node: SparkSnapshot): ThermalLevel {
 
 /**
  * GENUINE GPU allocation-failure events: the kernel NV_ERR_NO_MEMORY counter
- * since boot. This is the real "oom event" signal — as opposed to unified-memory
- * UTILISATION (a >85% high-water proxy) which is informational only.
+ * since boot. HISTORICAL — this is the cumulative journal-since-boot figure,
+ * not a current-incident claim. Prefer nodeOomEventsRecent to decide whether an
+ * incident is happening NOW.
  */
 export function nodeOomEvents(node: SparkSnapshot): number {
   const n = node.metrics?.gpu?.nvErrNoMemory;
   return typeof n === "number" && Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/**
+ * NEW GPU allocation-failure events since the previous collector poll — the
+ * genuine "active incident" signal. Falls back to the cumulative count only
+ * when the collector did not emit `nvErrNoMemoryRecent` (older snapshot shape),
+ * so cumulative-since-boot alone never reads as a fresh incident.
+ */
+export function nodeOomEventsRecent(node: SparkSnapshot): number {
+  const recent = node.metrics?.gpu?.nvErrNoMemoryRecent;
+  if (typeof recent === "number" && Number.isFinite(recent)) {
+    return recent > 0 ? recent : 0;
+  }
+  return nodeOomEvents(node);
 }
 
 export function thermalLabel(level: ThermalLevel): string {

@@ -65,6 +65,8 @@ export class SystemCollector {
     this._hardwareInfo = null;
     /** Cached NVRM NV_ERR_NO_MEMORY count (slow journal scan). */
     this._nvErrCache = { count: 0, at: 0 };
+    /** Previous fresh cumulative NV_ERR_NO_MEMORY count — seeds the recent delta. */
+    this._nvErrPrev = null;
   }
 
   /** Collect GPU metrics (temperature, usage, power, VRAM). */
@@ -233,6 +235,8 @@ export class SystemCollector {
       .sort((a, b) => b.vramMB - a.vramMB)
       .slice(0, 5);
 
+    const nvErr = await this._nvErrNoMemoryStats();
+
     return {
       temperature: gpu.temperature,
       usage: gpu.usage,
@@ -240,7 +244,8 @@ export class SystemCollector {
       vram,
       processes,
       throttle: gpu.throttle,
-      nvErrNoMemory: await this._nvErrNoMemory(),
+      nvErrNoMemory: nvErr.count,
+      nvErrNoMemoryRecent: nvErr.recent,
     };
   }
 
@@ -1071,6 +1076,8 @@ export class SystemCollector {
         .sort((a, b) => b.vramMB - a.vramMB)
         .slice(0, 5);
 
+      const nvErr = await this._nvErrNoMemoryStats();
+
       return {
         temperature: gpu.temperature,
         usage: gpu.usage,
@@ -1078,7 +1085,8 @@ export class SystemCollector {
         vram: { used: usedMB, total: totalMB, percentage, available: availableMB },
         processes,
         throttle: gpu.throttle,
-        nvErrNoMemory: await this._nvErrNoMemory(),
+        nvErrNoMemory: nvErr.count,
+        nvErrNoMemoryRecent: nvErr.recent,
       };
     } catch (err) {
       console.error(`[SystemCollector] Remote GPU error for ${this.spark.id}:`, err.message);
@@ -1626,6 +1634,28 @@ export class SystemCollector {
     }
   }
 
+  /**
+   * Cumulative NV_ERR_NO_MEMORY count since boot PLUS the delta since the
+   * previous FRESH sample. The cumulative counter is historical/journal-since-boot;
+   * `recent` is the genuine "new event just happened" signal (0 when the only
+   * events are from before the process ever looked).
+   * @returns {Promise<{ count: number, recent: number }>}
+   */
+  async _nvErrNoMemoryStats() {
+    const hadCacheAt = this._nvErrCache.at;
+    const count = await this._nvErrNoMemory();
+    const fresh = this._nvErrCache.at !== hadCacheAt;
+    let recent = 0;
+    if (fresh) {
+      if (this._nvErrPrev != null && count > this._nvErrPrev) {
+        recent = count - this._nvErrPrev;
+      }
+      // Seed on first sample: pre-existing since-boot events are NOT "recent".
+      this._nvErrPrev = count;
+    }
+    return { count, recent };
+  }
+
   // ─── Default metrics ─────────────────────────────────────
   _defaultGpu() {
     return {
@@ -1636,6 +1666,7 @@ export class SystemCollector {
       processes: [],
       throttle: this._defaultThrottle(),
       nvErrNoMemory: 0,
+      nvErrNoMemoryRecent: 0,
     };
   }
 

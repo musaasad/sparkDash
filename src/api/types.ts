@@ -228,8 +228,10 @@ export interface GpuMetrics {
   processes?: Array<{ pid: number; name: string; vramMB: number }>;
   /** NVIDIA clock throttle / thermal slowdown state from nvidia-smi. */
   throttle?: GpuThrottle | null;
-  /** Kernel NVRM NV_ERR_NO_MEMORY count since boot (cached ~60s). */
+  /** Kernel NVRM NV_ERR_NO_MEMORY count since boot (cached ~60s). Historical. */
   nvErrNoMemory?: number;
+  /** NEW NV_ERR_NO_MEMORY events since the previous fresh sample. Current signal. */
+  nvErrNoMemoryRecent?: number;
 }
 
 // ─── CPU metrics ─────────────────────────────────────────

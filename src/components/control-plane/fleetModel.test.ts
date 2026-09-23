@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { computeFleetHealth, computeFleetAlerts, attentionNodeIds, nodeHealthRail, nodeMatchesRail } from "./fleetModel";
+import { nodeOomEvents, nodeOomEventsRecent } from "./cockpitModel";
 import type { SparkSnapshot, DeploymentStatus } from "../../api/types";
 
 function spark(over: Partial<SparkSnapshot> = {}): SparkSnapshot {
@@ -478,5 +479,46 @@ describe("deploymentViews telemetry wiring", () => {
     const [view] = deploymentViews([nodeWithLlm("n1", { uptime: 42 })], [dep("r1", "running")], [recipe()]);
     expect(view.telemetry?.available).toBe(true);
     expect(view.uptime).toBe(42);
+  });
+});
+
+describe("cumulative-since-boot NV_ERR_NO_MEMORY is not an active incident", () => {
+  it("does NOT alert on cumulative-only events (recent delta 0)", () => {
+    const hist = spark({
+      id: "hist",
+      name: "Spark Hist",
+      metrics: { ...spark().metrics, gpu: { temperature: 40, nvErrNoMemory: 14, nvErrNoMemoryRecent: 0 } as never },
+    });
+    expect(computeFleetAlerts([hist], []).filter((a) => a.condition === "oom")).toHaveLength(0);
+    // ...and the node is not flagged as needing attention.
+    expect(attentionNodeIds([hist], []).has("hist")).toBe(false);
+    // ...but the cumulative figure is still surfaced (informational row owns it).
+    expect(nodeOomEvents(hist)).toBe(14);
+    expect(nodeOomEventsRecent(hist)).toBe(0);
+  });
+
+  it("DOES alert when a genuine NEW event appears (recent delta > 0)", () => {
+    const fresh = spark({
+      id: "fresh",
+      name: "Spark Fresh",
+      metrics: { ...spark().metrics, gpu: { temperature: 40, nvErrNoMemory: 15, nvErrNoMemoryRecent: 1 } as never },
+    });
+    const oom = computeFleetAlerts([fresh], []).filter((a) => a.condition === "oom");
+    expect(oom).toHaveLength(1);
+    expect(oom[0].severity).toBe("warn");
+    expect(oom[0].message).toContain("memory pressure");
+    expect(oom[0].message).toContain("15 NV_ERR_NO_MEMORY");
+    expect(oom[0].message).toContain("1 new since last poll");
+    expect(attentionNodeIds([fresh], []).has("fresh")).toBe(true);
+  });
+
+  it("falls back to cumulative when an older snapshot omits the recent field", () => {
+    const legacy = spark({
+      id: "legacy",
+      name: "Spark Legacy",
+      metrics: { ...spark().metrics, gpu: { temperature: 40, nvErrNoMemory: 14 } as never },
+    });
+    expect(nodeOomEventsRecent(legacy)).toBe(14);
+    expect(computeFleetAlerts([legacy], []).filter((a) => a.condition === "oom")).toHaveLength(1);
   });
 });

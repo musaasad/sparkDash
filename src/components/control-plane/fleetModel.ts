@@ -2,7 +2,7 @@ import type { SparkSnapshot, DeploymentStatus, DeploymentDisplay, RecipePublic, 
 import { isWorkerSpark } from "../../api/sparkRole";
 import { fleetInventory, primaryAnchorNode, nodeById, workersOf as inventoryWorkersOf } from "../../shared/inventory.js";
 import { deriveRuntimeState as canonicalRuntimeState, telemetryQuality, probeOutcome, RUNTIME_STATE, type RuntimeState as CanonicalRuntimeState } from "../../shared/runtimeState.js";
-import { nodeThermalLevel, nodeOomEvents, aggregationLegend, thermalLabel } from "./cockpitModel";
+import { nodeThermalLevel, nodeOomEvents, nodeOomEventsRecent, aggregationLegend, thermalLabel } from "./cockpitModel";
 
 export interface FleetHealth {
   nodesOnline: number;
@@ -198,16 +198,19 @@ export function computeFleetAlerts(
         alerts.push({ id: `${s.id}-disk-${st.device}`, severity: "warn", condition: "disk", resourceId: s.id, message: `${s.name}: ${st.label || st.device} at ${Math.round(st.percentage)}% full`, target: { section: "node", nodeId: s.id } });
       }
     }
-    // GENUINE oom events (kernel NV_ERR_NO_MEMORY) — a real pressure signal,
-    // unlike unified-memory utilisation. Reserve the "pressure" wording here.
-    const oomEvents = nodeOomEvents(s);
-    if (oomEvents > 0) {
+    // GENUINE NEW oom events (kernel NV_ERR_NO_MEMORY) — a real pressure signal,
+    // unlike unified-memory utilisation. The kernel counter is cumulative-since-
+    // boot, so only a RECENT increase is an active incident; a standing
+    // since-boot count with no delta stays informational (see cockpitModel).
+    const recentOom = nodeOomEventsRecent(s);
+    if (recentOom > 0) {
+      const totalOom = nodeOomEvents(s);
       alerts.push({
         id: `${s.id}-oom`,
         severity: "warn",
         condition: "oom",
         resourceId: s.id,
-        message: `${s.name}: GPU memory pressure — ${oomEvents} NV_ERR_NO_MEMORY event${oomEvents === 1 ? "" : "s"}`,
+        message: `${s.name}: GPU memory pressure — ${totalOom} NV_ERR_NO_MEMORY event${totalOom === 1 ? "" : "s"} (${recentOom} new since last poll)`,
         target: { section: "node", nodeId: s.id },
       });
     }
@@ -619,7 +622,7 @@ export function attentionNodeIds(
       out.add(s.id);
       continue;
     }
-    if (nodeThermalLevel(s) !== "normal" || nodeOomEvents(s) > 0) {
+    if (nodeThermalLevel(s) !== "normal" || nodeOomEventsRecent(s) > 0) {
       out.add(s.id);
       continue;
     }
