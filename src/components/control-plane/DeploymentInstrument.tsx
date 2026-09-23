@@ -114,7 +114,19 @@ export function DeploymentInstrument({
         ? view.telemetry?.generationTps ?? view.telemetry?.recentMedGenTps ?? null
         : view.telemetry?.recentMedGenTps ?? null
     : view.telemetry?.generationTps ?? null;
-  const gaugeNote = provenance ? (servingNow ? "LIVE" : "RECENT MED") : null;
+  // Honest labelling (never call a last-completed rate "LIVE"):
+  //  • TabbyAPI log — decode tok/s is emitted only AT completion. While a request
+  //    is in flight the freshest number is the LAST COMPLETED request → "LAST
+  //    REQUEST"; when idle it calms to the window median → "RECENT MED".
+  //  • vLLM native — /metrics is already an instantaneous live reading conveyed
+  //    by the moving value + BUSY state; no extra caption (minimal markers).
+  const gaugeNote = provenance ? (servingNow ? "LAST REQUEST" : "RECENT MED") : null;
+  // LIVE activity from the continuous follower — genuinely live (lights up on the
+  // request START line, closed on completion/cancel), unlike the completion-only
+  // throughput. Elapsed is wall-clock since the oldest in-flight request started.
+  const generating = view.telemetry?.requestActive === true;
+  const activeRequests = view.telemetry?.activeRequests ?? null;
+  const activeElapsed = view.telemetry?.requestElapsedSeconds ?? null;
 
   const thermal = hottestThermal(view.nodes, temperatureUnit);
   const agg = view.telemetry?.aggregation ?? aggregationLegend(view.telemetry?.membersReporting ?? 0, view.nodes.length);
@@ -237,11 +249,24 @@ export function DeploymentInstrument({
               recent-window framing + last-request recency can never be lost. */}
           {provenance ? (
             <span
-              className="cp-inst-recency cp-inst-recent is-wide"
-              title="RECENT-WINDOW aggregate from TabbyAPI's own log — real log values, never a live instantaneous reading"
+              className={`cp-inst-recency cp-inst-recent is-wide${generating ? " is-live" : ""}`}
+              title={
+                generating
+                  ? "LIVE activity from TabbyAPI's log stream (request in flight). Throughput still reflects the LAST COMPLETED request — TabbyAPI emits decode tok/s only at completion."
+                  : "RECENT-WINDOW aggregate from TabbyAPI's own log — real log values, never a live instantaneous reading"
+              }
             >
-              RECENT · last {winCount ?? "—"} requests · {provenance}
-              {lastId != null && recency ? ` · last #${lastId} ${recency}` : ""}
+              {generating ? (
+                <>
+                  GENERATING · {activeRequests ?? "—"} active
+                  {activeElapsed != null ? ` · ${activeElapsed}s` : ""} · {provenance}
+                </>
+              ) : (
+                <>
+                  RECENT · last {winCount ?? "—"} requests · {provenance}
+                  {lastId != null && recency ? ` · last #${lastId} ${recency}` : ""}
+                </>
+              )}
             </span>
           ) : null}
           {loaded && recency && !provenance ? (

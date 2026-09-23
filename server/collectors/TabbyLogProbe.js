@@ -42,18 +42,26 @@ const SEP = "\u00B7";
 
 const TS_RE = "(\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\.\\d{3})";
 
-/** COMPLETION line — carries every metric. Draft segment is OPTIONAL. */
+/**
+ * COMPLETION line — carries every metric.
+ * The prefill `(N T/s)` segment is OPTIONAL: a cache-warm completion logs
+ * `…N new in 0.68 s · first token…` with NO prefill throughput (nothing to
+ * prefill), and previously matched NEITHER this nor START_RE, so it was silently
+ * dropped — BUSY latched and the completion never entered the window. The draft
+ * segment is OPTIONAL too; its acceptance % is captured for per-request fidelity.
+ */
 const COMPLETION_RE = new RegExp(
   "^" +
     TS_RE +
     "\\s*\\|\\s*INFO.*?#(\\d+)\\s+.*?:\\s*([\\d,]+)\\s+tokens generated at\\s+([\\d.]+)\\s+T/s\\s*" +
     SEP +
-    "\\s*prompt\\s+([\\d,]+)\\s+tokens,\\s*(?:(\\d+)%|none)\\s*cached,\\s*([\\d,]+)\\s*new in\\s+([\\d.]+)\\s*s\\s*\\(([\\d.]+)\\s*T/s\\)\\s*" +
+    "\\s*prompt\\s+([\\d,]+)\\s+tokens,\\s*(?:(\\d+)%|none)\\s*cached,\\s*([\\d,]+)\\s*new in\\s+([\\d.]+)\\s*s" +
+    "(?:\\s*\\(([\\d.]+)\\s*T/s\\))?\\s*" +
     SEP +
     "\\s*first token\\s+([\\d.]+)\\s*s,\\s*total\\s+([\\d.]+)\\s*s" +
     "(?:\\s*" +
     SEP +
-    "\\s*draft\\s+(\\d+)/(\\d+)\\s+accepted\\s*\\(\\d+%\\))?"
+    "\\s*draft\\s+(\\d+)/(\\d+)\\s+accepted\\s*\\((\\d+)%\\))?"
 );
 
 /**
@@ -69,6 +77,24 @@ const START_RE = new RegExp(
     TS_RE +
     "\\s*\\|\\s*INFO.*?#(\\d+)\\s+.*?:\\s*([\\d,]+)\\s+(?:[a-zA-Z]+\\s+)*tokens\\s*" +
     SEP
+);
+
+/**
+ * TOOL-CALL line — intermediate per-request activity (a tool loop iterating).
+ * Carries NO token count, but is a real LIVENESS heartbeat during a long
+ * generation and keeps the owning request's BUSY fresh. INFO level.
+ */
+const TOOL_RE = new RegExp(
+  "^" + TS_RE + "\\s*\\|\\s*INFO.*?#(\\d+)\\s+.*?:\\s*parsed\\s+(\\d+)\\s+tool calls?\\s*\\(([^)]+)\\)"
+);
+
+/**
+ * CANCEL line — the client disconnected and generation was cancelled (WARNING
+ * level). Must close the owning active request, else BUSY latches until the
+ * in-flight cap. Previously matched nothing (both other regexes demand INFO).
+ */
+const CANCEL_RE = new RegExp(
+  "^" + TS_RE + "\\s*\\|\\s*WARNING.*?#(\\d+)\\s+.*?:\\s*client disconnected, generation cancelled"
 );
 
 /**
@@ -156,6 +182,7 @@ export function parseCompletionLine(line) {
   const totalSeconds = num(m[11]);
   const draftAccepted = num(m[12]);
   const draftTotal = num(m[13]);
+  const draftPct = num(m[14]);
   if (
     tsMs == null ||
     id == null ||
@@ -164,10 +191,11 @@ export function parseCompletionLine(line) {
     cachedPct == null ||
     newTokens == null ||
     prefillSeconds == null ||
-    prefillTps == null ||
     ttftSeconds == null ||
     totalSeconds == null
   ) {
+    // prefillTps is intentionally NOT required — a cache-warm completion omits
+    // the `(N T/s)` prefill segment; leave it null (golden rule: never fabricate).
     return null;
   }
   return {
@@ -177,19 +205,23 @@ export function parseCompletionLine(line) {
     promptTokens,
     cachedPct,
     newTokens,
+    prefillSeconds,
     prefillTps,
     ttftSeconds,
     totalSeconds,
     draftAccepted,
     draftTotal,
+    draftPct,
   };
 }
 
 /**
- * Parse ONE start line into `{ tsMs, id }`. null when it does not match or is
- * malformed (no throw).
+ * Parse ONE start line into `{ tsMs, id, promptTokens, maxTokens }`.
+ * `promptTokens` (the request's input size) and `maxTokens` (the generation
+ * ceiling — a progress denominator) are real emitted values, previously matched
+ * then discarded. null when the line does not match.
  * @param {string} line
- * @returns {null | {tsMs:number,id:number}}
+ * @returns {null | {tsMs:number,id:number,promptTokens:number|null,maxTokens:number|null}}
  */
 export function parseStartLine(line) {
   if (typeof line !== "string" || !line.trim()) return null;
@@ -198,12 +230,294 @@ export function parseStartLine(line) {
   const tsMs = parseTimestamp(m[1]);
   const id = num(m[2]);
   if (tsMs == null || id == null) return null;
+  const promptTokens = num(m[3]);
+  const mt = /max_tokens:\s*([\d,]+)/.exec(line);
+  const maxTokens = mt ? num(mt[1]) : null;
+  return { tsMs, id, promptTokens, maxTokens };
+}
+
+/**
+ * Parse ONE tool-call activity line into `{ tsMs, id, count, parser }`.
+ * @param {string} line
+ * @returns {null | {tsMs:number,id:number,count:number,parser:string}}
+ */
+export function parseToolCallLine(line) {
+  if (typeof line !== "string" || !line.trim()) return null;
+  const m = TOOL_RE.exec(line);
+  if (!m) return null;
+  const tsMs = parseTimestamp(m[1]);
+  const id = num(m[2]);
+  const count = num(m[3]);
+  if (tsMs == null || id == null || count == null) return null;
+  return { tsMs, id, count, parser: String(m[4]).trim() };
+}
+
+/**
+ * Parse ONE cancel line into `{ tsMs, id }` (client disconnected).
+ * @param {string} line
+ * @returns {null | {tsMs:number,id:number}}
+ */
+export function parseCancelLine(line) {
+  if (typeof line !== "string" || !line.trim()) return null;
+  const m = CANCEL_RE.exec(line);
+  if (!m) return null;
+  const tsMs = parseTimestamp(m[1]);
+  const id = num(m[2]);
+  if (tsMs == null || id == null) return null;
   return { tsMs, id };
 }
 
-/** Parse a single line as completion-first, then start. null when neither. */
+/**
+ * Parse a single line into a typed event: `{kind:"completion"|"start"|"tool"|"cancel", ...}`
+ * or null. Completion first (it also contains "prompt tokens", so it must win),
+ * then start, then tool-call, then cancel.
+ * @param {string} line
+ * @returns {null | object}
+ */
 export function parseTabbyLogLine(line) {
-  return parseCompletionLine(line) || null;
+  const c = parseCompletionLine(line);
+  if (c) return { kind: "completion", ...c };
+  const s = parseStartLine(line);
+  if (s) return { kind: "start", ...s };
+  const t = parseToolCallLine(line);
+  if (t) return { kind: "tool", ...t };
+  const x = parseCancelLine(line);
+  if (x) return { kind: "cancel", ...x };
+  return null;
+}
+
+/**
+ * RECENT-WINDOW aggregates over a chronological array of completion records.
+ * TabbyAPI has no live metrics endpoint, so these are the honest perf readout:
+ * real log values aggregated over a window, never a live instantaneous figure.
+ * Rate/latency use the MEDIAN (robust to rare cold-cache full-prefill outliers);
+ * cache-hit and MTP use a sum-based share. All null when the window is empty —
+ * never 0. Shared by the batch parser and the streaming follower.
+ * @param {object[]} win chronological completion records (already window-sliced)
+ */
+export function aggregateWindow(win) {
+  let windowAvgTps = null;
+  let peakTps = null;
+  let recentMedGenTps = null;
+  if (win.length > 0) {
+    const tps = win.map((r) => r.genTps).filter((n) => Number.isFinite(n));
+    if (tps.length > 0) {
+      peakTps = roundN(Math.max(...tps), 2);
+      windowAvgTps = mean(tps, 2);
+      recentMedGenTps = median(tps, 2);
+    }
+  }
+  let recentMedPrefillTps = null;
+  let recentMedTtftSeconds = null;
+  let recentCacheHitRate = null;
+  let recentMtpAcceptance = null;
+  if (win.length > 0) {
+    recentMedPrefillTps = median(win.map((r) => r.prefillTps).filter((n) => Number.isFinite(n)), 2);
+    recentMedTtftSeconds = median(win.map((r) => r.ttftSeconds).filter((n) => Number.isFinite(n)), 2);
+    // Cached tokens = promptTokens - newTokens. Sum-based share over the window.
+    const promptSum = win.reduce((a, r) => a + r.promptTokens, 0);
+    const cachedSum = win.reduce((a, r) => a + (r.promptTokens - r.newTokens), 0);
+    if (promptSum > 0) recentCacheHitRate = roundN(cachedSum / promptSum, 4);
+    const withDraft = win.filter((r) => r.draftTotal != null && r.draftTotal > 0);
+    if (withDraft.length > 0) {
+      const accSum = withDraft.reduce((a, r) => a + r.draftAccepted, 0);
+      const totSum = withDraft.reduce((a, r) => a + r.draftTotal, 0);
+      if (totSum > 0) recentMtpAcceptance = roundN(accSum / totSum, 4);
+    }
+  }
+  return {
+    windowAvgTps,
+    peakTps,
+    recentMedGenTps,
+    recentMedPrefillTps,
+    recentMedTtftSeconds,
+    recentCacheHitRate,
+    recentMtpAcceptance,
+  };
+}
+
+/**
+ * TabbyLogState — the CONTINUOUS in-memory live-inference accumulator.
+ *
+ * A streaming follower feeds it appended log lines (and a seed tail on start);
+ * it maintains per-node live request state — BUSY the instant a START lands,
+ * active-request accounting closed by COMPLETION or CANCEL, a bounded recent
+ * completion ring for the honest window medians — WITHOUT re-reading the file.
+ * This is the single live-state engine behind the TabbyAPI telemetry adapter;
+ * the batch `parseTabbyLog` shares its aggregation.
+ */
+export class TabbyLogState {
+  constructor({ windowN = TABBY_LOG_RECENT_WINDOW_N, activeMaxMs = TABBY_LOG_ACTIVE_MAX_MS } = {}) {
+    this.windowN = windowN;
+    this.activeMaxMs = activeMaxMs;
+    this.file = null;
+    this.connected = false;
+    /** Wall-clock ms of the last line received (stream liveness → available). */
+    this.lastLineAtMs = null;
+    this.linesSeen = 0;
+    /** @type {Map<number,{startTsMs:number,startedAtWallMs:number,promptTokens:number|null,maxTokens:number|null,lastActivityWallMs:number}>} */
+    this.active = new Map();
+    /** @type {object[]} bounded ring of the last windowN completions (chronological). */
+    this.recent = [];
+    /** @type {Set<number>} completion ids already folded into `recent` this file (dedupe replays). */
+    this._seenIds = new Set();
+    this.lastStart = null;
+    this.lastCompletion = null;
+    this.lastToolCall = null;
+    this.lastCancel = null;
+    this.startedTotal = 0;
+    this.completedTotal = 0;
+    this.cancelledTotal = 0;
+  }
+
+  /**
+   * Point at a (possibly new) log file. A new file = a new TabbyAPI launch = a
+   * fresh request-id space and fresh log: clear per-file active + dedupe state.
+   * Returns true when the file actually changed.
+   * @param {string|null} file
+   */
+  setFile(file) {
+    if (file === this.file) return false;
+    this.file = file;
+    this.active.clear();
+    this._seenIds.clear();
+    return true;
+  }
+
+  /**
+   * Feed one raw log line. Returns true when it produced a state change worth
+   * publishing. Never throws.
+   * @param {string} line
+   */
+  ingestLine(line) {
+    if (typeof line !== "string" || !line.trim()) return false;
+    this.linesSeen++;
+    this.lastLineAtMs = Date.now();
+    const ev = parseTabbyLogLine(line);
+    if (!ev) return false;
+    return this.ingestEvent(ev);
+  }
+
+  /** Fold one already-parsed typed event. Returns true if state changed. */
+  ingestEvent(ev) {
+    if (!ev || typeof ev.kind !== "string") return false;
+    switch (ev.kind) {
+      case "start": {
+        // A START whose completion was ALREADY folded in (e.g. re-fed by a
+        // reconnect's `tail -n 200` replay) must NOT re-open — that request is
+        // done; re-adding it would orphan it and latch BUSY.
+        if (this._seenIds.has(ev.id)) return false;
+        this.startedTotal++;
+        this.lastStart = ev;
+        // BUSY the instant a request starts — no wait for completion.
+        this.active.set(ev.id, {
+          startTsMs: ev.tsMs,
+          startedAtWallMs: Date.now(),
+          promptTokens: ev.promptTokens ?? null,
+          maxTokens: ev.maxTokens ?? null,
+          lastActivityWallMs: Date.now(),
+        });
+        return true;
+      }
+      case "tool": {
+        this.lastToolCall = ev;
+        const a = this.active.get(ev.id);
+        if (a) a.lastActivityWallMs = Date.now(); // liveness heartbeat during a long generation
+        return true;
+      }
+      case "cancel": {
+        this.cancelledTotal++;
+        this.lastCancel = ev;
+        this.active.delete(ev.id); // close the request so BUSY does not latch
+        return true;
+      }
+      case "completion": {
+        // Dedupe replays: the follower's `tail -n 200` intentionally re-feeds the
+        // tail on reconnect/rotation; a duplicate must not skew the medians. Even
+        // when deduped, CLOSE any active entry for this id — a replay may have
+        // re-added its START, and this completion proves it is finished.
+        if (this._seenIds.has(ev.id)) {
+          const had = this.active.delete(ev.id);
+          return had;
+        }
+        this._seenIds.add(ev.id);
+        this.completedTotal++;
+        this.lastCompletion = ev;
+        this.recent.push(ev);
+        if (this.recent.length > this.windowN) this.recent.shift();
+        this.active.delete(ev.id);
+        return true;
+      }
+      default:
+        return false;
+    }
+  }
+
+  /** Drop in-flight starts idle longer than the cap (lost starts on crash/rotation). */
+  _pruneActive(now) {
+    for (const [id, a] of this.active) {
+      if (now - a.lastActivityWallMs > this.activeMaxMs) this.active.delete(id);
+    }
+  }
+
+  /**
+   * Snapshot the live state. Shape-compatible with `parseTabbyLog` output plus
+   * LIVE fields (activeCount, elapsedSeconds, lastStart/lastToolCall/lastCancel,
+   * stream liveness). All absent values null — never 0.
+   * @param {number} [now]
+   */
+  snapshot(now = Date.now()) {
+    this._pruneActive(now);
+    const activeIds = [...this.active.keys()].sort((a, b) => a - b);
+    const lastRequest = this.recent.length > 0 ? this.recent[this.recent.length - 1] : null;
+    const lastRequestAtMs = lastRequest ? lastRequest.tsMs : null;
+    const agg = aggregateWindow(this.recent);
+    const stale =
+      activeIds.length === 0 && lastRequestAtMs != null && now - lastRequestAtMs > TABBY_LOG_STALE_MS;
+    const perfMetricsStale =
+      this.recent.length === 0 || (lastRequestAtMs != null && now - lastRequestAtMs > TABBY_LOG_STALE_MS);
+    // Elapsed of the OLDEST in-flight request, from wall-clock receipt (log stamps
+    // carry no TZ — see parseTimestamp precondition).
+    let elapsedSeconds = null;
+    if (activeIds.length > 0) {
+      let oldest = Infinity;
+      for (const id of activeIds) {
+        const a = this.active.get(id);
+        if (a && a.startedAtWallMs < oldest) oldest = a.startedAtWallMs;
+      }
+      if (Number.isFinite(oldest)) elapsedSeconds = Math.max(0, Math.round(((now - oldest) / 1000) * 10) / 10);
+    }
+    return {
+      connected: this.connected,
+      lastLineAtMs: this.lastLineAtMs,
+      linesSeen: this.linesSeen,
+      file: this.file,
+      recentRequest: this.recent,
+      lastRequest,
+      active: activeIds.length > 0,
+      activeIds,
+      activeCount: activeIds.length,
+      perfMetricsStale,
+      recentWindowCount: this.recent.length,
+      windowAvgTps: agg.windowAvgTps,
+      peakTps: agg.peakTps,
+      recentMedGenTps: agg.recentMedGenTps,
+      recentMedPrefillTps: agg.recentMedPrefillTps,
+      recentMedTtftSeconds: agg.recentMedTtftSeconds,
+      recentCacheHitRate: agg.recentCacheHitRate,
+      recentMtpAcceptance: agg.recentMtpAcceptance,
+      lastRequestId: lastRequest ? lastRequest.id : null,
+      lastRequestAtMs,
+      stale,
+      elapsedSeconds,
+      lastStart: this.lastStart,
+      lastToolCall: this.lastToolCall,
+      lastCancel: this.lastCancel,
+      startedTotal: this.startedTotal,
+      completedTotal: this.completedTotal,
+      cancelledTotal: this.cancelledTotal,
+    };
+  }
 }
 
 /**
@@ -264,37 +578,15 @@ export function parseTabbyLog(text) {
   // MTP use a sum-based share. All null when the window is empty — never 0.
   const win = recentRequest.slice(-TABBY_LOG_RECENT_WINDOW_N);
   const recentWindowCount = win.length;
-
-  let windowAvgTps = null;
-  let peakTps = null;
-  let recentMedGenTps = null;
-  if (win.length > 0) {
-    const tps = win.map((r) => r.genTps).filter((n) => Number.isFinite(n));
-    if (tps.length > 0) {
-      peakTps = roundN(Math.max(...tps), 2);
-      windowAvgTps = mean(tps, 2);
-      recentMedGenTps = median(tps, 2);
-    }
-  }
-
-  let recentMedPrefillTps = null;
-  let recentMedTtftSeconds = null;
-  let recentCacheHitRate = null;
-  let recentMtpAcceptance = null;
-  if (recentWindowCount > 0) {
-    recentMedPrefillTps = median(win.map((r) => r.prefillTps).filter((n) => Number.isFinite(n)), 2);
-    recentMedTtftSeconds = median(win.map((r) => r.ttftSeconds).filter((n) => Number.isFinite(n)), 2);
-    // Cached tokens = promptTokens - newTokens. Sum-based share over the window.
-    const promptSum = win.reduce((a, r) => a + r.promptTokens, 0);
-    const cachedSum = win.reduce((a, r) => a + (r.promptTokens - r.newTokens), 0);
-    if (promptSum > 0) recentCacheHitRate = roundN(cachedSum / promptSum, 4);
-    const withDraft = win.filter((r) => r.draftTotal != null && r.draftTotal > 0);
-    if (withDraft.length > 0) {
-      const accSum = withDraft.reduce((a, r) => a + r.draftAccepted, 0);
-      const totSum = withDraft.reduce((a, r) => a + r.draftTotal, 0);
-      if (totSum > 0) recentMtpAcceptance = roundN(accSum / totSum, 4);
-    }
-  }
+  const {
+    windowAvgTps,
+    peakTps,
+    recentMedGenTps,
+    recentMedPrefillTps,
+    recentMedTtftSeconds,
+    recentCacheHitRate,
+    recentMtpAcceptance,
+  } = aggregateWindow(win);
   const lastRequestId = lastRequest ? lastRequest.id : null;
 
   const now = Date.now();
@@ -315,6 +607,8 @@ export function parseTabbyLog(text) {
     lastRequest,
     active: activeIds.length > 0,
     activeIds,
+    activeCount: activeIds.length,
+    elapsedSeconds: null, // batch tail has no reliable wall-clock receipt time; LIVE elapsed comes from the follower
     perfMetricsStale,
     recentWindowCount,
     recentMedGenTps,
@@ -391,11 +685,17 @@ export function applyTabbyLog(entry, log, modelChangedAtMs = 0) {
     lastRequestId: log.lastRequestId ?? null,
     windowAvgTps: log.windowAvgTps ?? null,
     peakTps: log.peakTps ?? null,
+    activeRequests: Number.isFinite(log.activeCount) ? log.activeCount : log.active ? 1 : 0,
+    requestElapsedSeconds: log.active ? log.elapsedSeconds ?? null : null,
+    lastRequestDetail: entry.lastRequestDetail ?? null,
+    activeRequest: entry.activeRequest ?? null,
   };
 
   if (log.active) {
-    entry.requestsRunning = 1;
-    entry.slotsActive = 1;
+    // Real concurrent count from the follower's active-request map (was hardcoded 1).
+    const n = Number.isFinite(log.activeCount) ? log.activeCount : log.activeIds?.length ?? 1;
+    entry.requestsRunning = n > 0 ? n : 1;
+    entry.slotsActive = entry.requestsRunning;
   } else if (log.lastRequestAtMs != null) {
     // Recent completions known and nothing in flight => a REAL zero.
     entry.requestsRunning = 0;
@@ -404,6 +704,42 @@ export function applyTabbyLog(entry, log, modelChangedAtMs = 0) {
     entry.requestsRunning = null;
     entry.slotsActive = null;
   }
+
+  // ── LIVE request state (from the continuous follower) ──
+  // These are genuinely live: BUSY the instant a START lands, active count, and
+  // elapsed wall-clock of the oldest in-flight request. Throughput is NOT live
+  // (TabbyAPI emits decode tok/s only at completion) — see perfFromLastRequest.
+  entry.activeRequests = Number.isFinite(log.activeCount) ? log.activeCount : log.active ? 1 : 0;
+  entry.requestElapsedSeconds = log.active ? log.elapsedSeconds ?? null : null;
+  entry.telemetrySource = "tabbyapi-log-stream";
+  // Per-request LIVE detail of the most recent completion (null-safe).
+  const lrDetail = log.lastRequest;
+  entry.lastRequestDetail = lrDetail
+    ? {
+        id: lrDetail.id ?? null,
+        genTps: lrDetail.genTps ?? null,
+        prefillTps: lrDetail.prefillTps ?? null,
+        prefillSeconds: lrDetail.prefillSeconds ?? null,
+        ttftSeconds: lrDetail.ttftSeconds ?? null,
+        totalSeconds: lrDetail.totalSeconds ?? null,
+        promptTokens: lrDetail.promptTokens ?? null,
+        newTokens: lrDetail.newTokens ?? null,
+        cachedPct: lrDetail.cachedPct ?? null,
+        draftAccepted: lrDetail.draftAccepted ?? null,
+        draftTotal: lrDetail.draftTotal ?? null,
+        draftPct: lrDetail.draftPct ?? null,
+      }
+    : null;
+  // LIVE in-flight request context (prompt size / generation ceiling) when active.
+  entry.activeRequest =
+    log.active && log.lastStart
+      ? {
+          id: log.lastStart.id ?? null,
+          promptTokens: log.lastStart.promptTokens ?? null,
+          maxTokens: log.lastStart.maxTokens ?? null,
+          elapsedSeconds: log.elapsedSeconds ?? null,
+        }
+      : null;
 
   const lr = log.lastRequest;
   if (lr) {

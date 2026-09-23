@@ -375,6 +375,16 @@ export interface LlmMetrics {
   /** The log-derived tps is a LAST-REQUEST value, not a live instantaneous gauge. */
   perfFromLastRequest?: boolean;
   requestActive?: boolean | null;
+  /** LIVE concurrent in-flight request count (continuous log stream). */
+  activeRequests?: number | null;
+  /** Wall-clock seconds since the oldest in-flight request started (LIVE). */
+  requestElapsedSeconds?: number | null;
+  /** Telemetry adapter origin, e.g. "tabbyapi-log-stream". */
+  telemetrySource?: string | null;
+  /** Full detail of the most recent COMPLETED request (updated per completion). */
+  lastRequestDetail?: Record<string, number | null> | null;
+  /** In-flight request context (prompt size / generation ceiling) when active. */
+  activeRequest?: { id: number | null; promptTokens: number | null; maxTokens: number | null; elapsedSeconds: number | null } | null;
   windowAvgTps?: number | null;
   peakTps?: number | null;
   /**

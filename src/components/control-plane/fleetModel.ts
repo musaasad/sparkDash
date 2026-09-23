@@ -97,6 +97,16 @@ export interface DeploymentTelemetry {
    * null when the source does not report it.
    */
   requestActive?: boolean | null;
+  /** LIVE concurrent in-flight request count from the continuous log stream. */
+  activeRequests?: number | null;
+  /** Wall-clock seconds since the oldest in-flight request started (LIVE). */
+  requestElapsedSeconds?: number | null;
+  /** Telemetry adapter origin, e.g. "tabbyapi-log-stream". */
+  telemetrySource?: string | null;
+  /** Full detail of the most recent COMPLETED request (LIVE-updated per request). */
+  lastRequestDetail?: Record<string, number | null> | null;
+  /** In-flight request context (prompt size / generation ceiling) when active. */
+  activeRequest?: { id: number | null; promptTokens: number | null; maxTokens: number | null; elapsedSeconds: number | null } | null;
   /**
    * ms timestamp of the most recent COMPLETION parsed from TabbyAPI's own log.
    * This is the last-request recency anchor — real history, not a live gauge.
@@ -555,6 +565,11 @@ export function deploymentTelemetry(sparks: SparkSnapshot[], d: DeploymentStatus
     slotsTotal: optNum(llm?.slotsTotal),
     totalOutputTokens: optNum(llm?.totalOutputTokens),
     requestActive: llm?.requestActive ?? null,
+    activeRequests: optNum(llm?.activeRequests),
+    requestElapsedSeconds: optNum(llm?.requestElapsedSeconds),
+    telemetrySource: llm?.telemetrySource ?? null,
+    lastRequestDetail: llm?.lastRequestDetail ?? null,
+    activeRequest: llm?.activeRequest ?? null,
     lastRequestAtMs: optNum(llm?.lastRequestAtMs),
     perfStale: llm?.perfStale === true,
     perfMetricsStale: llm?.perfMetricsStale === true,

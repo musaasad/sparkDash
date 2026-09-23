@@ -10,6 +10,7 @@ import { ComfyProbe } from "../collectors/ComfyProbe.js";
 import { HermesProbe } from "../collectors/HermesProbe.js";
 import { TailscaleProbe } from "../collectors/TailscaleProbe.js";
 import { TabbyLogProbe, applyTabbyLog } from "../collectors/TabbyLogProbe.js";
+import { TabbyLogFollower } from "../collectors/TabbyLogFollower.js";
 import { llmDaily } from "../collectors/LlmDaily.js";
 import { sshExec } from "../collectors/ssh.js";
 import {
@@ -82,6 +83,12 @@ export class SparkMonitor {
      * @type {TabbyLogProbe | null}
      */
     this.tabbyLogProbe = this._tabbyLogEnabled(spark) ? new TabbyLogProbe(spark) : null;
+    /**
+     * @type {TabbyLogFollower | null}
+     * Continuous READ-ONLY log streamer — the LIVE source. The batch probe above
+     * stays as a seed/fallback when the stream is not yet connected.
+     */
+    this.tabbyLogFollower = this._tabbyLogEnabled(spark) ? new TabbyLogFollower(spark) : null;
     // Hermes status is surfaced in the snapshot (not under `metrics`) and is
     // always present so the UI never has to special-case a missing field.
     this._hermes = {
@@ -226,15 +233,24 @@ export class SparkMonitor {
       this._metrics.tailscale = null;
     }
 
-    // TabbyAPI log-tail probe — create / update / clear (READ-ONLY)
+    // TabbyAPI log-tail — continuous follower (live) + batch probe (fallback),
+    // create / update / clear (READ-ONLY). The stream is (re)started by
+    // _restartTabbyLogPollInterval() later in this method.
     if (this._tabbyLogEnabled()) {
       if (this.tabbyLogProbe) {
         this.tabbyLogProbe.setTarget(spark);
       } else {
         this.tabbyLogProbe = new TabbyLogProbe(spark);
       }
+      if (!this.tabbyLogFollower) {
+        this.tabbyLogFollower = new TabbyLogFollower(spark);
+      }
     } else {
       this.tabbyLogProbe = null;
+      if (this.tabbyLogFollower) {
+        this.tabbyLogFollower.stop();
+        this.tabbyLogFollower = null;
+      }
       this._metrics.tabbyLog = null;
     }
 
@@ -403,18 +419,28 @@ export class SparkMonitor {
     return typeof raw === "string" && raw.trim().length > 0;
   }
 
-  /** Start or clear the TabbyAPI log-tail poll timer when enablement flips. */
+  /** Start or clear the TabbyAPI log stream + its (cheap) read timer. */
   _restartTabbyLogPollInterval() {
     if (this._tabbyLogIntervalId != null) {
       clearInterval(this._tabbyLogIntervalId);
       this._intervals = this._intervals.filter((id) => id !== this._tabbyLogIntervalId);
       this._tabbyLogIntervalId = null;
     }
+    // Tear down any existing stream before deciding (enablement may have flipped).
+    if (this.tabbyLogFollower) {
+      this.tabbyLogFollower.stop();
+    }
     if (this._tabbyLogEnabled() && this._running) {
-      this._tabbyLogIntervalId = setInterval(
-        () => this._pollDomain("tabbyLog"),
-        POLL_INTERVAL_TABBYLOG
-      );
+      if (!this.tabbyLogFollower) {
+        this.tabbyLogFollower = new TabbyLogFollower(this.spark);
+      }
+      this.tabbyLogFollower.setTarget(this.spark);
+      this.tabbyLogFollower.start();
+      // The follower maintains state continuously; this timer only READS it into
+      // the published metrics (no SSH per tick), so a fast cadence is cheap and
+      // makes BUSY/telemetry feel near-instant under real traffic.
+      const readMs = Math.min(1000, POLL_INTERVAL_TABBYLOG);
+      this._tabbyLogIntervalId = setInterval(() => this._pollDomain("tabbyLog"), readMs);
       this._intervals.push(this._tabbyLogIntervalId);
       void this._pollDomain("tabbyLog");
     }
@@ -498,6 +524,13 @@ export class SparkMonitor {
     this._tailscaleIntervalId = null;
     this._tabbyLogIntervalId = null;
     this._inflight = {};
+    if (this.tabbyLogFollower) {
+      try {
+        this.tabbyLogFollower.stop();
+      } catch {
+        /* ignore */
+      }
+    }
     if (this.comfyProbe) {
       try {
         this.comfyProbe.dispose();
@@ -722,7 +755,15 @@ export class SparkMonitor {
           result = this.hermesProbe ? await this.hermesProbe.check() : null;
           break;
         case "tabbyLog":
-          result = this.tabbyLogProbe ? await this.tabbyLogProbe.probe() : null;
+          // Live source = the continuous follower. Until it has connected (or if
+          // it is unavailable), fall back to a one-shot batch tail so the first
+          // paint still shows real history.
+          if (this.tabbyLogFollower) {
+            const live = this.tabbyLogFollower.getState();
+            result = live.available ? live : this.tabbyLogProbe ? await this.tabbyLogProbe.probe() : live;
+          } else {
+            result = this.tabbyLogProbe ? await this.tabbyLogProbe.probe() : null;
+          }
           break;
       }
       // Re-check after the await — `stop()`/`updateSpark()` may have torn

@@ -4618,6 +4618,10 @@ button.cp-link { background: none; border: none; padding: 0; cursor: pointer; fo
 /* Log-derived numbers are labelled with provenance — never a fake live gauge. */
 .cp-inst-prov { font-size: 10px; letter-spacing: 0.04em; color: var(--color-dim, var(--color-muted)); }
 .cp-inst-live { font-size: 11px; font-weight: 600; color: var(--inst-tone-live); letter-spacing: 0.06em; }
+/* LIVE activity line (request in flight) — the recent line takes the live tone so
+   GENERATING/active-count reads as genuinely live, distinct from the calm RECENT
+   framing. Colour is paired with the word "GENERATING" (never colour alone). */
+.cp-inst-recent.is-live { color: var(--inst-tone-live); font-weight: 600; }
 
 .cp-inst-secondary {
   grid-column: 1 / -1;

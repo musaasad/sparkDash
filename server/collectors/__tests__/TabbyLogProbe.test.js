@@ -14,8 +14,11 @@ import {
   parseTabbyLogLine,
   parseCompletionLine,
   parseStartLine,
+  parseToolCallLine,
+  parseCancelLine,
   applyTabbyLog,
   TabbyLogProbe,
+  TabbyLogState,
   TABBY_LOG_DEFAULT_DIR,
 } from "../TabbyLogProbe.js";
 
@@ -392,4 +395,132 @@ test("parseStartLine parses the exact START shape", () => {
   assert.ok(s);
   assert.equal(s.id, 67897);
   assert.equal(parseStartLine("nope"), null);
+});
+
+// ── Continuous-follower migration: parser completeness + live state ──
+
+// Grammar #4: a cache-warm completion logs NO "(N T/s)" prefill segment. It
+// previously matched NEITHER COMPLETION_RE nor START_RE and was silently dropped,
+// latching BUSY and losing the completion from the window.
+const COMPLETION_WARM =
+  "2026-09-23 16:23:32.971 | INFO     | #116313 chat/completions (stream): 831 tokens generated at 66.3 T/s · prompt 191,575 tokens, 100% cached, 87 new in 0.68 s · first token 0.69 s, total 13.2 s · draft 601/926 accepted (65%)";
+
+test("cache-warm completion (no prefill T/s) parses; prefillTps stays null (never fabricated)", () => {
+  const c = parseCompletionLine(COMPLETION_WARM);
+  assert.ok(c, "cache-warm completion must parse (A-fix)");
+  assert.equal(c.id, 116313);
+  assert.equal(c.genTps, 66.3);
+  assert.equal(c.prefillTps, null, "no prefill segment => null, not 0");
+  assert.equal(c.newTokens, 87);
+  assert.equal(c.ttftSeconds, 0.69);
+  assert.equal(c.draftAccepted, 601);
+  assert.equal(c.draftTotal, 926);
+  assert.equal(c.draftPct, 65);
+});
+
+test("parseStartLine now surfaces promptTokens + maxTokens (progress context)", () => {
+  const s = parseStartLine(START);
+  assert.ok(s);
+  assert.equal(s.id, 67897);
+  assert.equal(s.promptTokens, 191844);
+  assert.equal(s.maxTokens, 32768);
+});
+
+const TOOL = "2026-09-23 08:43:05.000 | INFO     | #67897 chat/completions (stream): parsed 1 tool call (qwen3_coder)";
+const CANCEL = "2026-09-23 08:43:07.000 | WARNING  | #67898 chat/completions: client disconnected, generation cancelled";
+
+test("tool-call + cancel lines parse (liveness + close-active)", () => {
+  const t = parseToolCallLine(TOOL);
+  assert.ok(t);
+  assert.equal(t.id, 67897);
+  assert.equal(t.count, 1);
+  assert.equal(t.parser, "qwen3_coder");
+  const x = parseCancelLine(CANCEL);
+  assert.ok(x, "WARNING-level cancel must parse (was invisible)");
+  assert.equal(x.id, 67898);
+});
+
+test("parseTabbyLogLine returns a typed event for each grammar", () => {
+  assert.equal(parseTabbyLogLine(COMPLETION)?.kind, "completion");
+  assert.equal(parseTabbyLogLine(START)?.kind, "start");
+  assert.equal(parseTabbyLogLine(TOOL)?.kind, "tool");
+  assert.equal(parseTabbyLogLine(CANCEL)?.kind, "cancel");
+  assert.equal(parseTabbyLogLine("2026-09-23 08:43:00.000 | INFO | unrelated noise"), null);
+});
+
+test("TabbyLogState: BUSY the instant a START lands; completion + cancel close it", () => {
+  const st = new TabbyLogState();
+  st.setFile("x.log");
+  st.connected = true;
+  assert.equal(st.snapshot().active, false);
+  st.ingestLine(START_OPEN); // #67898 starts
+  let snap = st.snapshot();
+  assert.equal(snap.active, true, "BUSY immediately on START, no completion needed");
+  assert.equal(snap.activeCount, 1);
+  st.ingestLine(START); // #67897 starts (concurrent)
+  assert.equal(st.snapshot().activeCount, 2, "concurrent requests counted, not hardcoded 1");
+  st.ingestLine(COMPLETION); // #67897 completes
+  snap = st.snapshot();
+  assert.equal(snap.activeCount, 1, "completion closes its request");
+  assert.equal(snap.lastRequestId, 67897);
+  st.ingestLine(CANCEL); // #67898 cancelled
+  snap = st.snapshot();
+  assert.equal(snap.active, false, "cancel closes the request so BUSY does not latch");
+  assert.equal(snap.activeCount, 0);
+});
+
+test("TabbyLogState: replayed completion (tail -n 200 on reconnect) is deduped", () => {
+  const st = new TabbyLogState();
+  st.setFile("x.log");
+  st.ingestLine(COMPLETION);
+  const first = st.snapshot();
+  st.ingestLine(COMPLETION); // same id replayed
+  const second = st.snapshot();
+  assert.equal(second.recentWindowCount, first.recentWindowCount, "duplicate id does not re-enter the window");
+  assert.equal(second.completedTotal, 1);
+});
+
+test("TabbyLogState: a new file resets per-file active/dedupe state", () => {
+  const st = new TabbyLogState();
+  st.setFile("a.log");
+  st.ingestLine(START_OPEN);
+  assert.equal(st.snapshot().activeCount, 1);
+  st.setFile("b.log"); // TabbyAPI relaunch → new id space
+  assert.equal(st.snapshot().activeCount, 0, "new file clears stale in-flight state");
+  st.ingestLine(COMPLETION); // same id as before is now NEW (not deduped)
+  assert.equal(st.snapshot().recentWindowCount, 1);
+});
+
+test("applyTabbyLog projects live active-count + elapsed + last-request detail", () => {
+  const st = new TabbyLogState();
+  st.setFile("x.log");
+  st.connected = true;
+  st.ingestLine(START_OPEN); // #67898 in flight
+  st.ingestLine(COMPLETION); // #67897 completed
+  const entry = { backend: "tabbyapi" };
+  applyTabbyLog(entry, { available: true, file: "x.log", ...st.snapshot() });
+  assert.equal(entry.activeRequests, 1);
+  assert.equal(entry.requestActive, true);
+  assert.equal(entry.requestsRunning, 1, "real concurrent count, not hardcoded");
+  assert.equal(entry.telemetrySource, "tabbyapi-log-stream");
+  assert.equal(entry.lastRequestDetail?.id, 67897);
+  assert.equal(entry.lastRequestDetail?.prefillTps, 420);
+  assert.equal(entry.lastRequestDetail?.totalSeconds, 37.9);
+  assert.equal(entry.activeRequest?.id, 67898);
+  assert.equal(entry.activeRequest?.promptTokens, 12000);
+});
+
+test("TabbyLogState: a reconnect replay re-feeding a completed START does NOT re-open it (no orphan BUSY)", () => {
+  const st = new TabbyLogState();
+  st.setFile("x.log");
+  st.ingestLine(START); // #67897 starts
+  assert.equal(st.snapshot().activeCount, 1);
+  st.ingestLine(COMPLETION); // #67897 completes
+  assert.equal(st.snapshot().activeCount, 0);
+  // Simulate a reconnect: `tail -n 200` replays the same START then COMPLETION.
+  st.ingestLine(START); // must be skipped — completion already seen
+  assert.equal(st.snapshot().activeCount, 0, "replayed START of a completed request stays closed");
+  st.ingestLine(COMPLETION); // deduped completion
+  assert.equal(st.snapshot().activeCount, 0);
+  assert.equal(st.snapshot().recentWindowCount, 1, "window not double-counted by the replay");
 });

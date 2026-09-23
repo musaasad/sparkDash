@@ -317,7 +317,7 @@ describe("DeploymentInstrument", () => {
     expect(cacheTip.toLowerCase()).toContain("aggregate");
   });
 
-  it("shows the LIVE latest-request throughput (not the lagging median) while actively serving", () => {
+  it("labels the last-completed throughput honestly (LAST REQUEST, never LIVE) while serving", () => {
     cleanupRenders();
     const t = telem({
       provenance: "TabbyAPI log (x.log)",
@@ -325,15 +325,25 @@ describe("DeploymentInstrument", () => {
       recentMedGenTps: 47,
       generationTps: 71,
       requestActive: true,
+      activeRequests: 2,
+      requestElapsedSeconds: 3.4,
       perfMetricsStale: false,
     });
     const { container } = render(
       <DeploymentInstrument view={view({ telemetry: t })} role="PRIMARY" state="busy" history={[40, 71]}
         lastRequestAt={990} now={1000} runtimeLabels={{}} runtimeMetrics={{}} onOpen={noop} />
     );
-    // Actively serving → gauge tracks the live latest-request rate (71), labelled LIVE.
-    expect(container.querySelector(".cp-gauge-value-note")?.textContent).toContain("LIVE");
+    // TabbyAPI emits decode tok/s only at completion → the freshest value (71) is
+    // the LAST COMPLETED request, labelled "LAST REQUEST" — never "LIVE".
+    const note = container.querySelector(".cp-gauge-value-note")?.textContent ?? "";
+    expect(note).toContain("LAST REQUEST");
+    expect(note).not.toContain("LIVE");
     expect(container.querySelector(".cp-gauge-value")?.textContent).toBe("71");
+    // The genuinely-live activity line lights up from the follower (count + elapsed).
+    const live = container.querySelector(".cp-inst-recent.is-live")?.textContent ?? "";
+    expect(live).toContain("GENERATING");
+    expect(live).toContain("2 active");
+    expect(live).toContain("3.4s");
   });
 
   it("calms to the recent-window median (RECENT MED) when idle but recent", () => {
