@@ -623,7 +623,9 @@ test("integration splits energy and coverage at UTC minute boundaries", (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sparkdash-energy-split-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const filePath = path.join(dir, "fleet-energy.json");
-  const minute = Date.UTC(2026, 7, 23, 12, 0, 0);
+  // Anchor to the live clock: flush() prunes against `now`, so a hard-coded
+  // past date falls outside the 24h retention window and the buckets vanish.
+  const minute = Math.floor(Date.now() / MINUTE_MS) * MINUTE_MS;
   const tracker = new FleetEnergyTracker({
     filePath,
     load: false,

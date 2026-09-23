@@ -9,6 +9,7 @@ import { llmMonitoringEnabled } from "../../src/shared/runtimeState.js";
 import { ComfyProbe } from "../collectors/ComfyProbe.js";
 import { HermesProbe } from "../collectors/HermesProbe.js";
 import { TailscaleProbe } from "../collectors/TailscaleProbe.js";
+import { TabbyLogProbe, applyTabbyLog } from "../collectors/TabbyLogProbe.js";
 import { llmDaily } from "../collectors/LlmDaily.js";
 import { sshExec } from "../collectors/ssh.js";
 import {
@@ -22,6 +23,7 @@ import {
   POLL_INTERVAL_LIVENESS,
   POLL_INTERVAL_HERMES,
   POLL_INTERVAL_TAILSCALE,
+  POLL_INTERVAL_TABBYLOG,
   LLM_PORT,
   COMFY_PORT,
   HOST_PATHS,
@@ -72,6 +74,14 @@ export class SparkMonitor {
     this.hermesProbe = this._hermesMonitoringEnabled(spark)
       ? new HermesProbe(spark)
       : null;
+
+    /**
+     * READ-ONLY TabbyAPI log-tail probe. TabbyAPI's fork exposes no HTTP
+     * metrics, so this is the ONLY real inference-perf source for Qwen.
+     * Opt-in per Spark via `tabbyLogDir` (absent => honest "no log configured").
+     * @type {TabbyLogProbe | null}
+     */
+    this.tabbyLogProbe = this._tabbyLogEnabled(spark) ? new TabbyLogProbe(spark) : null;
     // Hermes status is surfaced in the snapshot (not under `metrics`) and is
     // always present so the UI never has to special-case a missing field.
     this._hermes = {
@@ -106,6 +116,7 @@ export class SparkMonitor {
       llm: [],
       comfy: null,
       tailscale: null,
+      tabbyLog: null,
     };
     this._lastUpdate = {};
     this._metricCollectionSuccessful = { gpu: false, cpu: false };
@@ -135,6 +146,8 @@ export class SparkMonitor {
     this._hermesIntervalId = null;
     /** @type {ReturnType<typeof setInterval> | null} */
     this._tailscaleIntervalId = null;
+    /** @type {ReturnType<typeof setInterval> | null} */
+    this._tabbyLogIntervalId = null;
     this._running = false;
     this._runGeneration = 0;
     /** @type {Record<string, boolean | symbol>} in-flight domain guards */
@@ -148,6 +161,7 @@ export class SparkMonitor {
     const prevComfyPort = this._comfyPort(this.spark);
     const wasHermes = this._hermesMonitoringEnabled(this.spark);
     const wasTailscale = this._tailscaleMonitoringEnabled(this.spark);
+    const wasTabbyLog = this._tabbyLogEnabled(this.spark);
     this.collector.invalidatePendingCollections();
     this._runGeneration += 1;
     this._inflight = {};
@@ -204,6 +218,18 @@ export class SparkMonitor {
       this._metrics.tailscale = null;
     }
 
+    // TabbyAPI log-tail probe — create / update / clear (READ-ONLY)
+    if (this._tabbyLogEnabled()) {
+      if (this.tabbyLogProbe) {
+        this.tabbyLogProbe.setTarget(spark);
+      } else {
+        this.tabbyLogProbe = new TabbyLogProbe(spark);
+      }
+    } else {
+      this.tabbyLogProbe = null;
+      this._metrics.tabbyLog = null;
+    }
+
     // Hermes probe — create / update / clear
     if (this._hermesMonitoringEnabled()) {
       if (this.hermesProbe) {
@@ -231,6 +257,9 @@ export class SparkMonitor {
     }
     if (this._running && wasTailscale !== this._tailscaleMonitoringEnabled()) {
       this._restartTailscalePollInterval();
+    }
+    if (this._running && wasTabbyLog !== this._tabbyLogEnabled()) {
+      this._restartTabbyLogPollInterval();
     }
   }
 
@@ -357,6 +386,33 @@ export class SparkMonitor {
   }
 
   /**
+   * Opt-in READ-ONLY TabbyAPI log tail (all roles; default off). Enabled by a
+   * non-empty `tabbyLogDir` — absent stays honestly "no log configured".
+   * @param {object} [spark]
+   */
+  _tabbyLogEnabled(spark = this.spark) {
+    const raw = spark?.tabbyLogDir;
+    return typeof raw === "string" && raw.trim().length > 0;
+  }
+
+  /** Start or clear the TabbyAPI log-tail poll timer when enablement flips. */
+  _restartTabbyLogPollInterval() {
+    if (this._tabbyLogIntervalId != null) {
+      clearInterval(this._tabbyLogIntervalId);
+      this._intervals = this._intervals.filter((id) => id !== this._tabbyLogIntervalId);
+      this._tabbyLogIntervalId = null;
+    }
+    if (this._tabbyLogEnabled() && this._running) {
+      this._tabbyLogIntervalId = setInterval(
+        () => this._pollDomain("tabbyLog"),
+        POLL_INTERVAL_TABBYLOG
+      );
+      this._intervals.push(this._tabbyLogIntervalId);
+      void this._pollDomain("tabbyLog");
+    }
+  }
+
+  /**
    * Opt-in Hermes Agent monitoring (all roles; default off).
    * @param {object} [spark]
    */
@@ -413,6 +469,7 @@ export class SparkMonitor {
     this._restartComfyPollInterval();
     this._restartHermesPollInterval();
     this._restartTailscalePollInterval();
+    this._restartTabbyLogPollInterval();
     // Liveness on a slightly slower cadence
     this._intervals.push(setInterval(() => this._checkOnline(), POLL_INTERVAL_LIVENESS));
     console.log(`[SparkMonitor] ${this.spark.id} started`);
@@ -431,6 +488,7 @@ export class SparkMonitor {
     this._comfyIntervalId = null;
     this._hermesIntervalId = null;
     this._tailscaleIntervalId = null;
+    this._tabbyLogIntervalId = null;
     this._inflight = {};
     if (this.comfyProbe) {
       try {
@@ -483,6 +541,12 @@ export class SparkMonitor {
       comfyMonitoring: comfyOn,
       comfyPort: this._comfyPort(),
       tailscaleMonitoring: tailscaleOn,
+      /**
+       * READ-ONLY TabbyAPI log tail: opt-in flag + configured directory (not a
+       * secret). Present so the UI can show provenance / "no log configured".
+       */
+      tabbyLogMonitoring: this._tabbyLogEnabled(),
+      tabbyLogDir: this.spark.tabbyLogDir || null,
       hermes: this._hermes,
       hardware: this._hardwareSummary,
       /**
@@ -513,6 +577,8 @@ export class SparkMonitor {
         llm: this._metrics.llm,
         comfy: comfyOn ? this._metrics.comfy : null,
         tailscale: tailscaleOn ? this._metrics.tailscale : null,
+        /** READ-ONLY TabbyAPI log-tail snapshot (null when not configured). */
+        tabbyLog: this._tabbyLogEnabled() ? this._metrics.tabbyLog : null,
       },
     };
   }
@@ -594,6 +660,7 @@ export class SparkMonitor {
       this._pollDomain("comfy"),
       this._pollDomain("hermes"),
       this._pollDomain("tailscale"),
+      this._pollDomain("tabbyLog"),
     ]);
   }
 
@@ -606,6 +673,7 @@ export class SparkMonitor {
     if (domain === "comfy" && !this._comfyMonitoringEnabled()) return;
     if (domain === "hermes" && !this._hermesMonitoringEnabled()) return;
     if (domain === "tailscale" && !this._tailscaleMonitoringEnabled()) return;
+    if (domain === "tabbyLog" && !this._tabbyLogEnabled()) return;
     const runGeneration = this._runGeneration;
     const pollToken = Symbol(domain);
     this._inflight[domain] = pollToken;
@@ -645,6 +713,9 @@ export class SparkMonitor {
         case "hermes":
           result = this.hermesProbe ? await this.hermesProbe.check() : null;
           break;
+        case "tabbyLog":
+          result = this.tabbyLogProbe ? await this.tabbyLogProbe.probe() : null;
+          break;
       }
       // Re-check after the await — `stop()`/`updateSpark()` may have torn
       // this monitor down mid-flight. Writing `_metrics` on a dead monitor
@@ -681,6 +752,17 @@ export class SparkMonitor {
           this._metrics.unifiedMemory = result;
           break;
         case "llm":
+          // Merge the READ-ONLY TabbyAPI log metrics onto any tabbyapi entry
+          // BEFORE publishing, so the Qwen pane shows REAL last-request values
+          // with provenance + timestamp (never a fabricated gauge).
+          {
+            const log = this._metrics.tabbyLog;
+            if (log) {
+              for (const entry of result) {
+                if (entry?.backend === "tabbyapi") applyTabbyLog(entry, log);
+              }
+            }
+          }
           this._metrics.llm = result;
           {
             const probes = Array.from(this.llmProbes.values());
@@ -695,6 +777,16 @@ export class SparkMonitor {
           break;
         case "tailscale":
           this._metrics.tailscale = result;
+          break;
+        case "tabbyLog":
+          this._metrics.tabbyLog = result;
+          // Re-apply onto the already-stored llm entries so a log tick between
+          // llm polls refreshes the tabbyapi readout immediately.
+          if (result?.available && Array.isArray(this._metrics.llm)) {
+            for (const entry of this._metrics.llm) {
+              if (entry?.backend === "tabbyapi") applyTabbyLog(entry, result);
+            }
+          }
           break;
         case "hermes":
           this.applyHermesCheck(result);

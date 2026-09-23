@@ -630,6 +630,12 @@ export class SparkRegistry {
        */
       tailscaleMonitoring: Boolean(config.tailscaleMonitoring),
       /**
+       * Opt-in READ-ONLY TabbyAPI log tail. TabbyAPI's fork exposes no HTTP
+       * metrics, so its own log file is the only real perf source. Empty/absent
+       * stays null => honest "no log configured" (never a fake default path).
+       */
+      tabbyLogDir: this._normalizeTabbyLogDir(config.tabbyLogDir),
+      /**
        * Opt-in: Hermes Agent CLI is installed on this machine. When enabled,
        * the SparkMonitor checks for updates and allows one-click `hermes update`.
        */
@@ -666,6 +672,15 @@ export class SparkRegistry {
     const n = typeof value === "string" ? parseInt(value, 10) : Number(value);
     if (Number.isInteger(n) && n >= 1 && n <= 65535) return n;
     return 8188;
+  }
+
+  /**
+   * Normalize the TabbyAPI log directory. Absolute-looking POSIX path or null.
+   * Absent/empty stays null (opt-in; no log configured).
+   */
+  _normalizeTabbyLogDir(value) {
+    const s = typeof value === "string" ? value.trim() : "";
+    return s || null;
   }
 
   /** Normalize role; legacy workerNode=true → worker. */

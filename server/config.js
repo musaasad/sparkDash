@@ -87,6 +87,14 @@ const HERMES_UPDATE_TIMEOUT_MS = parseInt(
   process.env.HERMES_UPDATE_TIMEOUT_MS || "600000",
   10
 );
+// TabbyAPI log-tail metrics (READ-ONLY; the fork exposes no HTTP metrics).
+// Cheap tail of the newest log; the probe itself caches on a shorter interval.
+const POLL_INTERVAL_TABBYLOG = parseInt(process.env.POLL_INTERVAL_TABBYLOG || "5000", 10);
+const TABBY_LOG_TAIL_LINES = parseInt(process.env.TABBY_LOG_TAIL_LINES || "200", 10);
+const TABBY_LOG_PROBE_TIMEOUT_MS = parseInt(process.env.TABBY_LOG_PROBE_TIMEOUT_MS || "8000", 10);
+/** Default per-Spark TabbyAPI log directory (used when tabbyLogDir is unset). */
+const TABBY_LOG_DEFAULT_DIR =
+  process.env.TABBY_LOG_DEFAULT_DIR || "/home/musaasad/tabbyAPI/logs";
 
 // ─── Port ────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT || "5555", 10);
@@ -164,6 +172,10 @@ export {
   POLL_INTERVAL_LIVENESS,
   POLL_INTERVAL_HERMES,
   HERMES_UPDATE_TIMEOUT_MS,
+  POLL_INTERVAL_TABBYLOG,
+  TABBY_LOG_TAIL_LINES,
+  TABBY_LOG_PROBE_TIMEOUT_MS,
+  TABBY_LOG_DEFAULT_DIR,
   PORT,
   LLM_PORT,
   COMFY_PORT,

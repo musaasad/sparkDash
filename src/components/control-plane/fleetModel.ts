@@ -86,6 +86,25 @@ export interface DeploymentTelemetry {
   slotsTotal: number | null;
   /** Cumulative output tokens — the recent-request signal for idle-vs-ready. */
   totalOutputTokens: number | null;
+  /**
+   * Explicit in-flight request flag (TabbyAPI log START with no completion).
+   * null when the source does not report it.
+   */
+  requestActive?: boolean | null;
+  /**
+   * ms timestamp of the most recent COMPLETION parsed from TabbyAPI's own log.
+   * This is the last-request recency anchor — real history, not a live gauge.
+   */
+  lastRequestAtMs?: number | null;
+  /** Perf values are HISTORICAL (older than the window, nothing in flight). */
+  perfStale?: boolean;
+  /** The tps/prefill are a LAST-REQUEST value, not a live gauge. */
+  perfFromLastRequest?: boolean;
+  /** Log-derived window context (last-request provenance). */
+  windowAvgTps?: number | null;
+  peakTps?: number | null;
+  /** Where these numbers came from, e.g. "TabbyAPI log (2026-...log)". */
+  provenance?: string | null;
   backend: LlmMetrics["backend"];
   modelId: string | null;
   /**
@@ -419,6 +438,13 @@ export function deploymentTelemetry(sparks: SparkSnapshot[], d: DeploymentStatus
     slotsActive: optNum(llm?.slotsActive),
     slotsTotal: optNum(llm?.slotsTotal),
     totalOutputTokens: optNum(llm?.totalOutputTokens),
+    requestActive: llm?.requestActive ?? null,
+    lastRequestAtMs: optNum(llm?.lastRequestAtMs),
+    perfStale: llm?.perfStale === true,
+    perfFromLastRequest: llm?.perfFromLastRequest === true,
+    windowAvgTps: optNum(llm?.windowAvgTps),
+    peakTps: optNum(llm?.peakTps),
+    provenance: llm?.provenance ?? null,
     backend: llm?.backend ?? null,
     modelId: llm?.modelId ?? null,
     available: reporting > 0,

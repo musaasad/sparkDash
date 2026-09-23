@@ -388,6 +388,7 @@ app.post("/api/sparks/test", async (req, res) => {
       comfyMonitoring: Boolean(body.comfyMonitoring),
       hermesMonitoring: Boolean(body.hermesMonitoring),
       tailscaleMonitoring: Boolean(body.tailscaleMonitoring),
+      tabbyLogDir: body.tabbyLogDir || null,
       ssh: {
         host: body.ssh?.host || body.lanIp || "",
         user: body.ssh?.user || "root",

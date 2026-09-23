@@ -305,7 +305,7 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
                 role={roleOf(v, views)}
                 state={statesByKey.get(v.key) ?? deriveRuntimeState(v.deployment, v.telemetry, { telemetryAgeMs: v.telemetry?.telemetryAgeMs ?? null, reachable: v.nodes.some((n) => n.online) })}
                 history={history[v.key]?.samples ?? []}
-                lastRequestAt={history[v.key]?.lastRequestAt ?? null}
+                lastRequestAt={history[v.key]?.lastRequestAt ?? v.telemetry?.lastRequestAtMs ?? null}
                 telemetryAgeMs={v.telemetry?.telemetryAgeMs ?? null}
                 now={now}
                 runtimeLabels={runtimeLabels}

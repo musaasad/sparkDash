@@ -4614,6 +4614,8 @@ button.cp-link { background: none; border: none; padding: 0; cursor: pointer; fo
 .cp-inst-nodes { font-size: 12px; color: var(--color-text); }
 .cp-inst-meta-value { font-size: 13px; }
 .cp-inst-recency { font-size: 11px; color: var(--color-muted); }
+/* Log-derived numbers are labelled with provenance — never a fake live gauge. */
+.cp-inst-prov { font-size: 10px; letter-spacing: 0.04em; color: var(--color-dim, var(--color-muted)); }
 .cp-inst-live { font-size: 11px; font-weight: 600; color: var(--inst-tone-live); letter-spacing: 0.06em; }
 
 .cp-inst-secondary {

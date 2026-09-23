@@ -82,7 +82,14 @@ export function DeploymentInstrument({
   const telemetryReadable = view.telemetry != null && view.telemetry.available;
   const needsKey = !telemetryReadable && !!view.telemetry?.error && /auth|401|403/i.test(view.telemetry.error);
   // A stale sample is never presented as current — visible marker, calm state.
-  const stale = telemetryAgeMs != null && telemetryAgeMs > TELEMETRY_STALE_MS;
+  // TabbyAPI log-derived perf is last-REQUEST history: it goes stale when the
+  // log shows nothing recent (`perfStale`), even though the HTTP probe is fresh.
+  const staleAge =
+    telemetryAgeMs ?? (view.telemetry?.lastRequestAtMs != null ? Math.max(0, now - view.telemetry.lastRequestAtMs) : null);
+  const stale = (staleAge != null && staleAge > TELEMETRY_STALE_MS) || view.telemetry?.perfStale === true;
+  // Log-derived numbers are labelled with their provenance so nobody reads them
+  // as a live instantaneous gauge.
+  const provenance = view.telemetry?.provenance ?? null;
 
   const thermal = hottestThermal(view.nodes, temperatureUnit);
   const agg = view.telemetry?.aggregation ?? aggregationLegend(view.telemetry?.membersReporting ?? 0, view.nodes.length);
@@ -122,7 +129,7 @@ export function DeploymentInstrument({
         <span className={`cp-inst-state tone-${tone}`}>
           <span className="cp-inst-state-dot" aria-hidden="true" />
           {stateLabel(state)}
-          {stale ? <span className="cp-inst-stale mono" title={`sample ${Math.round(telemetryAgeMs! / 1000)}s old`}> · STALE</span> : null}
+          {stale ? <span className="cp-inst-stale mono" title={staleAge != null ? `sample ${Math.round(staleAge / 1000)}s old` : "stale"}> · STALE</span> : null}
         </span>
       </div>
 
@@ -177,7 +184,15 @@ export function DeploymentInstrument({
 
           {/* idle stays calm: state + recency, never an alarming 0.
               Unreadable telemetry never claims "no traffic yet". */}
-          {loaded && recency ? <span className="cp-inst-recency is-wide">last request {recency}</span> : null}
+          {loaded && recency ? (
+            <span className="cp-inst-recency is-wide">
+              last request {recency}
+              {provenance ? <span className="cp-inst-prov mono"> · {provenance}</span> : null}
+              {view.telemetry?.windowAvgTps != null ? (
+                <span className="cp-inst-prov mono"> · avg {Math.round(view.telemetry.windowAvgTps)} · peak {Math.round(view.telemetry.peakTps ?? view.telemetry.windowAvgTps)} T/s</span>
+              ) : null}
+            </span>
+          ) : null}
           {loaded && !recency && !telemetryReadable ? (
             <span className="cp-inst-recency is-wide">{needsKey ? "metrics require key" : "throughput unknown"}</span>
           ) : null}
@@ -186,6 +201,7 @@ export function DeploymentInstrument({
             <span className="cp-inst-live mono is-wide">
               {view.telemetry?.requestsRunning ?? 0} RUNNING
               {view.telemetry?.requestsWaiting ? ` · ${view.telemetry.requestsWaiting} QUEUED` : ""}
+              {provenance ? <span className="cp-inst-prov"> · {provenance}</span> : null}
             </span>
           ) : null}
         </div>

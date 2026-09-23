@@ -300,6 +300,17 @@ export interface UnifiedMemoryMetrics {
 }
 
 // ─── LLM metrics ─────────────────────────────────────────
+/** READ-ONLY TabbyAPI log-tail provenance/metadata (no secrets). */
+export interface TabbyLogMetrics {
+  provenance: string;
+  file: string | null;
+  lastRequestAtMs: number | null;
+  stale: boolean;
+  active: boolean;
+  windowAvgTps: number | null;
+  peakTps: number | null;
+}
+
 export interface LlmMetrics {
   available: boolean;
   backend: "vllm" | "llama.cpp" | "sglang" | "ds4" | "exl3" | "q27" | null;
@@ -338,6 +349,20 @@ export interface LlmMetrics {
   itlP95Seconds?: number | null;
   /** vLLM speculative/MTP acceptance rate (accepted/drafted, 0–1). null when unavailable. */
   mtpAcceptanceRate?: number | null;
+  /**
+   * TabbyAPI log-tail extension (READ-ONLY; only when `tabbyLogDir` configured).
+   * REAL last-request numbers copied from TabbyAPI's own log, labelled with
+   * provenance + timestamp. All null until the log is read; never fabricated.
+   */
+  provenance?: string | null;
+  lastRequestAtMs?: number | null;
+  perfStale?: boolean;
+  /** The log-derived tps is a LAST-REQUEST value, not a live instantaneous gauge. */
+  perfFromLastRequest?: boolean;
+  requestActive?: boolean | null;
+  windowAvgTps?: number | null;
+  peakTps?: number | null;
+  tabbyLog?: TabbyLogMetrics | null;
   /**
    * Observational exposure hint from unauthenticated probe reachability +
    * configured target host scope. null when auth status is unknown.
@@ -471,6 +496,37 @@ export interface TailscaleMetrics {
 }
 
 // ─── Full metrics snapshot ────────────────────────────────
+/**
+ * READ-ONLY TabbyAPI log-tail collector result (present only when the Spark
+ * has a `tabbyLogDir`). Real parsed last-request metrics; empty when absent.
+ */
+export interface TabbyLogSnapshot {
+  configured: boolean;
+  available: boolean;
+  dir: string | null;
+  file: string | null;
+  error: string | null;
+  collectedAt: number;
+  recentRequest: Array<{
+    tsMs: number;
+    genTps: number;
+    promptTokens: number;
+    cachedPct: number;
+    newTokens: number;
+    prefillTps: number;
+    ttftSeconds: number;
+    totalSeconds: number;
+    draftAccepted: number | null;
+    draftTotal: number | null;
+  }>;
+  lastRequest: TabbyLogSnapshot["recentRequest"][number] | null;
+  active: boolean;
+  windowAvgTps: number | null;
+  peakTps: number | null;
+  lastRequestAtMs: number | null;
+  stale: boolean;
+}
+
 export interface SparkMetrics {
   gpu: GpuMetrics | null;
   cpu: CpuMetrics | null;
@@ -484,6 +540,8 @@ export interface SparkMetrics {
   comfy?: ComfyMetrics | null;
   /** Tailnet probe result when monitoring is enabled; null when off or not yet polled. */
   tailscale?: TailscaleMetrics | null;
+  /** READ-ONLY TabbyAPI log-tail result when configured; null when off. */
+  tabbyLog?: TabbyLogSnapshot | null;
 }
 
 // ─── Spark snapshot (server pushes this) ──────────────────
@@ -537,6 +595,10 @@ export interface SparkSnapshot {
   comfyPort?: number;
   /** Whether tailnet presence is probed (opt-in; all roles) */
   tailscaleMonitoring?: boolean;
+  /** Opt-in READ-ONLY TabbyAPI log tail (enabled by a non-empty tabbyLogDir). */
+  tabbyLogMonitoring?: boolean;
+  /** Configured TabbyAPI log directory (not a secret); null when absent. */
+  tabbyLogDir?: string | null;
   /** Hermes Agent update monitoring state (present in every snapshot). */
   hermes?: HermesStatus;
   hardware: HardwareInfo;

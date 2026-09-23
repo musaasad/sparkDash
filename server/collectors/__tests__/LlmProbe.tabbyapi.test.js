@@ -110,8 +110,27 @@ test("tabbyapi probe: backend/modelId/contextLength honest, perf all null (never
   assert.equal(seen.some((u) => u.includes("/server_info")), false);
 });
 
-test("contextLength falls back to n_ctx_train when meta.n_ctx is absent", async () => {
-  const probe = new LlmProbe({ lanIp: "192.168.1.246", llmApiKeys: { "8889": "sk-test" } }, 8889);
+test("tabbyapi /props total_slots is the ONLY non-log metric, read honestly", async () => {
+  const probe = new LlmProbe({ lanIp: "192.168.1.246" }, 8889);
+  probe._fetch = async (url) => {
+    const u = String(url);
+    if (u.endsWith("/slots")) return notFound();
+    if (u.endsWith("/v1/models")) {
+      return jsonRes({ data: [{ id: MODEL_ID, owned_by: "tabbyAPI", meta: { n_ctx: 262144 } }] });
+    }
+    if (u.endsWith("/props")) return jsonRes({ total_slots: 4, max_seq_len: 262144 });
+    if (u.endsWith("/health")) return jsonRes({ status: "healthy", issues: [] });
+    return notFound();
+  };
+  const snap = await probe.probe();
+  assert.equal(snap.slotsTotal, 4);
+  // Everything else still honest-unknown (no HTTP metrics endpoint).
+  assert.strictEqual(snap.generationTps, null);
+  assert.strictEqual(snap.requestsRunning, null);
+  assert.strictEqual(snap.slotsActive, null);
+});
+
+test("contextLength falls back to n_ctx_train when meta.n_ctx is absent", async () => {  const probe = new LlmProbe({ lanIp: "192.168.1.246", llmApiKeys: { "8889": "sk-test" } }, 8889);
   probe._fetch = async (url) => {
     const u = String(url);
     if (u.endsWith("/slots")) return notFound();

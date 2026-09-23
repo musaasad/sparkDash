@@ -79,6 +79,7 @@ export const OPTIONAL_TELEMETRY_FIELDS = Object.freeze([
   "slotsActive",
   "slotsTotal",
   "totalOutputTokens",
+  "lastRequestAtMs",
 ]);
 
 /** Hard transport failure signatures — only these may read as degraded (managed). */
@@ -191,8 +192,14 @@ export function deriveRuntimeState(input = {}) {
   if (display === "degraded" || observed === "unhealthy") return RUNTIME_STATE.DEGRADED;
 
   const quality = telemetryQuality(telemetry, { telemetryAgeMs, staleMs });
+  // `perfStale` is the log-derived case: the last request is older than the
+  // window with nothing in flight, so the perf numbers are HISTORICAL — never
+  // present them as a live-active claim.
+  const perfStale = telemetry?.perfStale === true;
   const stale =
-    quality === TELEMETRY_QUALITY.STALE || (isNum(telemetryAgeMs) && telemetryAgeMs > staleMs);
+    quality === TELEMETRY_QUALITY.STALE ||
+    perfStale ||
+    (isNum(telemetryAgeMs) && telemetryAgeMs > staleMs);
 
   // 4. `not-detected` is OFFLINE ONLY when NOT reachable. A reachable node whose
   //    OPTIONAL telemetry is simply unobserved falls through to READY/UNKNOWN.
@@ -215,12 +222,18 @@ export function deriveRuntimeState(input = {}) {
   // 6. Observed ACTIVE generation is evaluated BEFORE the availability branch, so
   //    a member reporting activity yields SERVING even when `available` is false.
   //    Active signals are suppressed to a calm state when the snapshot is STALE.
+  //    An explicit in-flight request (`requestActive`, e.g. a TabbyAPI log START
+  //    with no completion) is BUSY — a stronger, unambiguous signal.
+  //    Log-derived tps is a LAST-REQUEST value (`perfFromLastRequest`), not a live
+  //    gauge: it must not read as SERVING while nothing is in flight.
+  const lastRequestOnly = telemetry?.perfFromLastRequest === true;
   const active = (isNum(telemetry?.requestsRunning) && telemetry.requestsRunning > 0)
-    || (isNum(telemetry?.generationTps) && telemetry.generationTps > 0);
+    || (!lastRequestOnly && isNum(telemetry?.generationTps) && telemetry.generationTps > 0);
   const waiting = isNum(telemetry?.requestsWaiting) && telemetry.requestsWaiting > 0;
+  const requestActive = telemetry?.requestActive === true;
 
   if (!stale) {
-    if (waiting) return RUNTIME_STATE.BUSY;
+    if (requestActive || waiting) return RUNTIME_STATE.BUSY;
     if (active) return RUNTIME_STATE.SERVING;
   }
 
@@ -233,8 +246,12 @@ export function deriveRuntimeState(input = {}) {
 
   if (!loaded) return reachable ? RUNTIME_STATE.READY : RUNTIME_STATE.UNKNOWN;
 
-  // IDLE is stale-safe: served before, no active claim.
-  if (isNum(telemetry.totalOutputTokens) && telemetry.totalOutputTokens > 0) {
+  // IDLE is stale-safe: served before, no active claim. A recent-completion
+  // timestamp (log-derived) is the same evidence as a positive output counter.
+  if (
+    isNum(telemetry.lastRequestAtMs) ||
+    (isNum(telemetry.totalOutputTokens) && telemetry.totalOutputTokens > 0)
+  ) {
     return RUNTIME_STATE.IDLE;
   }
   return reachable ? RUNTIME_STATE.READY : RUNTIME_STATE.UNKNOWN;

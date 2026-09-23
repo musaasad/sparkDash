@@ -542,6 +542,22 @@ export class LlmProbe {
       } catch {
         /* /health is optional — model visibility already proved the API */
       }
+      // The ONLY non-log metric TabbyAPI exposes: total_slots via /props.
+      // Optional — absent stays null (never a fabricated 0).
+      try {
+        const propsRes = await this._fetch(`${this.baseUrl}/props`);
+        if (propsRes.ok) {
+          const props = await propsRes.json().catch(() => null);
+          const slots = Number(
+            props?.total_slots ??
+              props?.max_batch_size ??
+              props?.default_generation_params?.total_slots
+          );
+          if (Number.isFinite(slots) && slots > 0) this.slotsTotal = Math.round(slots);
+        }
+      } catch {
+        /* /props optional */
+      }
       return this._getSnapshot();
     }
 
@@ -1643,7 +1659,8 @@ export class LlmProbe {
       contextLength: this.contextLength,
       gpuMemoryUtilization: num(this.gpuMemoryUtilization),
       slotsActive: num(this.slotsActive),
-      slotsTotal: num(this.slotsTotal),
+      // TabbyAPI's /props total_slots is a REAL value outside the noPerf gate.
+      slotsTotal: noPerf ? this.slotsTotal || null : num(this.slotsTotal),
       generationTps: num(this.generationTps),
       prefillTps: num(this.prefillTps),
       cachedPrefillTps: num(this.cachedPrefillTps),
@@ -1659,6 +1676,19 @@ export class LlmProbe {
       e2eP95Seconds: num(this.e2eP95Seconds),
       itlP95Seconds: num(this.itlP95Seconds),
       mtpAcceptanceRate: num(this.mtpAcceptanceRate),
+      /**
+       * TabbyAPI log-tail extension (merged by SparkMonitor when a
+       * `tabbyLogDir` is configured). Real last-request numbers + provenance
+       * (tabbyLog) + lastRequestAtMs; null until then. Never fabricated here.
+       */
+      provenance: null,
+      lastRequestAtMs: null,
+      perfStale: false,
+      perfFromLastRequest: false,
+      requestActive: null,
+      windowAvgTps: null,
+      peakTps: null,
+      tabbyLog: null,
       posture: this._buildPosture(),
       error: this.error,
     };
@@ -1702,6 +1732,14 @@ export class LlmProbe {
       e2eP95Seconds: null,
       itlP95Seconds: null,
       mtpAcceptanceRate: null,
+      provenance: null,
+      lastRequestAtMs: null,
+      perfStale: false,
+      perfFromLastRequest: false,
+      requestActive: null,
+      windowAvgTps: null,
+      peakTps: null,
+      tabbyLog: null,
       posture: this._buildPosture(),
       error: this.error,
     };

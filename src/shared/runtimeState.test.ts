@@ -125,8 +125,7 @@ describe("canonical runtimeState vocabulary", () => {
     expect(state).toBe("idle");
   });
 
-  it("compute online vocabulary", () => {
-    expect(deriveComputeOnline({ online: true })).toBe("online");
+  it("compute online vocabulary", () => {    expect(deriveComputeOnline({ online: true })).toBe("online");
     expect(deriveComputeOnline({ online: false })).toBe("offline");
     expect(deriveComputeOnline({})).toBe("unknown");
   });
@@ -135,5 +134,33 @@ describe("canonical runtimeState vocabulary", () => {
     expect(llmMonitoringEnabled({ role: "worker" })).toBe(false);
     expect(llmMonitoringEnabled({ role: "worker", llmMonitoring: true })).toBe(true);
     expect(llmMonitoringEnabled({ role: "head", llmMonitoring: false })).toBe(false);
+  });
+});
+
+describe("tabbyapi log-derived telemetry semantics", () => {
+  const base = { available: true, modelId: "qwen", slotsTotal: 4 };
+
+  it("an in-flight request is BUSY (never READY / no-traffic)", () => {
+    const t = { ...base, requestActive: true, requestsRunning: 1 };
+    expect(deriveRuntimeState({ reachable: true, telemetry: t })).toBe("busy");
+  });
+
+  it("a recent completion with nothing in flight is IDLE — last-request tps never reads SERVING", () => {
+    const t = { ...base, requestActive: false, requestsRunning: 0, generationTps: 59.9, perfFromLastRequest: true, lastRequestAtMs: Date.now() };
+    expect(deriveRuntimeState({ reachable: true, telemetry: t })).toBe("idle");
+    expect(deriveRuntimeState({ reachable: true, telemetry: t })).not.toBe("serving");
+  });
+
+  it("stale historical perf degrades to a STALE-safe state, never SERVING/OFFLINE", () => {
+    const t = { ...base, perfStale: true, perfFromLastRequest: true, generationTps: 12, lastRequestAtMs: Date.now() - 600_000 };
+    const state = deriveRuntimeState({ reachable: true, telemetry: t });
+    expect(state).toBe("idle");
+    expect(state).not.toBe("serving");
+    expect(state).not.toBe("offline");
+  });
+
+  it("absent log numbers stay READY, never a fabricated active claim", () => {
+    const t = { ...base, requestActive: null, generationTps: null, lastRequestAtMs: null };
+    expect(deriveRuntimeState({ reachable: true, telemetry: t })).toBe("ready");
   });
 });
