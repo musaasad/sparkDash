@@ -90,12 +90,14 @@ export function DeploymentInstrument({
   // Log-derived numbers are labelled with their provenance so nobody reads them
   // as a live instantaneous gauge.
   const provenance = view.telemetry?.provenance ?? null;
-  // The per-request perf tiles (MTP / cache / TTFT / prefill) come from the last
-  // COMPLETED request. That number is old whenever the last completion is old —
-  // even while a NEW request is in flight (BUSY), since TabbyAPI logs metrics
-  // only at completion. The collector flags this (perfMetricsStale) on a 5-min
-  // window, independent of the active/idle state badge. Only log-derived backends.
-  const perfTilesStale = provenance != null && view.telemetry?.perfMetricsStale === true;
+  // Log-derived backends (TabbyAPI) expose no live endpoint: the perf tiles/gauge
+  // are RECENT-WINDOW aggregates over real log lines, labelled as such. They are
+  // dimmed/'—' when the window is empty or the last completion is old — even
+  // while a NEW request is in flight (BUSY), since metrics log only at completion.
+  const winCount = view.telemetry?.recentWindowCount ?? null;
+  const lastId = view.telemetry?.lastRequestId ?? null;
+  const logPerfDim = provenance != null && (view.telemetry?.perfMetricsStale === true || view.telemetry?.recentWindowCount === 0);
+  const perfTilesStale = logPerfDim;
 
   const thermal = hottestThermal(view.nodes, temperatureUnit);
   const agg = view.telemetry?.aggregation ?? aggregationLegend(view.telemetry?.membersReporting ?? 0, view.nodes.length);
@@ -154,10 +156,10 @@ export function DeploymentInstrument({
           micro-instruments span the FULL card width — no dead middle region. */}
       <div className="cp-inst-body">
         <ThroughputGauge
-          value={view.telemetry?.generationTps ?? null}
+          value={provenance ? (logPerfDim ? null : view.telemetry?.recentMedGenTps ?? null) : view.telemetry?.generationTps ?? null}
           history={history}
           state={state}
-          valueNote={provenance ? "last req" : null}
+          valueNote={provenance ? "RECENT MED" : null}
           size={primary ? 176 : 148}
           unavailable={!telemetryReadable}
           note={needsKey ? "metrics require key" : telemetryReadable ? null : "throughput unknown"}
@@ -194,14 +196,19 @@ export function DeploymentInstrument({
 
           {/* idle stays calm: state + recency, never an alarming 0.
               Unreadable telemetry never claims "no traffic yet". */}
-          {loaded && recency ? (
-            <span className="cp-inst-recency is-wide">
-              last request {recency}
-              {provenance ? <span className="cp-inst-prov mono"> · {provenance}</span> : null}
-              {view.telemetry?.windowAvgTps != null ? (
-                <span className="cp-inst-prov mono"> · avg {Math.round(view.telemetry.windowAvgTps)} · peak {Math.round(view.telemetry.peakTps ?? view.telemetry.windowAvgTps)} T/s</span>
-              ) : null}
+          {/* ALWAYS visible while provenance exists — even when BUSY — so the
+              recent-window framing + last-request recency can never be lost. */}
+          {provenance ? (
+            <span
+              className="cp-inst-recency cp-inst-recent is-wide"
+              title="RECENT-WINDOW aggregate from TabbyAPI's own log — real log values, never a live instantaneous reading"
+            >
+              RECENT · last {winCount ?? "—"} requests · {provenance}
+              {lastId != null && recency ? ` · last #${lastId} ${recency}` : ""}
             </span>
+          ) : null}
+          {loaded && recency && !provenance ? (
+            <span className="cp-inst-recency is-wide">last request {recency}</span>
           ) : null}
           {loaded && !recency && !telemetryReadable ? (
             <span className="cp-inst-recency is-wide">{needsKey ? "metrics require key" : "throughput unknown"}</span>
@@ -211,7 +218,6 @@ export function DeploymentInstrument({
             <span className="cp-inst-live mono is-wide">
               {view.telemetry?.requestsRunning ?? 0} RUNNING
               {view.telemetry?.requestsWaiting ? ` · ${view.telemetry.requestsWaiting} QUEUED` : ""}
-              {provenance ? <span className="cp-inst-prov"> · {provenance}</span> : null}
             </span>
           ) : null}
         </div>
@@ -224,9 +230,9 @@ export function DeploymentInstrument({
               <div key={s.key} className={`cp-inst-cell${s.stale ? " is-stale" : ""}`}>
                 <span className="cp-inst-cell-label mono">
                   {s.label}
-                  {s.stale ? <span className="cp-inst-cell-stale-dot" aria-hidden="true" title="not current — from the last completed request"> ·</span> : null}
+                  {s.stale ? <span className="cp-inst-cell-stale-dot" aria-hidden="true" title="recent window empty or old — not current"> ·</span> : null}
                 </span>
-                <span className="cp-inst-cell-value mono" title={s.stale ? `${s.title ?? s.label} · from the last completed request (not current)` : s.title}>
+                <span className="cp-inst-cell-value mono" title={s.stale ? `${s.title ?? s.label} · recent window empty or old (not current)` : s.title}>
                   {s.value}
                   {s.unit ? <span className="cp-inst-cell-unit"> {s.unit}</span> : null}
                 </span>

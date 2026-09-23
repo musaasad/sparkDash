@@ -309,6 +309,14 @@ export interface TabbyLogMetrics {
   active: boolean;
   windowAvgTps: number | null;
   peakTps: number | null;
+  /** Number of recent COMPLETED requests the aggregates below span (cap 12). */
+  recentWindowCount?: number;
+  recentMedGenTps?: number | null;
+  recentMedPrefillTps?: number | null;
+  recentMedTtftSeconds?: number | null;
+  recentCacheHitRate?: number | null;
+  recentMtpAcceptance?: number | null;
+  lastRequestId?: number | null;
 }
 
 export interface LlmMetrics {
@@ -369,6 +377,19 @@ export interface LlmMetrics {
   requestActive?: boolean | null;
   windowAvgTps?: number | null;
   peakTps?: number | null;
+  /**
+   * RECENT-WINDOW perf aggregates over the last N completed log requests.
+   * TabbyAPI exposes NO live metrics endpoint, so these — never the live-looking
+   * last-request fields — are what the instrument presents. All null when the
+   * window is empty; never 0.
+   */
+  recentWindowCount?: number;
+  recentMedGenTps?: number | null;
+  recentMedPrefillTps?: number | null;
+  recentMedTtftSeconds?: number | null;
+  recentCacheHitRate?: number | null;
+  recentMtpAcceptance?: number | null;
+  lastRequestId?: number | null;
   tabbyLog?: TabbyLogMetrics | null;
   /**
    * Observational exposure hint from unauthenticated probe reachability +

@@ -218,6 +218,44 @@ describe("secondary instruments", () => {
     expect(absent.map((s) => s.key)).toEqual(["ttftSeconds"]);
     expect(absent[0].value).toBe("—");
   });
+
+  it("uses the RECENT-WINDOW aggregate (not the last-request field) when log-derived", () => {
+    const log = {
+      ...telemetry,
+      provenance: "TabbyAPI log (x.log)",
+      recentWindowCount: 12,
+      recentCacheHitRate: 0.94,
+      recentMedTtftSeconds: 1.2,
+      recentMedPrefillTps: 300,
+      recentMtpAcceptance: 0.6,
+      // deliberately different last-request fields
+      prefixCacheHitRate: 0.99,
+      ttftSeconds: 6.34,
+      prefillTps: 420,
+      mtpAcceptanceRate: 0.61,
+    };
+    const out = secondaryInstruments(["prefixCacheHitRate", "ttftSeconds", "prefillTps", "mtpAcceptanceRate"], log);
+    const by = (k: string) => out.find((s) => s.key === k)!;
+    expect(by("prefixCacheHitRate").value).toBe("94");
+    expect(by("ttftSeconds").value).toBe("1.20");
+    expect(by("prefillTps").value).toBe("300");
+    expect(by("mtpAcceptanceRate").value).toBe("60");
+    // honest tooltip explicitly distinguishes the window aggregate from lifetime
+    expect(by("prefixCacheHitRate").title).toContain("lifetime hit rate");
+    expect(by("prefixCacheHitRate").title).toContain("last 12");
+  });
+
+  it("renders '—' when the log-derived recent window is empty (never 0, no fallback)", () => {
+    const log = { ...telemetry, provenance: "TabbyAPI log", recentWindowCount: 0, perfMetricsStale: true };
+    const out = secondaryInstruments(["prefixCacheHitRate", "prefillTps"], log);
+    expect(out.map((s) => s.value)).toEqual(["—", "—"]);
+  });
+
+  it("keeps a non-log backend on its live field", () => {
+    const out = secondaryInstruments(["prefixCacheHitRate"], telemetry);
+    expect(out[0].value).toBe("90");
+    expect(out[0].title).toBeUndefined();
+  });
 });
 
 describe("recency", () => {

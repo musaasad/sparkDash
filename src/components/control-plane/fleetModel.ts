@@ -105,6 +105,19 @@ export interface DeploymentTelemetry {
   /** Log-derived window context (last-request provenance). */
   windowAvgTps?: number | null;
   peakTps?: number | null;
+  /**
+   * RECENT-WINDOW perf aggregates over the last N completed log requests. For a
+   * log-derived backend (provenance present) these are what the tiles/gauge show
+   * — TabbyAPI has no live endpoint. All null when the window is empty; never 0.
+   */
+  recentWindowCount?: number;
+  recentMedGenTps?: number | null;
+  recentMedPrefillTps?: number | null;
+  recentMedTtftSeconds?: number | null;
+  recentCacheHitRate?: number | null;
+  recentMtpAcceptance?: number | null;
+  /** Id of the last COMPLETED request in the log (provenance anchor). */
+  lastRequestId?: number | null;
   /** Where these numbers came from, e.g. "TabbyAPI log (2026-...log)". */
   provenance?: string | null;
   backend: LlmMetrics["backend"];
@@ -447,6 +460,13 @@ export function deploymentTelemetry(sparks: SparkSnapshot[], d: DeploymentStatus
     perfFromLastRequest: llm?.perfFromLastRequest === true,
     windowAvgTps: optNum(llm?.windowAvgTps),
     peakTps: optNum(llm?.peakTps),
+    recentWindowCount: isNum(llm?.recentWindowCount) ? llm.recentWindowCount : undefined,
+    recentMedGenTps: optNum(llm?.recentMedGenTps),
+    recentMedPrefillTps: optNum(llm?.recentMedPrefillTps),
+    recentMedTtftSeconds: optNum(llm?.recentMedTtftSeconds),
+    recentCacheHitRate: optNum(llm?.recentCacheHitRate),
+    recentMtpAcceptance: optNum(llm?.recentMtpAcceptance),
+    lastRequestId: optNum(llm?.lastRequestId),
     provenance: llm?.provenance ?? null,
     backend: llm?.backend ?? null,
     modelId: llm?.modelId ?? null,

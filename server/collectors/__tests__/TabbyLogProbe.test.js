@@ -245,6 +245,131 @@ test("TabbyLogProbe: caches briefly (no re-read every call)", async () => {
   assert.equal(calls, 1);
 });
 
+/**
+ * Build a REAL-format completion line with explicit metrics, so the
+ * recent-window aggregates can be asserted exactly.
+ */
+function completionLine(o) {
+  const ts = o.ts ?? "2026-09-23 08:43:06.141";
+  const gen = o.gen ?? "1,000";
+  const acc = o.draftAccepted ?? 10;
+  const tot = o.draftTotal ?? 20;
+  const prefillSeconds = o.prefillSeconds ?? 1;
+  const ttft = o.ttft ?? 1;
+  const total = o.total ?? 2;
+  return (
+    `${ts} | INFO     | #${o.id} chat/completions (stream): ${gen} tokens generated at ${o.genTps} T/s ` +
+    `\u00B7 prompt ${o.promptTokens} tokens, ${o.cachedPct}% cached, ${o.newTokens} new in ${prefillSeconds} s (${o.prefillTps} T/s) ` +
+    `\u00B7 first token ${ttft} s, total ${total} s \u00B7 draft ${acc}/${tot} accepted (60%)`
+  );
+}
+
+test("recent-window aggregates: cache/prefill/ttft/mtp are true window sums/means", () => {
+  const out = parseTabbyLog(
+    [
+      completionLine({ id: 1, promptTokens: 1000, cachedPct: 100, newTokens: 0, prefillTps: 100, ttft: 1, total: 5, genTps: 10, draftAccepted: 10, draftTotal: 20 }),
+      completionLine({ id: 2, promptTokens: 1000, cachedPct: 0, newTokens: 1000, prefillTps: 200, ttft: 2, total: 6, genTps: 20, draftAccepted: 20, draftTotal: 40 }),
+      completionLine({ id: 3, promptTokens: 1000, cachedPct: 50, newTokens: 500, prefillTps: 300, ttft: 3, total: 7, genTps: 30, draftAccepted: 30, draftTotal: 60 }),
+    ].join("\n")
+  );
+  assert.equal(out.recentWindowCount, 3);
+  assert.equal(out.lastRequestId, 3);
+  // cache hit = sum(prompt - new) / sum(prompt) = 1500 / 3000
+  assert.equal(out.recentCacheHitRate, 0.5);
+  assert.equal(out.recentMedPrefillTps, 200);
+  assert.equal(out.recentMedTtftSeconds, 2);
+  // draft acceptance = sum(accepted) / sum(total) = 60 / 120
+  assert.equal(out.recentMtpAcceptance, 0.5);
+  assert.equal(out.recentMedGenTps, 20);
+  assert.equal(out.peakTps, 30);
+  assert.equal(out.windowAvgTps, out.recentMedGenTps);
+});
+
+test("recent-window rate/latency use the MEDIAN so a cold-prefill outlier does not skew them", () => {
+  // Four warm-cache requests (~3 s TTFT) + one cold 164K-token full prefill that
+  // took 278 s to first token. A MEAN TTFT would be ~57 s (misleading); the
+  // MEDIAN stays at the ~3 s the operator actually experiences.
+  const out = parseTabbyLog(
+    [
+      completionLine({ id: 1, promptTokens: 1000, cachedPct: 99, newTokens: 10, prefillTps: 300, ttft: 3, total: 5, genTps: 60 }),
+      completionLine({ id: 2, promptTokens: 1000, cachedPct: 99, newTokens: 10, prefillTps: 300, ttft: 3, total: 5, genTps: 60 }),
+      completionLine({ id: 3, promptTokens: 1000, cachedPct: 99, newTokens: 10, prefillTps: 300, ttft: 3, total: 5, genTps: 60 }),
+      completionLine({ id: 4, promptTokens: 1000, cachedPct: 99, newTokens: 10, prefillTps: 300, ttft: 3, total: 5, genTps: 60 }),
+      completionLine({ id: 5, promptTokens: 164000, cachedPct: 0, newTokens: 164000, prefillTps: 590, ttft: 278, total: 280, genTps: 22 }),
+    ].join("\n")
+  );
+  assert.equal(out.recentWindowCount, 5);
+  assert.equal(out.recentMedTtftSeconds, 3); // median, NOT the ~57 s mean
+  assert.equal(out.recentMedPrefillTps, 300); // median, NOT the ~364 s mean
+  assert.equal(out.recentMedGenTps, 60); // median, NOT the ~52 s mean
+  assert.equal(out.peakTps, 60); // peak still reflects the best, not the outlier
+});
+
+test("recent-window is CAPPED at 12 most-recent completions", () => {
+  const lines = Array.from({ length: 15 }, (_, i) =>
+    completionLine({ id: i + 1, genTps: i + 1, promptTokens: 1000, cachedPct: 0, newTokens: 1000, prefillTps: 100, ttft: 1, total: 1 })
+  );
+  const out = parseTabbyLog(lines.join("\n"));
+  assert.equal(out.recentWindowCount, 12);
+  assert.equal(out.lastRequestId, 15);
+  // window is ids 4..15 => mean 9.5; peak 15
+  assert.equal(out.recentMedGenTps, 9.5);
+  assert.equal(out.peakTps, 15);
+});
+
+test("empty log => every recent-window aggregate is null (never 0), and it is stale", () => {
+  const out = parseTabbyLog("\n\nnot a line\n");
+  assert.equal(out.recentWindowCount, 0);
+  assert.strictEqual(out.recentMedGenTps, null);
+  assert.strictEqual(out.recentMedPrefillTps, null);
+  assert.strictEqual(out.recentMedTtftSeconds, null);
+  assert.strictEqual(out.recentCacheHitRate, null);
+  assert.strictEqual(out.recentMtpAcceptance, null);
+  assert.strictEqual(out.lastRequestId, null);
+  assert.equal(out.perfMetricsStale, true);
+});
+
+test("no draft segment => recentMtpAcceptance is null while other aggregates stay real", () => {
+  const noDraft =
+    completionLine({ id: 9, promptTokens: 500, cachedPct: 20, newTokens: 400, prefillTps: 50, ttft: 1, total: 2, genTps: 5 })
+      .replace(/\u00B7 draft 10\/20 accepted \(60%\)$/, "");
+  const out = parseTabbyLog(noDraft);
+  assert.equal(out.recentWindowCount, 1);
+  assert.strictEqual(out.recentMtpAcceptance, null);
+  assert.equal(out.recentCacheHitRate, Math.round(((500 - 400) / 500) * 10000) / 10000);
+});
+
+test("applyTabbyLog carries recent-window aggregates + lastRequestId onto the entry", () => {
+  const log = parseTabbyLog(
+    [
+      completionLine({ id: 1, promptTokens: 1000, cachedPct: 95, newTokens: 50, prefillTps: 400, ttft: 2, total: 9, genTps: 60, draftAccepted: 30, draftTotal: 40 }),
+      completionLine({ id: 2, promptTokens: 1000, cachedPct: 99, newTokens: 10, prefillTps: 500, ttft: 3, total: 10, genTps: 70, draftAccepted: 35, draftTotal: 50 }),
+    ].join("\n")
+  );
+  const entry = { backend: "tabbyapi", generationTps: null };
+  applyTabbyLog(entry, { ...log, available: true, file: "f.log" });
+  assert.equal(entry.recentWindowCount, 2);
+  assert.equal(entry.lastRequestId, 2);
+  // cached = (1000-50) + (1000-10) = 1940 over prompt 2000
+  assert.equal(entry.recentCacheHitRate, Math.round((1940 / 2000) * 10000) / 10000);
+  assert.equal(entry.recentMedPrefillTps, 450);
+  assert.equal(entry.recentMedTtftSeconds, 2.5);
+  assert.equal(entry.recentMtpAcceptance, Math.round((65 / 90) * 10000) / 10000);
+  assert.equal(entry.recentMedGenTps, 65);
+  assert.match(entry.provenance, /^TabbyAPI log \(/);
+});
+
+test("applyTabbyLog with an empty log => recent aggregates null, count 0 (never 0)", () => {
+  const log = parseTabbyLog("");
+  const entry = { backend: "tabbyapi" };
+  applyTabbyLog(entry, { ...log, available: true, file: "f.log" });
+  assert.equal(entry.recentWindowCount, 0);
+  assert.strictEqual(entry.recentMedGenTps, null);
+  assert.strictEqual(entry.recentCacheHitRate, null);
+  assert.strictEqual(entry.lastRequestId, null);
+  assert.equal(entry.perfMetricsStale, true);
+});
+
 test("parseStartLine parses the exact START shape", () => {
   const s = parseStartLine(START);
   assert.ok(s);

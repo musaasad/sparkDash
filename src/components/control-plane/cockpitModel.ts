@@ -371,6 +371,27 @@ function formatMetric(key: string, v: number): { value: string; unit?: string } 
 const RATIO_KEYS = new Set(["kvCacheUsage", "prefixCacheHitRate", "mtpAcceptanceRate", "gpuMemoryUtilization"]);
 
 /**
+ * Perf tiles whose value must come from the RECENT-WINDOW aggregate (not the
+ * single last-request field) whenever the telemetry is log-derived (provenance
+ * present) — TabbyAPI exposes no live endpoint. vLLM/DeepSeek (/metrics) keep
+ * their live value: this mapping only applies when provenance is set.
+ */
+const RECENT_PERF_KEY: Record<string, string> = {
+  mtpAcceptanceRate: "recentMtpAcceptance",
+  prefixCacheHitRate: "recentCacheHitRate",
+  ttftSeconds: "recentMedTtftSeconds",
+  prefillTps: "recentMedPrefillTps",
+};
+
+/** Honest per-tile tooltip text for log-derived recent-window aggregates. */
+const RECENT_PERF_TITLE: Record<string, string> = {
+  mtpAcceptanceRate: "recent-window aggregate draft/MTP acceptance over the last N requests — not a single request",
+  prefixCacheHitRate: "aggregate prompt-cache hit over the last N requests — not the lifetime hit rate",
+  ttftSeconds: "recent-window MEDIAN time-to-first-token over the last N requests (robust to cold-prefill outliers)",
+  prefillTps: "recent-window MEDIAN prefill throughput over the last N requests (robust to cold-prefill outliers)",
+};
+
+/**
  * Secondary instruments chosen from the runtime's DECLARED metrics[]. A declared
  * metric with no value renders `—` (never 0); ratio metrics carry a fill
  * fraction for a thin micro-bar.
@@ -382,16 +403,29 @@ export function secondaryInstruments(
 ): SecondaryInstrument[] {
   if (!declared || declared.length === 0) return [];
   const set = new Set(declared);
+  // The recent-window framing applies ONLY to log-derived telemetry (a
+  // provenance string is present): those backends have no live endpoint, so the
+  // RECENT aggregate is the honest value. vLLM/DeepSeek keep their live field.
+  const logDerived = telemetry?.provenance != null;
+  const winCount = logDerived ? telemetry?.recentWindowCount ?? null : null;
+  // An explicit empty window (or a stale window) means '—', never 0 and never a
+  // last-request fallback that would read as current.
+  const windowEmpty = logDerived && (winCount === 0 || telemetry?.perfMetricsStale === true);
+  const rec = telemetry as unknown as Record<string, unknown> | null;
   const out: SecondaryInstrument[] = [];
   for (const key of SECONDARY_ORDER) {
     if (!set.has(key)) continue;
     if (key === "slotsTotal" && set.has("slotsActive")) continue;
     const label = METRIC_LABEL[key];
     if (!label) continue;
-    const raw = telemetry ? (telemetry as unknown as Record<string, unknown>)[key] : null;
+    const recentKey = logDerived ? RECENT_PERF_KEY[key] : undefined;
+    const raw = windowEmpty ? null : recentKey ? rec?.[recentKey] : rec?.[key];
+    const title = recentKey && logDerived
+      ? `${RECENT_PERF_TITLE[key]} (last ${winCount ?? "—"} requests) — recent window`
+      : undefined;
     const present = typeof raw === "number" && Number.isFinite(raw);
     if (!present) {
-      out.push({ key, label, value: EMPTY });
+      out.push({ key, label, value: EMPTY, title });
     } else {
       const { value, unit } = formatMetric(key, raw as number);
       out.push({
@@ -399,6 +433,7 @@ export function secondaryInstruments(
         label,
         value,
         unit,
+        title,
         fraction: RATIO_KEYS.has(key) ? Math.min(1, Math.max(0, raw as number)) : undefined,
       });
     }

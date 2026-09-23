@@ -28,6 +28,12 @@ export const TABBY_LOG_CACHE_MS = 4000;
 export const TABBY_LOG_STALE_MS = 5 * 60_000;
 /** An in-flight START older than this is assumed lost (tail window/rotation). */
 export const TABBY_LOG_ACTIVE_MAX_MS = 30 * 60_000;
+/**
+ * How many most-recent COMPLETED requests the perf aggregates span. TabbyAPI has
+ * NO live metrics endpoint (console-only status bar), so every perf number is a
+ * RECENT-WINDOW aggregate over real log lines — never a live instantaneous value.
+ */
+export const TABBY_LOG_RECENT_WINDOW_N = 12;
 /** Default per-Spark log directory (active session log lives inside `logs/`). */
 export { TABBY_LOG_DEFAULT_DIR };
 
@@ -85,6 +91,40 @@ function num(s) {
   if (s == null) return null;
   const n = Number(String(s).replace(/,/g, ""));
   return Number.isFinite(n) ? n : null;
+}
+
+/** Round to `digits` decimals (never fabricates). */
+function roundN(v, digits) {
+  const f = Math.pow(10, digits);
+  return Math.round(v * f) / f;
+}
+
+/**
+ * Mean of a numeric array, rounded to `digits`; null for an empty array.
+ * @param {number[]} arr
+ * @param {number} digits
+ * @returns {number | null}
+ */
+function mean(arr, digits) {
+  if (arr.length === 0) return null;
+  return roundN(arr.reduce((a, b) => a + b, 0) / arr.length, digits);
+}
+
+/**
+ * Median of a numeric array, rounded to `digits`; null for an empty array.
+ * Preferred over the mean for latency/rate metrics: a single cold-cache request
+ * (e.g. a 164K-token full prefill taking 278 s to first token) would otherwise
+ * drag a mean far above the typical value the operator actually experiences.
+ * @param {number[]} arr
+ * @param {number} digits
+ * @returns {number | null}
+ */
+function median(arr, digits) {
+  if (arr.length === 0) return null;
+  const s = [...arr].sort((a, b) => a - b);
+  const mid = s.length >> 1;
+  const m = s.length % 2 === 1 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+  return roundN(m, digits);
 }
 
 /**
@@ -171,6 +211,10 @@ export function parseTabbyLogLine(line) {
  *   recentRequest: object[], lastRequest: object|null,
  *   active: boolean, activeIds: number[],
  *   windowAvgTps: number|null, peakTps: number|null,
+ *   recentWindowCount: number, recentMedGenTps: number|null,
+ *   recentMedPrefillTps: number|null, recentMedTtftSeconds: number|null,
+ *   recentCacheHitRate: number|null, recentMtpAcceptance: number|null,
+ *   lastRequestId: number|null,
  *   lastRequestAtMs: number|null, stale: boolean,
  * }}
  */
@@ -207,16 +251,45 @@ export function parseTabbyLog(text) {
   }
   activeIds.sort((a, b) => a - b);
 
+  // RECENT-WINDOW aggregates over the last N completed requests. TabbyAPI has no
+  // live metrics endpoint, so these are the honest perf readout: real log values
+  // aggregated over a window, never a live instantaneous figure. Rate/latency use
+  // the MEDIAN (robust to rare cold-cache full-prefill outliers); cache-hit and
+  // MTP use a sum-based share. All null when the window is empty — never 0.
+  const win = recentRequest.slice(-TABBY_LOG_RECENT_WINDOW_N);
+  const recentWindowCount = win.length;
+
   let windowAvgTps = null;
   let peakTps = null;
-  if (recentRequest.length > 0) {
-    const tps = recentRequest.map((r) => r.genTps).filter((n) => Number.isFinite(n));
+  let recentMedGenTps = null;
+  if (win.length > 0) {
+    const tps = win.map((r) => r.genTps).filter((n) => Number.isFinite(n));
     if (tps.length > 0) {
-      peakTps = Math.max(...tps);
-      windowAvgTps = Math.round((tps.reduce((a, b) => a + b, 0) / tps.length) * 100) / 100;
-      peakTps = Math.round(peakTps * 100) / 100;
+      peakTps = roundN(Math.max(...tps), 2);
+      windowAvgTps = mean(tps, 2);
+      recentMedGenTps = median(tps, 2);
     }
   }
+
+  let recentMedPrefillTps = null;
+  let recentMedTtftSeconds = null;
+  let recentCacheHitRate = null;
+  let recentMtpAcceptance = null;
+  if (recentWindowCount > 0) {
+    recentMedPrefillTps = median(win.map((r) => r.prefillTps).filter((n) => Number.isFinite(n)), 2);
+    recentMedTtftSeconds = median(win.map((r) => r.ttftSeconds).filter((n) => Number.isFinite(n)), 2);
+    // Cached tokens = promptTokens - newTokens. Sum-based share over the window.
+    const promptSum = win.reduce((a, r) => a + r.promptTokens, 0);
+    const cachedSum = win.reduce((a, r) => a + (r.promptTokens - r.newTokens), 0);
+    if (promptSum > 0) recentCacheHitRate = roundN(cachedSum / promptSum, 4);
+    const withDraft = win.filter((r) => r.draftTotal != null && r.draftTotal > 0);
+    if (withDraft.length > 0) {
+      const accSum = withDraft.reduce((a, r) => a + r.draftAccepted, 0);
+      const totSum = withDraft.reduce((a, r) => a + r.draftTotal, 0);
+      if (totSum > 0) recentMtpAcceptance = roundN(accSum / totSum, 4);
+    }
+  }
+  const lastRequestId = lastRequest ? lastRequest.id : null;
 
   const now = Date.now();
   const stale =
@@ -228,7 +301,8 @@ export function parseTabbyLog(text) {
   // while a NEW request is in flight (active), since metrics are logged only at
   // completion. So this staleness is INDEPENDENT of active, unlike `stale`.
   const perfMetricsStale =
-    lastRequestAtMs != null && now - lastRequestAtMs > TABBY_LOG_STALE_MS;
+    recentWindowCount === 0 ||
+    (lastRequestAtMs != null && now - lastRequestAtMs > TABBY_LOG_STALE_MS);
 
   return {
     recentRequest,
@@ -236,6 +310,13 @@ export function parseTabbyLog(text) {
     active: activeIds.length > 0,
     activeIds,
     perfMetricsStale,
+    recentWindowCount,
+    recentMedGenTps,
+    recentMedPrefillTps,
+    recentMedTtftSeconds,
+    recentCacheHitRate,
+    recentMtpAcceptance,
+    lastRequestId,
     windowAvgTps,
     peakTps,
     lastRequestAtMs,
@@ -270,6 +351,16 @@ export function applyTabbyLog(entry, log) {
   entry.perfFromLastRequest = !log.active;
   entry.windowAvgTps = log.windowAvgTps ?? null;
   entry.peakTps = log.peakTps ?? null;
+  // RECENT-WINDOW aggregates — the honest perf readout (TabbyAPI has no live
+  // endpoint). Rate/latency are the window MEDIAN (robust to cold-prefill
+  // outliers); cache-hit/MTP are sum-based shares. All null when empty; never 0.
+  entry.recentWindowCount = log.recentWindowCount ?? 0;
+  entry.recentMedGenTps = log.recentMedGenTps ?? null;
+  entry.recentMedPrefillTps = log.recentMedPrefillTps ?? null;
+  entry.recentMedTtftSeconds = log.recentMedTtftSeconds ?? null;
+  entry.recentCacheHitRate = log.recentCacheHitRate ?? null;
+  entry.recentMtpAcceptance = log.recentMtpAcceptance ?? null;
+  entry.lastRequestId = log.lastRequestId ?? null;
   entry.tabbyLog = {
     provenance,
     file: log.file ?? null,
@@ -277,6 +368,13 @@ export function applyTabbyLog(entry, log) {
     stale: !!log.stale,
     perfMetricsStale: !!log.perfMetricsStale,
     active: !!log.active,
+    recentWindowCount: log.recentWindowCount ?? 0,
+    recentMedGenTps: log.recentMedGenTps ?? log.windowAvgTps ?? null,
+    recentMedPrefillTps: log.recentMedPrefillTps ?? null,
+    recentMedTtftSeconds: log.recentMedTtftSeconds ?? null,
+    recentCacheHitRate: log.recentCacheHitRate ?? null,
+    recentMtpAcceptance: log.recentMtpAcceptance ?? null,
+    lastRequestId: log.lastRequestId ?? null,
     windowAvgTps: log.windowAvgTps ?? null,
     peakTps: log.peakTps ?? null,
   };
@@ -358,10 +456,18 @@ export class TabbyLogProbe {
       lastRequest: null,
       active: false,
       activeIds: [],
+      recentWindowCount: 0,
+      recentMedGenTps: null,
+      recentMedPrefillTps: null,
+      recentMedTtftSeconds: null,
+      recentCacheHitRate: null,
+      recentMtpAcceptance: null,
+      lastRequestId: null,
       windowAvgTps: null,
       peakTps: null,
       lastRequestAtMs: null,
       stale: false,
+      perfMetricsStale: true,
     };
   }
 

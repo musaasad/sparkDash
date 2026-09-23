@@ -195,7 +195,7 @@ export const ThroughputGauge = memo(function ThroughputGauge({
             <span className="cp-gauge-value">{Math.round(value!)}</span>
             <span className="cp-gauge-unit">TOK/S</span>
             {valueNote ? (
-              <span className="cp-gauge-value-note mono" title="This rate is the last completed request, not a live instantaneous figure (backend exposes no metrics endpoint).">
+              <span className="cp-gauge-value-note mono" title="RECENT-WINDOW median over the last N completed requests (robust to cold-prefill outliers), not a live instantaneous figure (backend exposes no metrics endpoint).">
                 {valueNote}
               </span>
             ) : null}

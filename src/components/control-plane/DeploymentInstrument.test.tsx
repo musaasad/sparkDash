@@ -272,6 +272,109 @@ describe("DeploymentInstrument", () => {
     expect(slots.querySelector(".cp-inst-bar")).toBeNull();
   });
 
+  it("presents log-derived perf as RECENT-WINDOW medians/aggregates, labelled, even while BUSY", () => {
+    cleanupRenders();
+    const t = telem({
+      provenance: "TabbyAPI log (x.log)",
+      recentWindowCount: 12,
+      recentMedGenTps: 47,
+      recentCacheHitRate: 0.94,
+      recentMedTtftSeconds: 1.2,
+      recentMedPrefillTps: 300,
+      recentMtpAcceptance: 0.6,
+      lastRequestId: 67897,
+      perfMetricsStale: false,
+      generationTps: 71,
+      prefixCacheHitRate: 0.99,
+      ttftSeconds: 6.34,
+      prefillTps: 420,
+      mtpAcceptanceRate: 0.61,
+    });
+    const { container } = render(
+      <DeploymentInstrument view={view({ telemetry: t })} role="PRIMARY" state="busy" history={[40, 47]}
+        lastRequestAt={970} now={1000} runtimeLabels={{}} runtimeMetrics={{ tabbyapi: ["mtpAcceptanceRate", "prefixCacheHitRate", "ttftSeconds", "prefillTps"] }} onOpen={noop} />
+    );
+    // gauge = RECENT MED of the window (47), not the live-looking last value (71)
+    expect(container.querySelector(".cp-gauge-value-note")?.textContent).toContain("RECENT MED");
+    expect(container.querySelector(".cp-gauge-value")?.textContent).toBe("47");
+    // tiles show window aggregates, not the single last-request values
+    const cell = (label: string) => [...container.querySelectorAll(".cp-inst-cell")].find((c) => c.textContent?.includes(label))!;
+    expect(cell("CACHE HIT").querySelector(".cp-inst-cell-value")?.textContent).toContain("94");
+    expect(cell("TTFT").querySelector(".cp-inst-cell-value")?.textContent).toContain("1.20");
+    expect(cell("PREFILL").querySelector(".cp-inst-cell-value")?.textContent).toContain("300");
+    // RECENT provenance line + last-request recency render even while BUSY
+    const recent = container.querySelector(".cp-inst-recent")?.textContent ?? "";
+    expect(recent).toContain("RECENT");
+    expect(recent).toContain("last 12 requests");
+    expect(recent).toContain("TabbyAPI log");
+    expect(recent).toContain("last #67897");
+    // the RUNNING line stays clean — provenance/#id live once, on the RECENT line
+    expect(container.querySelector(".cp-inst-live")?.textContent).toBe("2 RUNNING");
+    expect(container.querySelector(".cp-inst-state")?.textContent).toContain("BUSY");
+    // honest tooltip: recent-window aggregate, explicitly not the lifetime rate
+    const cacheTip = cell("CACHE HIT").querySelector(".cp-inst-cell-value")?.getAttribute("title") ?? "";
+    expect(cacheTip).toContain("lifetime hit rate");
+    expect(cacheTip.toLowerCase()).toContain("aggregate");
+  });
+
+  it("shows '—' (never 0) when the log-derived recent window is EMPTY", () => {
+    cleanupRenders();
+    const t = telem({
+      provenance: "TabbyAPI log (x.log)",
+      recentWindowCount: 0,
+      recentMedGenTps: null,
+      recentCacheHitRate: null,
+      recentMedTtftSeconds: null,
+      recentMedPrefillTps: null,
+      recentMtpAcceptance: null,
+      lastRequestId: null,
+      perfMetricsStale: true,
+      generationTps: 71,
+      prefixCacheHitRate: 0.99,
+    });
+    const { container } = render(
+      <DeploymentInstrument view={view({ telemetry: t })} role="PRIMARY" state="serving" history={[40, 47]}
+        lastRequestAt={null} now={1000} runtimeLabels={{}} runtimeMetrics={{ tabbyapi: ["prefixCacheHitRate", "prefillTps"] }} onOpen={noop} />
+    );
+    // gauge is calm (no fabricated 0 from the last-request value 71)
+    expect(container.querySelector(".cp-gauge-value")).toBeNull();
+    expect(container.querySelector(".cp-gauge-value-note")).toBeNull();
+    const values = [...container.querySelectorAll(".cp-inst-cell-value")].map((v) => v.textContent);
+    expect(values).toContain("—");
+    expect(values).not.toContain("0");
+    expect(container.querySelectorAll(".cp-inst-cell.is-stale").length).toBeGreaterThan(0);
+  });
+
+  it("dims and nulls log-derived tiles when the last completion is stale", () => {
+    cleanupRenders();
+    const t = telem({
+      provenance: "TabbyAPI log (x.log)",
+      recentWindowCount: 12,
+      recentMedGenTps: 47,
+      recentCacheHitRate: 0.94,
+      perfMetricsStale: true,
+    });
+    const { container } = render(
+      <DeploymentInstrument view={view({ telemetry: t })} role="PRIMARY" state="serving" history={[40, 47]}
+        lastRequestAt={1} now={1000} runtimeLabels={{}} runtimeMetrics={{ tabbyapi: ["prefixCacheHitRate"] }} onOpen={noop} />
+    );
+    expect(container.querySelector(".cp-gauge-value")).toBeNull();
+    expect([...container.querySelectorAll(".cp-inst-cell-value")].map((v) => v.textContent)).toContain("—");
+    expect(container.querySelectorAll(".cp-inst-cell.is-stale").length).toBeGreaterThan(0);
+  });
+
+  it("keeps a non-log backend (vLLM) on its LIVE value + no RECENT caption", () => {
+    cleanupRenders();
+    const t = telem({ provenance: null, generationTps: 120, prefixCacheHitRate: null });
+    const { container } = render(
+      <DeploymentInstrument view={view({ runtime: "vllm", telemetry: t })} role="PRIMARY" state="serving" history={[100, 120]}
+        lastRequestAt={null} now={1000} runtimeLabels={{}} runtimeMetrics={{}} onOpen={noop} />
+    );
+    expect(container.querySelector(".cp-gauge-value")?.textContent).toBe("120");
+    expect(container.querySelector(".cp-gauge-value-note")).toBeNull();
+    expect(container.querySelector(".cp-inst-recent")).toBeNull();
+  });
+
   it("shows the gauge as UNKNOWN with 'metrics require key' for unreadable telemetry", () => {
     cleanupRenders();
     const { container } = render(
