@@ -4649,6 +4649,7 @@ button.cp-link { background: none; border: none; padding: 0; cursor: pointer; fo
 .cp-gauge-center { position: relative; display: flex; flex-direction: column; align-items: center; max-width: 60%; }
 .cp-gauge-value { font-size: 44px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; font-family: "JetBrains Mono", ui-monospace, monospace; }
 .cp-gauge-unit { font-size: 10px; letter-spacing: 0.16em; color: var(--color-muted); margin-top: 3px; }
+.cp-gauge-value-note { font-size: 9px; letter-spacing: 0.1em; color: var(--color-muted); opacity: 0.72; margin-top: 1px; text-transform: uppercase; }
 .cp-gauge-state { font-size: 14px; font-weight: 700; letter-spacing: 0.14em; color: var(--inst-tone-calm); }
 .cp-gauge.tone-live .cp-gauge-state { color: var(--inst-tone-live); }
 .cp-gauge-trend { font-size: 10px; margin-top: 2px; color: var(--color-muted); }

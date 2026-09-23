@@ -20,6 +20,13 @@ export interface ThroughputGaugeProps {
   unavailable?: boolean;
   /** Honest note shown when unavailable ("metrics require key"). */
   note?: string | null;
+  /**
+   * Tiny caption under the dominant number when the value is NOT a live
+   * instantaneous rate — e.g. a log-derived last-completed-request rate for
+   * TabbyAPI, which exposes no metrics endpoint. Prevents a last-request number
+   * from being read as the current throughput.
+   */
+  valueNote?: string | null;
 }
 
 const START_DEG = 150;
@@ -100,6 +107,7 @@ export const ThroughputGauge = memo(function ThroughputGauge({
   className = "",
   unavailable = false,
   note = null,
+  valueNote = null,
 }: ThroughputGaugeProps) {
   // Ceiling memory gives the adaptive scale its hysteresis (ref, not state —
   // the value itself already drives re-renders via props).
@@ -186,6 +194,11 @@ export const ThroughputGauge = memo(function ThroughputGauge({
             {/* current tok/s is the dominant number */}
             <span className="cp-gauge-value">{Math.round(value!)}</span>
             <span className="cp-gauge-unit">TOK/S</span>
+            {valueNote ? (
+              <span className="cp-gauge-value-note mono" title="This rate is the last completed request, not a live instantaneous figure (backend exposes no metrics endpoint).">
+                {valueNote}
+              </span>
+            ) : null}
           </>
         ) : null}
         <span className="cp-gauge-state">{centerWord}</span>

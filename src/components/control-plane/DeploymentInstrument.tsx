@@ -148,6 +148,7 @@ export function DeploymentInstrument({
           value={view.telemetry?.generationTps ?? null}
           history={history}
           state={state}
+          valueNote={provenance ? "last req" : null}
           size={primary ? 176 : 148}
           unavailable={!telemetryReadable}
           note={needsKey ? "metrics require key" : telemetryReadable ? null : "throughput unknown"}
