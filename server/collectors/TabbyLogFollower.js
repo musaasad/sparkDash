@@ -32,9 +32,17 @@ const RECONNECT_MAX_MS = 30_000;
 const IDLE_OK_MS = 5 * 60_000;
 
 /**
- * Build the READ-ONLY remote follow loop. Follows the newest *.log, announces the
- * active file with a `__TABBYFILE__=` marker (reused convention from the batch
- * probe), and re-points when a newer file appears. Busy-safe when no log exists.
+ * Build the READ-ONLY remote follow loop.
+ *
+ * `tail` MUST run in the FOREGROUND: a backgrounded `tail` writing to the SSH
+ * pipe is block-buffered by the shell and delivers in minute-long bursts (verified
+ * empirically), which is exactly the stale-state failure we are fixing. The
+ * foreground `tail -F` streams line-by-line in real time. A tiny background
+ * watchdog (writes NOTHING to stdout, so its own buffering is irrelevant) polls
+ * for a newer *.log and `pkill`s this exact tail when the active file changes
+ * (TabbyAPI relaunch/rotation), so the outer loop re-points. A dead TCP
+ * connection is caught by SSH ServerAlive* keepalives (ssh exits → `close` →
+ * reconnect), so no heartbeat is needed.
  * @param {string} dir
  * @param {number} seedLines how many trailing lines to replay on (re)point
  */
@@ -46,9 +54,10 @@ export function buildFollowCommand(dir, seedLines = 200) {
     `f=$(ls -1t "$d"/*.log 2>/dev/null | head -n 1); ` +
     `if [ -n "$f" ]; then ` +
     `echo "__TABBYFILE__=$(basename -- "$f")"; ` +
-    `tail -n ${seedLines} -F -- "$f" & p=$!; ` +
-    `while [ "$(ls -1t "$d"/*.log 2>/dev/null | head -n 1)" = "$f" ]; do sleep 2; done; ` +
-    `kill "$p" 2>/dev/null; wait "$p" 2>/dev/null; ` +
+    `( while :; do sleep 2; nf=$(ls -1t "$d"/*.log 2>/dev/null | head -n 1); ` +
+    `[ "$nf" != "$f" ] && { pkill -f "tail -n ${seedLines} -F -- $f"; break; }; done ) & w=$!; ` +
+    `tail -n ${seedLines} -F -- "$f"; ` +
+    `kill "$w" 2>/dev/null; wait "$w" 2>/dev/null; ` +
     `else sleep 5; fi; ` +
     `done`
   );
@@ -137,9 +146,12 @@ export class TabbyLogFollower {
     try {
       // multiplex:false — a long-lived stream must own its connection so killing
       // it tears the channel down; it must not share the short-lived poll master.
+      // ServerAlive* makes a silently-dropped TCP connection exit the ssh process
+      // (so `close` fires + we reconnect) instead of hanging half-open forever.
       spec = sshCommandSpec(this.spark, {
         remoteArgv: [buildFollowCommand(dir, this._seedLines)],
         multiplex: false,
+        extraSshArgs: ["-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=3", "-o", "TCPKeepAlive=yes"],
       });
     } catch (err) {
       this._lastError = err instanceof Error ? err.message : String(err);
@@ -207,6 +219,10 @@ export class TabbyLogFollower {
       const file = marker[1].trim() || null;
       // A (re)point resets per-file active/dedupe state inside setFile().
       this.state.setFile(file);
+      // And on EVERY (re)connect — even to the same file — drop in-flight state so
+      // a completion lost during the gap cannot leave a phantom BUSY; the replay
+      // that follows rebuilds it.
+      this.state.onReconnect();
       // A fresh connection resets the reconnect backoff once data is flowing.
       this._reconnectAttempts = 0;
       return;

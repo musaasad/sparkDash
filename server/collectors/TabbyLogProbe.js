@@ -29,6 +29,24 @@ export const TABBY_LOG_STALE_MS = 5 * 60_000;
 /** An in-flight START older than this is assumed lost (tail window/rotation). */
 export const TABBY_LOG_ACTIVE_MAX_MS = 30 * 60_000;
 /**
+ * A START only opens an in-flight slot if its LOG timestamp is within this of the
+ * NEWEST timestamp the stream has seen. A live start is ~contemporaneous with the
+ * newest line; a START re-fed by a reconnect `tail -n 200` replay whose completion
+ * already scrolled out is far older than the newer lines around it — opening it
+ * would latch a phantom BUSY. Using the LOG clock (not wall clock) keeps this
+ * independent of the node/host clock. Errs toward under-reporting activity.
+ */
+export const TABBY_LOG_START_FRESH_MS = 120_000;
+/**
+ * Safety net against a completion line the stream ever fails to deliver: request
+ * ids are strictly monotonic, so once we have completed an id this many ABOVE an
+ * in-flight start, that start is unambiguously finished (its completion was lost)
+ * — close it so BUSY can never latch forever. Sized far above real concurrency
+ * (~8) and above any plausible single-request length, so it never prunes a live
+ * request; it only reaps provably-dead ones.
+ */
+export const TABBY_LOG_ACTIVE_ID_SLACK = 1000;
+/**
  * How many most-recent COMPLETED requests the perf aggregates span. TabbyAPI has
  * NO live metrics endpoint (console-only status bar), so every perf number is a
  * RECENT-WINDOW aggregate over real log lines — never a live instantaneous value.
@@ -58,7 +76,9 @@ const COMPLETION_RE = new RegExp(
     "\\s*prompt\\s+([\\d,]+)\\s+tokens,\\s*(?:(\\d+)%|none)\\s*cached,\\s*([\\d,]+)\\s*new in\\s+([\\d.]+)\\s*s" +
     "(?:\\s*\\(([\\d.]+)\\s*T/s\\))?\\s*" +
     SEP +
-    "\\s*first token\\s+([\\d.]+)\\s*s,\\s*total\\s+([\\d.]+)\\s*s" +
+    // A queued request inserts `· queued <N> s,` before the timing segment.
+    "(?:\\s*queued\\s+[\\d.]+\\s*s,)?\\s*" +
+    "first token\\s+([\\d.]+)\\s*s,\\s*total\\s+([\\d.]+)\\s*s" +
     "(?:\\s*" +
     SEP +
     "\\s*draft\\s+(\\d+)/(\\d+)\\s+accepted\\s*\\((\\d+)%\\))?"
@@ -368,6 +388,10 @@ export class TabbyLogState {
     this.startedTotal = 0;
     this.completedTotal = 0;
     this.cancelledTotal = 0;
+    /** Newest log timestamp seen (the stream's own monotonic clock). */
+    this._maxTsMs = null;
+    /** Highest completed request id seen (monotonic; drives the orphan reaper). */
+    this._maxCompletedId = null;
   }
 
   /**
@@ -382,6 +406,20 @@ export class TabbyLogState {
     this.active.clear();
     this._seenIds.clear();
     return true;
+  }
+
+  /**
+   * Called on EVERY stream (re)connect (the loop re-emits the file marker each
+   * time). A reconnect means a delivery gap: any in-flight entry from before the
+   * drop can no longer be trusted (its completion may have been written and
+   * scrolled out of the replay window while we were disconnected). Clear the
+   * in-flight map; the `tail -n 200` replay that follows rebuilds it correctly —
+   * a genuinely-running request still has its START in the window with no
+   * completion after it, while a finished one has both lines gone or its START
+   * deduped against a completion we already saw. Keeps dedupe/window/counters.
+   */
+  onReconnect() {
+    this.active.clear();
   }
 
   /**
@@ -401,12 +439,20 @@ export class TabbyLogState {
   /** Fold one already-parsed typed event. Returns true if state changed. */
   ingestEvent(ev) {
     if (!ev || typeof ev.kind !== "string") return false;
+    // The stream's own monotonic clock (log timestamps), captured BEFORE this
+    // event advances it so a start can be judged against the lines around it.
+    const prevMaxTsMs = this._maxTsMs;
+    if (ev.tsMs != null && (this._maxTsMs == null || ev.tsMs > this._maxTsMs)) this._maxTsMs = ev.tsMs;
     switch (ev.kind) {
       case "start": {
         // A START whose completion was ALREADY folded in (e.g. re-fed by a
         // reconnect's `tail -n 200` replay) must NOT re-open — that request is
         // done; re-adding it would orphan it and latch BUSY.
         if (this._seenIds.has(ev.id)) return false;
+        // A START far older than the newest line already seen is a replayed start
+        // whose completion scrolled out — finished, not in flight. Skip it so it
+        // cannot latch a phantom BUSY. Live starts are ~contemporaneous → pass.
+        if (ev.tsMs != null && prevMaxTsMs != null && prevMaxTsMs - ev.tsMs > TABBY_LOG_START_FRESH_MS) return false;
         this.startedTotal++;
         this.lastStart = ev;
         // BUSY the instant a request starts — no wait for completion.
@@ -432,6 +478,10 @@ export class TabbyLogState {
         return true;
       }
       case "completion": {
+        // Monotonic high-water mark of completed ids (drives the orphan reaper).
+        if (typeof ev.id === "number" && (this._maxCompletedId == null || ev.id > this._maxCompletedId)) {
+          this._maxCompletedId = ev.id;
+        }
         // Dedupe replays: the follower's `tail -n 200` intentionally re-feeds the
         // tail on reconnect/rotation; a duplicate must not skew the medians. Even
         // when deduped, CLOSE any active entry for this id — a replay may have
@@ -456,7 +506,20 @@ export class TabbyLogState {
   /** Drop in-flight starts idle longer than the cap (lost starts on crash/rotation). */
   _pruneActive(now) {
     for (const [id, a] of this.active) {
-      if (now - a.lastActivityWallMs > this.activeMaxMs) this.active.delete(id);
+      if (now - a.lastActivityWallMs > this.activeMaxMs) {
+        this.active.delete(id);
+        continue;
+      }
+      // Orphan reaper: if we have completed an id far above this in-flight start,
+      // the start is provably finished (its completion line was lost) — close it so
+      // BUSY cannot latch even under a rare delivery gap.
+      if (
+        this._maxCompletedId != null &&
+        typeof id === "number" &&
+        id < this._maxCompletedId - TABBY_LOG_ACTIVE_ID_SLACK
+      ) {
+        this.active.delete(id);
+      }
     }
   }
 
@@ -689,6 +752,7 @@ export function applyTabbyLog(entry, log, modelChangedAtMs = 0) {
     requestElapsedSeconds: log.active ? log.elapsedSeconds ?? null : null,
     lastRequestDetail: entry.lastRequestDetail ?? null,
     activeRequest: entry.activeRequest ?? null,
+    activeIds: Array.isArray(log.activeIds) ? log.activeIds : [],
   };
 
   if (log.active) {

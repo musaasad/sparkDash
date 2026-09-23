@@ -94,3 +94,13 @@ test("follower marks unavailable when the stream drops (no frozen BUSY), reconne
   assert.equal(f.getState().available, false, "dropped stream => honest absence, not stale-live");
   f.stop();
 });
+test("follower ignores stray non-log lines (they never fabricate request state)", () => {
+  const f = new TabbyLogFollower(spark, { spawnFn: fakeSpawn });
+  f.start();
+  const child = fakeSpawn.last;
+  child.stdout.emit("data", Buffer.from("__TABBYFILE__=a.log\nsome junk line\n__TABBYHB__\n"));
+  const s = f.getState();
+  assert.equal(s.active, false, "a junk line is not a request");
+  assert.equal(s.recentWindowCount, 0, "a junk line adds no completion");
+  f.stop();
+});

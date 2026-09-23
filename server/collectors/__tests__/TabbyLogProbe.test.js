@@ -524,3 +524,72 @@ test("TabbyLogState: a reconnect replay re-feeding a completed START does NOT re
   assert.equal(st.snapshot().activeCount, 0);
   assert.equal(st.snapshot().recentWindowCount, 1, "window not double-counted by the replay");
 });
+
+test("TabbyLogState: a replayed START far older than newer lines does NOT open (log-clock freshness)", () => {
+  const st = new TabbyLogState();
+  st.setFile("x.log");
+  // A newer completion first advances the log clock.
+  st.ingestLine(COMPLETION); // ts 08:43:06
+  // A START stamped ~3 min earlier (a replay whose completion scrolled out) must
+  // be skipped — it is finished, not in flight.
+  const START_OLD = START.replace("08:43:00.000", "08:40:00.000").replace("#67897", "#99999");
+  st.ingestLine(START_OLD);
+  assert.equal(st.snapshot().activeCount, 0, "old replayed start beyond the fresh window is not opened");
+  // A live start (contemporaneous with the newest line) still opens.
+  const START_LIVE = START.replace("08:43:00.000", "08:43:07.000").replace("#67897", "#99998");
+  st.ingestLine(START_LIVE);
+  assert.equal(st.snapshot().activeCount, 1, "a live contemporaneous start opens normally");
+});
+
+test("TabbyLogState: orphan reaper closes a start far below the completed high-water id", () => {
+  const st = new TabbyLogState();
+  st.setFile("x.log");
+  // A low-id start opens (recent stamp, nothing seen yet).
+  const LOW_START = START.replace("#67897", "#100");
+  st.ingestLine(LOW_START);
+  assert.equal(st.snapshot().activeCount, 1, "start opens");
+  // A much higher id completes → high-water mark advances far past the open start.
+  const HIGH_DONE = COMPLETION.replace("#67897", "#2000");
+  st.ingestLine(HIGH_DONE);
+  // The reaper proves #100 finished (its completion was lost) and closes it.
+  assert.equal(st.snapshot().activeCount, 0, "provably-dead start reaped, BUSY cannot latch");
+});
+
+test("TabbyLogState: onReconnect drops pre-gap in-flight so a lost completion cannot latch BUSY", () => {
+  const st = new TabbyLogState();
+  st.setFile("x.log");
+  st.ingestLine(START); // genuinely running before the gap (#67897)
+  assert.equal(st.snapshot().activeCount, 1, "start open before reconnect");
+  st.onReconnect(); // stream dropped + reconnected; the completion was lost in the gap
+  assert.equal(st.snapshot().activeCount, 0, "in-flight cleared on reconnect (no phantom BUSY)");
+  // The replay that follows rebuilds a still-running request correctly.
+  st.ingestLine(START);
+  assert.equal(st.snapshot().activeCount, 1, "replay re-opens a genuinely running request");
+  st.ingestLine(COMPLETION); // its completion (#67897) arrives
+  assert.equal(st.snapshot().activeCount, 0, "and closes when it completes");
+});
+
+test("parses a QUEUED completion (· queued N s, before first token; optional trailing max_tokens reached)", () => {
+  const Q = "2026-09-23 18:31:52.572 | INFO     | #129519 chat/completions: 700 tokens generated at 8.7 T/s · prompt 62 tokens, none cached, 62 new in 0.49 s · queued 0.53 s, first token 1.02 s, total 81.3 s · draft 439/1088 accepted (40%) · max_tokens reached";
+  const ev = parseTabbyLogLine(Q);
+  assert.ok(ev && ev.kind === "completion", "queued completion parses");
+  assert.equal(ev.id, 129519);
+  assert.equal(ev.genTps, 8.7);
+  assert.equal(ev.ttftSeconds, 1.02);
+  assert.equal(ev.totalSeconds, 81.3);
+  assert.equal(ev.prefillTps, null, "no prefill segment → null, never 0");
+  assert.equal(ev.draftAccepted, 439);
+  assert.equal(ev.draftTotal, 1088);
+  assert.equal(ev.draftPct, 40);
+});
+
+test("queued completion closes an active request (regression: orphan from unparseable completion)", () => {
+  const st = new TabbyLogState();
+  st.setFile("x.log");
+  const START_Q = "2026-09-23 18:30:31.124 | INFO     | #129519 chat/completions: 62 prompt tokens · temperature: 0.8 (preset), max_tokens: 32768 (req)";
+  const DONE_Q = "2026-09-23 18:31:52.572 | INFO     | #129519 chat/completions: 700 tokens generated at 8.7 T/s · prompt 62 tokens, none cached, 62 new in 0.49 s · queued 0.53 s, first token 1.02 s, total 81.3 s · draft 439/1088 accepted (40%) · max_tokens reached";
+  st.ingestLine(START_Q);
+  assert.equal(st.snapshot().activeCount, 1, "queued request opens BUSY");
+  st.ingestLine(DONE_Q);
+  assert.equal(st.snapshot().activeCount, 0, "queued completion closes it (no orphan)");
+});

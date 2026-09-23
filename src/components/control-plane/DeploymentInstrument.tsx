@@ -107,20 +107,25 @@ export function DeploymentInstrument({
   const servingNow =
     view.telemetry?.requestActive === true ||
     (view.telemetry?.lastRequestAtMs != null && now - view.telemetry.lastRequestAtMs < 8000);
+  // Throughput gauge = CURRENT generation. For TabbyAPI (provenance): while a
+  // request is in flight (or one just completed) show the freshest COMPLETED
+  // rate ("LAST REQUEST"); when nothing is running the current throughput is
+  // genuinely 0 — show 0, not a lingering historical number. No data at all
+  // (empty window) stays "—". vLLM keeps its native instantaneous value.
   const gaugeValue = provenance
     ? logPerfDim
       ? null
       : servingNow
         ? view.telemetry?.generationTps ?? view.telemetry?.recentMedGenTps ?? null
-        : view.telemetry?.recentMedGenTps ?? null
+        : 0
     : view.telemetry?.generationTps ?? null;
   // Honest labelling (never call a last-completed rate "LIVE"):
   //  • TabbyAPI log — decode tok/s is emitted only AT completion. While a request
   //    is in flight the freshest number is the LAST COMPLETED request → "LAST
-  //    REQUEST"; when idle it calms to the window median → "RECENT MED".
+  //    REQUEST"; idle shows 0 (no caption — the IDLE state pill carries it).
   //  • vLLM native — /metrics is already an instantaneous live reading conveyed
   //    by the moving value + BUSY state; no extra caption (minimal markers).
-  const gaugeNote = provenance ? (servingNow ? "LAST REQUEST" : "RECENT MED") : null;
+  const gaugeNote = provenance ? (servingNow ? "LAST REQUEST" : null) : null;
   // LIVE activity from the continuous follower — genuinely live (lights up on the
   // request START line, closed on completion/cancel), unlike the completion-only
   // throughput. Elapsed is wall-clock since the oldest in-flight request started.

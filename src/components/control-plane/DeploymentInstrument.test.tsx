@@ -285,6 +285,9 @@ describe("DeploymentInstrument", () => {
       lastRequestId: 67897,
       perfMetricsStale: false,
       generationTps: 71,
+      requestActive: true,
+      activeRequests: 1,
+      lastRequestAtMs: 970,
       prefixCacheHitRate: 0.99,
       ttftSeconds: 6.34,
       prefillTps: 420,
@@ -294,20 +297,21 @@ describe("DeploymentInstrument", () => {
       <DeploymentInstrument view={view({ telemetry: t })} role="PRIMARY" state="busy" history={[40, 47]}
         lastRequestAt={970} now={1000} runtimeLabels={{}} runtimeMetrics={{ tabbyapi: ["mtpAcceptanceRate", "prefixCacheHitRate", "ttftSeconds", "prefillTps"] }} onOpen={noop} />
     );
-    // gauge = RECENT MED of the window (47), not the live-looking last value (71)
-    expect(container.querySelector(".cp-gauge-value-note")?.textContent).toContain("RECENT MED");
-    expect(container.querySelector(".cp-gauge-value")?.textContent).toBe("47");
+    // Genuinely serving → gauge = the freshest COMPLETED rate ("LAST REQUEST", 71),
+    // never a colour-only "LIVE"; the secondary tiles still show window aggregates.
+    expect(container.querySelector(".cp-gauge-value-note")?.textContent).toContain("LAST REQUEST");
+    expect(container.querySelector(".cp-gauge-value")?.textContent).toBe("71");
     // tiles show window aggregates, not the single last-request values
     const cell = (label: string) => [...container.querySelectorAll(".cp-inst-cell")].find((c) => c.textContent?.includes(label))!;
     expect(cell("CACHE HIT").querySelector(".cp-inst-cell-value")?.textContent).toContain("94");
     expect(cell("TTFT").querySelector(".cp-inst-cell-value")?.textContent).toContain("1.20");
     expect(cell("PREFILL").querySelector(".cp-inst-cell-value")?.textContent).toContain("300");
-    // RECENT provenance line + last-request recency render even while BUSY
+    // While genuinely serving, the provenance line lights up as a live GENERATING
+    // read (word + accent, never colour alone) naming the log file it streams from.
     const recent = container.querySelector(".cp-inst-recent")?.textContent ?? "";
-    expect(recent).toContain("RECENT");
-    expect(recent).toContain("last 12 requests");
+    expect(recent).toContain("GENERATING");
+    expect(recent).toContain("1 active");
     expect(recent).toContain("TabbyAPI log");
-    expect(recent).toContain("last #67897");
     // the RUNNING line stays clean — provenance/#id live once, on the RECENT line
     expect(container.querySelector(".cp-inst-live")?.textContent).toBe("2 RUNNING");
     expect(container.querySelector(".cp-inst-state")?.textContent).toContain("BUSY");
@@ -346,7 +350,7 @@ describe("DeploymentInstrument", () => {
     expect(live).toContain("3.4s");
   });
 
-  it("calms to the recent-window median (RECENT MED) when idle but recent", () => {
+  it("shows 0 throughput when idle (nothing running), not a lingering historical number", () => {
     cleanupRenders();
     const t = telem({
       provenance: "TabbyAPI log (x.log)",
@@ -354,6 +358,7 @@ describe("DeploymentInstrument", () => {
       recentMedGenTps: 47,
       generationTps: 71,
       requestActive: false,
+      activeRequests: 0,
       lastRequestAtMs: 1000 - 30_000, // last completion 30s ago → not servingNow
       perfMetricsStale: false,
     });
@@ -361,8 +366,13 @@ describe("DeploymentInstrument", () => {
       <DeploymentInstrument view={view({ telemetry: t })} role="PRIMARY" state="idle" history={[40, 47]}
         lastRequestAt={1000 - 30_000} now={1000} runtimeLabels={{}} runtimeMetrics={{}} onOpen={noop} />
     );
-    expect(container.querySelector(".cp-gauge-value-note")?.textContent).toContain("RECENT MED");
-    expect(container.querySelector(".cp-gauge-value")?.textContent).toBe("47");
+    // Nothing running → current throughput is genuinely 0, so the gauge reads its
+    // calm IDLE state word (never a lingering stale number, never a fake "LIVE").
+    // The recent median stays a secondary tile, not the headline.
+    expect(container.querySelector(".cp-gauge-value")).toBeNull();
+    expect(container.querySelector(".cp-gauge-state")?.textContent).toBe("IDLE");
+    expect(container.querySelector(".cp-gauge-value-note")?.textContent ?? "").not.toContain("RECENT MED");
+    expect(container.querySelector(".cp-gauge-value-note")?.textContent ?? "").not.toContain("LIVE");
   });
 
   it("shows '—' (never 0) when the log-derived recent window is EMPTY", () => {
