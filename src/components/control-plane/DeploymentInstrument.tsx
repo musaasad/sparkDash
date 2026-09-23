@@ -98,6 +98,23 @@ export function DeploymentInstrument({
   const lastId = view.telemetry?.lastRequestId ?? null;
   const logPerfDim = provenance != null && (view.telemetry?.perfMetricsStale === true || view.telemetry?.recentWindowCount === 0);
   const perfTilesStale = logPerfDim;
+  // Live tracking: while the model is actively serving (a request in flight, or
+  // one completed seconds ago) the gauge shows the LATEST request's throughput so
+  // it MOVES as the model works. TabbyAPI logs a rate at each completion — that
+  // latest rate is the closest thing to a live reading it offers. When idle it
+  // calms to the recent-window median (labelled RECENT MED), never a frozen
+  // single value presented as current.
+  const servingNow =
+    view.telemetry?.requestActive === true ||
+    (view.telemetry?.lastRequestAtMs != null && now - view.telemetry.lastRequestAtMs < 8000);
+  const gaugeValue = provenance
+    ? logPerfDim
+      ? null
+      : servingNow
+        ? view.telemetry?.generationTps ?? view.telemetry?.recentMedGenTps ?? null
+        : view.telemetry?.recentMedGenTps ?? null
+    : view.telemetry?.generationTps ?? null;
+  const gaugeNote = provenance ? (servingNow ? "LIVE" : "RECENT MED") : null;
 
   const thermal = hottestThermal(view.nodes, temperatureUnit);
   const agg = view.telemetry?.aggregation ?? aggregationLegend(view.telemetry?.membersReporting ?? 0, view.nodes.length);
@@ -164,10 +181,10 @@ export function DeploymentInstrument({
           micro-instruments span the FULL card width — no dead middle region. */}
       <div className="cp-inst-body">
         <ThroughputGauge
-          value={provenance ? (logPerfDim ? null : view.telemetry?.recentMedGenTps ?? null) : view.telemetry?.generationTps ?? null}
+          value={gaugeValue}
           history={history}
           state={state}
-          valueNote={provenance ? "RECENT MED" : null}
+          valueNote={gaugeNote}
           size={primary ? 176 : 148}
           unavailable={!telemetryReadable}
           note={needsKey ? "metrics require key" : telemetryReadable ? null : "throughput unknown"}

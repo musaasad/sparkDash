@@ -317,6 +317,44 @@ describe("DeploymentInstrument", () => {
     expect(cacheTip.toLowerCase()).toContain("aggregate");
   });
 
+  it("shows the LIVE latest-request throughput (not the lagging median) while actively serving", () => {
+    cleanupRenders();
+    const t = telem({
+      provenance: "TabbyAPI log (x.log)",
+      recentWindowCount: 12,
+      recentMedGenTps: 47,
+      generationTps: 71,
+      requestActive: true,
+      perfMetricsStale: false,
+    });
+    const { container } = render(
+      <DeploymentInstrument view={view({ telemetry: t })} role="PRIMARY" state="busy" history={[40, 71]}
+        lastRequestAt={990} now={1000} runtimeLabels={{}} runtimeMetrics={{}} onOpen={noop} />
+    );
+    // Actively serving → gauge tracks the live latest-request rate (71), labelled LIVE.
+    expect(container.querySelector(".cp-gauge-value-note")?.textContent).toContain("LIVE");
+    expect(container.querySelector(".cp-gauge-value")?.textContent).toBe("71");
+  });
+
+  it("calms to the recent-window median (RECENT MED) when idle but recent", () => {
+    cleanupRenders();
+    const t = telem({
+      provenance: "TabbyAPI log (x.log)",
+      recentWindowCount: 12,
+      recentMedGenTps: 47,
+      generationTps: 71,
+      requestActive: false,
+      lastRequestAtMs: 1000 - 30_000, // last completion 30s ago → not servingNow
+      perfMetricsStale: false,
+    });
+    const { container } = render(
+      <DeploymentInstrument view={view({ telemetry: t })} role="PRIMARY" state="idle" history={[40, 47]}
+        lastRequestAt={1000 - 30_000} now={1000} runtimeLabels={{}} runtimeMetrics={{}} onOpen={noop} />
+    );
+    expect(container.querySelector(".cp-gauge-value-note")?.textContent).toContain("RECENT MED");
+    expect(container.querySelector(".cp-gauge-value")?.textContent).toBe("47");
+  });
+
   it("shows '—' (never 0) when the log-derived recent window is EMPTY", () => {
     cleanupRenders();
     const t = telem({
