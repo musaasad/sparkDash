@@ -321,7 +321,7 @@ export interface TabbyLogMetrics {
 
 export interface LlmMetrics {
   available: boolean;
-  backend: "vllm" | "llama.cpp" | "sglang" | "ds4" | "exl3" | "q27" | null;
+  backend: "vllm" | "llama.cpp" | "sglang" | "ds4" | "exl3" | "q27" | "tabbyapi" | null;
   modelId: string | null;
   modelPath: string | null;
   contextLength: number | null;

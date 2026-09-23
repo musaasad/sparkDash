@@ -122,6 +122,10 @@ export function DeploymentInstrument({
   // TP worker ranks online but API-served by the head — expected, shown calmly,
   // never lumped into the "no endpoint" fault wording.
   const headServed = view.telemetry?.membersHeadServedApi ?? [];
+  // TP topology gates the rank-row "api·head" marker: only a TP worker legitimately
+  // lacks its own endpoint. A dp/pp/replica member may serve its own API, so the
+  // marker must not be inferred from node count alone.
+  const isTp = typeof view.topology === "string" && /^tp\d?/i.test(view.topology);
 
   // Latency/queue micro-gauges first, then the hottest node's physical read-outs
   // — subordinate to the dominant throughput number, never competing with it.
@@ -249,7 +253,7 @@ export function DeploymentInstrument({
           {loaded && !recency && telemetryReadable ? <span className="cp-inst-recency is-wide">no active traffic</span> : null}
           {state === "serving" || state === "busy" ? (
             <span className="cp-inst-live mono is-wide">
-              {view.telemetry?.requestsRunning ?? 0} RUNNING
+              {view.telemetry?.requestsRunning ?? "—"} RUNNING
               {view.telemetry?.requestsWaiting ? ` · ${view.telemetry.requestsWaiting} QUEUED` : ""}
             </span>
           ) : null}
@@ -290,16 +294,19 @@ export function DeploymentInstrument({
             const isHead = node != null && n.id === node.id;
             const g = n.metrics?.gpu;
             const um = n.metrics?.unifiedMemory;
-            const mem = um?.total ? Math.round(((um.used ?? 0) / um.total) * 100) : null;
+            // A failed collection leaves DEFAULTS (0) — gate on the domain's
+            // collect-success flag and render '—', never a fabricated 0°C / 0% (F6).
+            const gpuOk = g != null && n.metricsCollectSuccess?.gpu !== false;
+            const memPct = um && Number.isFinite(um.percentage) ? Math.round(um.percentage) : null;
             return (
               <span key={n.id} className={`cp-inst-rank${n.online ? "" : " is-offline"}`}>
                 <span className="cp-inst-rank-dot" aria-hidden="true" />
                 <span className="cp-inst-rank-name">{n.name || n.id}</span>
                 <span className="cp-inst-rank-role">{isHead ? "head" : "worker"}</span>
-                <span className="cp-inst-rank-metric">{g?.temperature != null ? `${g.temperature}°C` : "—"}</span>
-                <span className="cp-inst-rank-metric">{g?.usage != null ? `util ${g.usage}%` : "util —"}</span>
-                <span className="cp-inst-rank-metric">{mem != null ? `mem ${mem}%` : "mem —"}</span>
-                {isHead ? null : <span className="cp-inst-rank-api" title="No own OpenAI endpoint — API served by the head (expected for a TP worker)">api·head</span>}
+                <span className="cp-inst-rank-metric">{gpuOk && g?.temperature != null ? `${g.temperature}°C` : "—"}</span>
+                <span className="cp-inst-rank-metric">{gpuOk && g?.usage != null ? `util ${g.usage}%` : "util —"}</span>
+                <span className="cp-inst-rank-metric">{memPct != null ? `mem ${memPct}%` : "mem —"}</span>
+                {!isHead && isTp ? <span className="cp-inst-rank-api" title="TP worker — the head serves the OpenAI API for the whole group (expected)">api·head</span> : null}
                 {!n.online ? <span className="cp-inst-rank-off">OFFLINE</span> : null}
               </span>
             );

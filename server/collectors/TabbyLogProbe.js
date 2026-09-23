@@ -73,6 +73,12 @@ const START_RE = new RegExp(
 
 /**
  * Parse the tabby log timestamp (`YYYY-MM-DD HH:MM:SS.mmm`, no TZ) as local ms.
+ * PRECONDITION: the log stamps carry no timezone and are parsed against the DSH
+ * host clock. The staleness rule AND the swap-guard comparison (which checks a
+ * completion's stamp against a host `Date.now()` change time) assume the serving
+ * node and the DSH host share timezone + a synchronised clock (they do in this
+ * single-lab deployment). A node/host TZ mismatch or clock skew would shift every
+ * staleness/swap judgment — keep node and host clocks in sync.
  * @param {string} s
  * @returns {number | null}
  */

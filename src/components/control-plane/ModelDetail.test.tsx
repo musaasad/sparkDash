@@ -240,7 +240,9 @@ describe("ModelDetail live-first model identity", () => {
   it("renders a discovered live model (not in the registry) as a coherent view", async () => {
     cleanupRenders();
     setDeployments([boundDep("deepseek-v41-flash")]);
-    fetchModel.mockRejectedValue(new Error("model not found"));
+    const err404 = new Error("model not found") as Error & { status?: number };
+    err404.status = 404;
+    fetchModel.mockRejectedValue(err404);
     (client.fetchRecipes as ReturnType<typeof vi.fn>).mockResolvedValue({ recipes: [glmRecipe] });
     const { container } = render(
       <ModelDetail modelId="GLM-5.3-Flash-EXL3" sparks={[llmSpark("GLM-5.3-Flash-EXL3", 850000, "vllm")]} navigate={() => {}} onDataChanged={() => {}} />
@@ -250,6 +252,21 @@ describe("ModelDetail live-first model identity", () => {
     expect(container.textContent).toContain("live · discovered");
     expect(container.textContent).toContain("850,000"); // live context wins over recipe 600k
     expect(container.textContent).not.toContain("Model not found");
+  });
+
+  it("does NOT synthesize a discovered view on a transient (non-404) fetch failure", async () => {
+    cleanupRenders();
+    setDeployments([boundDep("qwen38-flash-next")]);
+    const err500 = new Error("boom") as Error & { status?: number };
+    err500.status = 500;
+    fetchModel.mockRejectedValue(err500);
+    const { container } = render(
+      <ModelDetail modelId="qwen38-flash-next" sparks={[llmSpark("Qwen3.8-Flash-Next-EXL3", 262144, "tabbyapi")]} navigate={() => {}} onDataChanged={() => {}} />
+    );
+    await flush();
+    // A transient 5xx must NOT mislabel a registered model as live-discovered
+    // (even though a deployment's live llm key would otherwise match).
+    expect(container.textContent).not.toContain("live · discovered");
   });
 
   it("does NOT flag a same-model live alias as superseded (Qwen keeps friendly name)", async () => {

@@ -124,6 +124,10 @@ export function ModelDetail({ modelId, initialTab, initialReqId, sparks, navigat
   const [model, setModel] = useState<ModelEntry | null>(null);
   const [recipes, setRecipes] = useState<RecipePublic[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // True only when the registry fetch returned 404 (id genuinely not registered) —
+  // distinct from a transient 5xx, so a brief outage never mislabels a registered
+  // model as "discovered".
+  const [notFound, setNotFound] = useState(false);
   const [tab, setTab] = useState<Tab>(normalizeTab(initialTab));
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [archiveBusy, setArchiveBusy] = useState(false);
@@ -138,12 +142,22 @@ export function ModelDetail({ modelId, initialTab, initialReqId, sparks, navigat
       setModel(res.model);
       setRecipes(res.recipes);
       setError(null);
+      setNotFound(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      // Only a 404 means "not registered" (eligible for live-discovery synthesis);
+      // a transient 5xx/network error must NOT mislabel a registered model.
+      setNotFound((err as (Error & { status?: number }))?.status === 404);
     }
   };
 
   useEffect(() => {
+    // Reset per-model state synchronously so navigating from a discovered model to
+    // a registered one (or vice-versa) never renders the previous model's data.
+    setModel(null);
+    setRecipes([]);
+    setError(null);
+    setNotFound(false);
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modelId]);
@@ -151,9 +165,10 @@ export function ModelDetail({ modelId, initialTab, initialReqId, sparks, navigat
   // A model id that is NOT in the registry may still be a model discovered LIVE
   // from a serving endpoint (the owner swapped DeepSeek→GLM without registering
   // it). Resolve it from live telemetry so the detail view stays coherent, never
-  // 404. Runs reactively so it also fires once deployments/sparks populate.
+  // 404. Runs reactively so it also fires once deployments/sparks populate. Only
+  // fires on a genuine 404 (notFound), never on a transient fetch failure.
   useEffect(() => {
-    if (!error || model) return;
+    if (!notFound || model) return;
     const k = normalizeModelKey(modelId);
     if (!k) return;
     const serving = deployments.find((d) => {
@@ -181,7 +196,7 @@ export function ModelDetail({ modelId, initialTab, initialReqId, sparks, navigat
       .catch(() => {});
     setError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [error, model, modelId, deployments, sparks]);
+  }, [notFound, model, modelId, deployments, sparks]);
 
   const deps = useMemo(() => {
     const byId = deployments.filter((d) => d.modelId === modelId);

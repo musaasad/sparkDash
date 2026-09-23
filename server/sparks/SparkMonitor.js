@@ -158,6 +158,8 @@ export class SparkMonitor {
      *  Log-window perf whose last completion predates this belongs to the previous
      *  model and is dimmed until fresh post-swap traffic lands. */
     this._modelChangedAtMs = 0;
+    /** Candidate served-model id awaiting confirmation on a 2nd consecutive poll. */
+    this._pendingModelId = null;
   }
 
   /** Hot-update config without tearing down poll loops / rate baselines. */
@@ -771,8 +773,21 @@ export class SparkMonitor {
               }
             }
             if (liveId) {
-              if (this._lastLiveModelId && this._lastLiveModelId !== liveId) this._modelChangedAtMs = Date.now();
-              this._lastLiveModelId = liveId;
+              if (this._lastLiveModelId && this._lastLiveModelId !== liveId) {
+                // Debounce: only a swap CONFIRMED on 2 consecutive successful polls
+                // is real — a transient default/wrong served-name during a restart
+                // must not dim the log window.
+                if (this._pendingModelId === liveId) {
+                  this._modelChangedAtMs = Date.now();
+                  this._lastLiveModelId = liveId;
+                  this._pendingModelId = null;
+                } else {
+                  this._pendingModelId = liveId;
+                }
+              } else {
+                this._lastLiveModelId = liveId;
+                this._pendingModelId = null;
+              }
             }
           }
           // Merge the READ-ONLY TabbyAPI log metrics onto any tabbyapi entry

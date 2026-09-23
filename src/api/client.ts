@@ -39,7 +39,9 @@ async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(body.error || `HTTP ${res.status}`);
+    const err = new Error(body.error || `HTTP ${res.status}`) as Error & { status?: number };
+    err.status = res.status; // callers distinguish 404 (not-found) from transient 5xx
+    throw err;
   }
   return res.json();
 }
