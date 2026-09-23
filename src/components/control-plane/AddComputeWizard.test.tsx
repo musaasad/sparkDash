@@ -72,6 +72,25 @@ describe("AddComputeWizard — guided, config-first", () => {
     expect(container.querySelector('[aria-label="Add compute steps"]')).not.toBeNull();
   });
 
+  it("uses a compact, collision-free stepper with a step counter", () => {
+    const { container } = render(<AddComputeWizard existing={EXISTING} onCancel={() => {}} onSave={() => {}} />);
+    // compact rail: no inline labels visible, so nothing can overlap at modal width
+    expect(container.querySelector(".cp-steps")?.classList.contains("is-compact")).toBe(true);
+    expect(container.querySelector(".cp-stepper-count")?.textContent).toBe("Step 1 of 8");
+    // every numbered rail step stays accessible via aria-label
+    const rail = [...container.querySelectorAll(".cp-step")];
+    expect(rail[0].getAttribute("aria-label")).toContain("Discover / connect");
+    expect(rail[7].getAttribute("aria-label")).toContain("Save");
+    // full step list is present on demand and labeled
+    const list = container.querySelector(".cp-stepper-list")!;
+    expect(list).not.toBeNull();
+    expect(list.classList.contains("is-open")).toBe(false);
+    const toggle = [...container.querySelectorAll("button")].find((b) => b.textContent === "All steps")!;
+    act(() => toggle.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(container.querySelector(".cp-stepper-list")?.classList.contains("is-open")).toBe(true);
+    expect(container.textContent).toContain("Step 1 of 8");
+  });
+
   it("blocks Next until a host is supplied", () => {
     const { container } = render(<AddComputeWizard existing={EXISTING} onCancel={() => {}} onSave={() => {}} />);
     clickNext(container);

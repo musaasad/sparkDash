@@ -115,7 +115,7 @@ export function FabricPanel({ sparks, views, navigate, onAddCompute }: FabricPan
       <div className="cp-fabric">
         <div className="cp-fabric-head">
           <span className="cp-fabric-title">LAB FABRIC</span>
-          <button type="button" className="cp-btn ghost" onClick={() => onAddCompute?.()}>
+          <button type="button" className="cp-btn primary" onClick={() => onAddCompute?.()}>
             + Add compute
           </button>
         </div>
@@ -200,7 +200,7 @@ export function FabricPanel({ sparks, views, navigate, onAddCompute }: FabricPan
         >
           {showList ? "Graph" : "List"}
         </button>
-        <button type="button" className="cp-btn ghost" onClick={() => onAddCompute?.()}>
+        <button type="button" className="cp-btn primary" onClick={() => onAddCompute?.()}>
           + Add compute
         </button>
       </div>

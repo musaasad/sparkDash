@@ -240,16 +240,18 @@ export function AddComputeWizard({
         ) : null}
       </div>
 
+      {/* Compact: no label collision at modal width; current title rides the
+          stepper head with a "Step n of 8" indicator + on-demand full list. */}
       <Stepper
+        variant="compact"
         steps={COMPUTE_STEPS.map((s) => ({ id: s.key, label: s.title }))}
         current={step}
         onSelect={(i) => setStep(i)}
         ariaLabel="Add compute steps"
       />
 
-      <div style={{ marginTop: 14 }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 4 }}>
-          <span style={{ fontSize: 14, fontWeight: 600 }}>{current.title}</span>
+      <div style={{ marginTop: 0 }}>
+        <div style={{ marginBottom: 4 }}>
           <span className="cp-field-hint">{current.hint}</span>
         </div>
 

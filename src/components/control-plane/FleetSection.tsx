@@ -169,13 +169,13 @@ export function FleetSection({ sparks, deployments, recipes, navigate, models = 
         }
         utilities={<DensityToggle dense={dense} onChange={setDense} />}
         primary={
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             {query ? (
-              <button type="button" className="cp-btn ghost" onClick={() => setQuery("")}>
+              <button type="button" className="cp-link" onClick={() => setQuery("")}>
                 Clear
               </button>
             ) : null}
-            <button type="button" className="cp-btn ghost" onClick={() => onAddCompute?.()}>
+            <button type="button" className="cp-btn primary" onClick={() => onAddCompute?.()}>
               + Add compute
             </button>
           </div>
