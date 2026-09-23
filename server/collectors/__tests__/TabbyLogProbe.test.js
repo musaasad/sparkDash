@@ -168,6 +168,23 @@ test("applyTabbyLog maps REAL last-request values + provenance onto a tabbyapi e
   assert.equal(entry.slotsTotal, 4);
 });
 
+test("applyTabbyLog: stale-on-swap guard dims a window that predates a model change", () => {
+  const log = parseTabbyLog([START, COMPLETION].join("\n"));
+  const t = log.lastRequestAtMs;
+  assert.ok(t > 0);
+  // A serving-model change detected AFTER the window's last completion means these
+  // numbers belong to the PREVIOUS model => dimmed, never presented as current.
+  const stale = { backend: "tabbyapi" };
+  applyTabbyLog(stale, { ...log, available: true, file: "old.log", stale: false, perfMetricsStale: false }, t + 5000);
+  assert.equal(stale.perfStale, true);
+  assert.equal(stale.perfMetricsStale, true);
+  // Fresh post-swap traffic (completion newer than the change) => guard does NOT dim.
+  const fresh = { backend: "tabbyapi" };
+  applyTabbyLog(fresh, { ...log, available: true, file: "new.log", stale: false, perfMetricsStale: false }, t - 5000);
+  assert.equal(fresh.perfMetricsStale, false);
+  assert.equal(fresh.perfStale, false);
+});
+
 test("applyTabbyLog: active in-flight => requestsRunning/slotsActive 1", () => {
   const log = parseTabbyLog(START_OPEN);
   const entry = { backend: "tabbyapi", generationTps: null };

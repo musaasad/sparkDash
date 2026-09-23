@@ -335,7 +335,7 @@ export function parseTabbyLog(text) {
  * @param {object|null} log TabbyLogProbe.probe() result
  * @returns {object} the mutated entry
  */
-export function applyTabbyLog(entry, log) {
+export function applyTabbyLog(entry, log, modelChangedAtMs = 0) {
   if (!entry || entry.backend !== "tabbyapi") return entry;
   if (!log || !log.available) {
     // Tail failed / no log: keep the honest "—" (do not invent).
@@ -346,6 +346,14 @@ export function applyTabbyLog(entry, log) {
   entry.lastRequestAtMs = log.lastRequestAtMs ?? null;
   entry.perfStale = !!log.stale;
   entry.perfMetricsStale = !!log.perfMetricsStale;
+  // Stale-on-swap guard: if a serving-model change was detected and this recent
+  // window's last completion predates it, these numbers belong to the PREVIOUS
+  // model — never present them as current under the new name. Dim until fresh
+  // post-swap traffic lands (lastRequestAtMs newer than the change).
+  if (modelChangedAtMs && log.lastRequestAtMs != null && log.lastRequestAtMs < modelChangedAtMs) {
+    entry.perfStale = true;
+    entry.perfMetricsStale = true;
+  }
   entry.requestActive = !!log.active;
   /** The tps/prefill here are LAST-REQUEST values, not a live instantaneous gauge. */
   entry.perfFromLastRequest = !log.active;

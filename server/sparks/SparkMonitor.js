@@ -152,6 +152,12 @@ export class SparkMonitor {
     this._runGeneration = 0;
     /** @type {Record<string, boolean | symbol>} in-flight domain guards */
     this._inflight = {};
+    /** Last AVAILABLE live served-model id (fail-closed; null when unknown). */
+    this._lastLiveModelId = null;
+    /** Wall-clock ms of the last detected serving-model SWAP (X→Y, both known).
+     *  Log-window perf whose last completion predates this belongs to the previous
+     *  model and is dimmed until fresh post-swap traffic lands. */
+    this._modelChangedAtMs = 0;
   }
 
   /** Hot-update config without tearing down poll loops / rate baselines. */
@@ -752,6 +758,23 @@ export class SparkMonitor {
           this._metrics.unifiedMemory = result;
           break;
         case "llm":
+          // Detect a serving-model SWAP on this endpoint (a real X→Y change where
+          // both the old and new ids are known). A cold start (null→X) is NOT a
+          // swap. Once swapped, log-window perf from before the change belongs to
+          // the previous model and must not be shown as current under the new name.
+          {
+            let liveId = null;
+            for (const e of result) {
+              if (e?.available === true && typeof e.modelId === "string" && e.modelId.trim()) {
+                liveId = e.modelId.trim();
+                break;
+              }
+            }
+            if (liveId) {
+              if (this._lastLiveModelId && this._lastLiveModelId !== liveId) this._modelChangedAtMs = Date.now();
+              this._lastLiveModelId = liveId;
+            }
+          }
           // Merge the READ-ONLY TabbyAPI log metrics onto any tabbyapi entry
           // BEFORE publishing, so the Qwen pane shows REAL last-request values
           // with provenance + timestamp (never a fabricated gauge).
@@ -759,7 +782,7 @@ export class SparkMonitor {
             const log = this._metrics.tabbyLog;
             if (log) {
               for (const entry of result) {
-                if (entry?.backend === "tabbyapi") applyTabbyLog(entry, log);
+                if (entry?.backend === "tabbyapi") applyTabbyLog(entry, log, this._modelChangedAtMs);
               }
             }
           }
@@ -784,7 +807,7 @@ export class SparkMonitor {
           // llm polls refreshes the tabbyapi readout immediately.
           if (result?.available && Array.isArray(this._metrics.llm)) {
             for (const entry of this._metrics.llm) {
-              if (entry?.backend === "tabbyapi") applyTabbyLog(entry, result);
+              if (entry?.backend === "tabbyapi") applyTabbyLog(entry, result, this._modelChangedAtMs);
             }
           }
           break;
