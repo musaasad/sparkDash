@@ -172,4 +172,9 @@ test("cred ref splits: port ref → endpoint bearer, bare ref → ssh password",
   await svc.discover({ host: "10.0.0.9", port: 8888, sshAuth: "pass", credRef: "spark:dgx-1" });
   assert.equal(seenSshPassword, "pw");
   assert.equal(seenHeaders.Authorization, undefined);
+
+  // F11: an explicit sshPassword wins over any cred ref (password auth reachable).
+  seenSshPassword = null;
+  await svc.discover({ host: "10.0.0.9", port: 8888, sshAuth: "pass", sshPassword: "explicit", credRef: "spark:dgx-1" });
+  assert.equal(seenSshPassword, "explicit");
 });

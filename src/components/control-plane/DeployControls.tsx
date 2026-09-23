@@ -20,8 +20,11 @@ interface DeployControlsProps {
  *    weights all survive.
  *
  * This phase is DRY-RUN: managed recipes simulate; an externally-managed
- * deployment renders controls DISABLED with an explicit reason — showing live
- * controls on a never-touch process is a trust violation.
+ * deployment renders START/STOP/RESTART DISABLED with an explicit reason —
+ * showing live lifecycle controls on a never-touch process is a trust violation.
+ * REMOVE BINDING is CONFIG-ONLY (DELETE /api/deployments/:id never touches the
+ * external process) so it stays ENABLED for external deployments too — otherwise
+ * an external binding could never be un-bound.
  */
 export function DeployControls({ recipe, deployment, onUpdated }: DeployControlsProps) {
   const [busy, setBusy] = useState<string | null>(null);
@@ -101,7 +104,7 @@ export function DeployControls({ recipe, deployment, onUpdated }: DeployControls
           <button
             type="button"
             className="cp-btn ghost"
-            disabled={external || busy != null || !deployment}
+            disabled={busy != null || !deployment}
             onClick={() => setConfirm("remove")}
             title={external ? "Removes the binding record; the external process is untouched" : "Remove the binding only — recipe, model and weights stay"}
           >

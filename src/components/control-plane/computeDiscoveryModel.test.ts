@@ -102,6 +102,16 @@ describe("markManual + validateLocal", () => {
     expect(blocking).toHaveLength(0);
     expect(advisory).toHaveLength(0);
   });
+
+  it("F11: password auth without a password (or cred ref) is INVALID", () => {
+    const base = { ...emptyDraft(), name: "DGX 4", id: "dgx-4", lanIp: "192.168.1.170", sshUser: "musa", gpuChip: "GB10" };
+    const noPass = validateLocal({ ...base, sshAuth: "pass" }, []);
+    expect(noPass.blocking.map((i) => i.code)).toContain("ssh-password-missing");
+    const withPass = validateLocal({ ...base, sshAuth: "pass", sshPassword: "s3cret" }, []);
+    expect(withPass.blocking).toHaveLength(0);
+    const withRef = validateLocal({ ...base, sshAuth: "pass", credRef: "spark:dgx-4" }, []);
+    expect(withRef.blocking).toHaveLength(0);
+  });
 });
 
 describe("mergeValidation", () => {
@@ -131,6 +141,16 @@ describe("draftToConfig", () => {
     expect(c.ssh.host).toBe("192.168.1.170");
     expect(c.fabricLinks).toHaveLength(1);
     expect("provenance" in c).toBe(false);
+  });
+
+  it("F11: carries password auth + value for a pass draft (value only when pass)", () => {
+    const d = { ...emptyDraft(), name: "DGX 4", id: "dgx-4", lanIp: "192.168.1.170", sshUser: "musa", sshAuth: "pass" as const, sshPassword: "s3cret" };
+    const c = draftToConfig(d);
+    expect(c.ssh.auth).toBe("pass");
+    expect(c.ssh.password).toBe("s3cret");
+    const keyOnly = draftToConfig({ ...d, sshAuth: "key" as const });
+    expect(keyOnly.ssh.auth).toBe("key");
+    expect(keyOnly.ssh.password).toBe("s3cret");
   });
 });
 

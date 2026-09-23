@@ -147,6 +147,7 @@ export function AddComputeWizard({
         port: draft.llmPorts[0] ?? null,
         sshUser: draft.sshUser || undefined,
         sshAuth: draft.sshAuth,
+        sshPassword: draft.sshAuth === "pass" ? draft.sshPassword || undefined : undefined,
         credRef: draft.credRef,
         nodeId: draft.id || null,
       });
@@ -275,6 +276,23 @@ export function AddComputeWizard({
               <Field label="SSH user" htmlFor="ac-user" hint="Used only for read-only facts">
                 <TextInput id="ac-user" value={draft.sshUser} placeholder="musa" onChange={(e) => patchManual("sshUser", e.target.value)} />
               </Field>
+              <Field label="SSH auth" htmlFor="ac-auth" hint="Password is config-only; value never echoed">
+                <Select id="ac-auth" value={draft.sshAuth} onChange={(e) => patchManual("sshAuth", e.target.value)}>
+                  <option value="key">Key</option>
+                  <option value="pass">Password</option>
+                </Select>
+              </Field>
+              {draft.sshAuth === "pass" ? (
+                <Field label="SSH password" htmlFor="ac-password" error={!draft.sshPassword && !draft.credRef ? "required" : null}>
+                  <TextInput
+                    id="ac-password"
+                    type="password"
+                    value={draft.sshPassword}
+                    placeholder="password or use a credential ref"
+                    onChange={(e) => patchManual("sshPassword", e.target.value)}
+                  />
+                </Field>
+              ) : null}
               <Field label="Credential ref" htmlFor="ac-cred" hint="Optional; value never echoed">
                 <Select id="ac-cred" value={draft.credRef ?? ""} onChange={(e) => patch({ credRef: e.target.value || null })}>
                   <option value="">none</option>

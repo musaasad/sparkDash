@@ -71,7 +71,7 @@ export function FleetSection({ sparks, deployments, recipes, navigate, models = 
       header: "GPU",
       align: "right",
       render: (n) =>
-        n.metrics?.gpu ? (
+        n.metrics?.gpu && n.metricsCollectSuccess?.gpu !== false ? (
           <span className="cp-metric-chip">
             {Math.round(n.metrics.gpu.usage)}
             <span className="cp-unit"> %</span>
@@ -87,7 +87,7 @@ export function FleetSection({ sparks, deployments, recipes, navigate, models = 
       muted: true,
       render: (n) => {
         const v = n.metrics?.gpu?.vram;
-        if (!v || v.total <= 0) return "—";
+        if (n.metricsCollectSuccess?.gpu !== false || !v || v.total <= 0) return "—";
         return (
           <span className="cp-metric-chip">
             {Math.round(v.used / 1024)}/{Math.round(v.total / 1024)} GB
@@ -101,7 +101,7 @@ export function FleetSection({ sparks, deployments, recipes, navigate, models = 
       align: "right",
       muted: true,
       render: (n) =>
-        n.metrics?.gpu?.temperature != null ? (
+        n.metrics?.gpu?.temperature != null && n.metricsCollectSuccess?.gpu !== false ? (
           <span className={`cp-metric-chip${n.metrics.gpu.temperature > 85 ? " cp-over" : ""}`}>{fmtTemp(n.metrics.gpu.temperature)}</span>
         ) : (
           <span className="cp-nodata">—</span>
@@ -113,6 +113,7 @@ export function FleetSection({ sparks, deployments, recipes, navigate, models = 
       align: "right",
       muted: true,
       render: (n) => {
+        if (n.metricsCollectSuccess?.gpu !== false) return "—";
         const p = n.metrics?.gpu?.power?.systemDraw ?? n.metrics?.gpu?.power?.draw;
         return p != null ? `${Math.round(p)} W` : "—";
       },

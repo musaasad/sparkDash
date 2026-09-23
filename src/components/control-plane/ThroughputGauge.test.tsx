@@ -57,6 +57,15 @@ describe("gauge arc scaling", () => {
     expect(container.querySelector(".cp-gauge-range")).toBeNull();
     expect(container.querySelectorAll(".cp-gauge-tick")).toHaveLength(0);
   });
+
+  it("F10: never draws a fabricated value arc with fewer than 2 samples", () => {
+    cleanupRenders();
+    const { container } = render(<ThroughputGauge value={120} history={[120]} state="serving" />);
+    // scaled === null ⇒ neutral track only, but the number still reads.
+    expect(container.querySelector(".cp-gauge-fill")).toBeNull();
+    expect(container.querySelector(".cp-gauge-needle")).toBeNull();
+    expect(container.querySelector(".cp-gauge-value")?.textContent).toBe("120");
+  });
 });
 
 describe("gauge idle honesty", () => {

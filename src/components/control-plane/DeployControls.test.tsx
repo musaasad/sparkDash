@@ -90,4 +90,14 @@ describe("DeployControls lifecycle separation", () => {
     expect(stop.disabled).toBe(true);
     expect(stop.title).toContain("Externally managed");
   });
+
+  it("F7: external still ENABLES the config-only Remove binding", () => {
+    render(<DeployControls recipe={recipe} deployment={dep({ managedBy: "external", display: "running-external" })} />);
+    const buttons = [...document.querySelectorAll<HTMLButtonElement>("button")];
+    const remove = buttons.find((b) => b.textContent?.trim() === "Remove binding")!;
+    expect(remove.disabled).toBe(false);
+    expect(remove.title).toContain("the external process is untouched");
+    // Lifecycle stays disabled on an uncontrolled process.
+    expect(buttons.find((b) => b.textContent?.trim() === "Start")!.disabled).toBe(true);
+  });
 });

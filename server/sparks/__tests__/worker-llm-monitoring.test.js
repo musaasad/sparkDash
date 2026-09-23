@@ -51,5 +51,8 @@ test("shared canonical rule agrees with the registry + monitor", () => {
   // A default worker still owns no probe.
   const defaultWorker = new SparkMonitor({ role: "worker", workerNode: true, id: "w2", name: "W2", lanIp: "10.0.0.8" });
   assert.equal(defaultWorker.llmProbes.size, 0);
-  assert.deepEqual(defaultWorker.snapshot().llmPorts, []);
+  // Configured ports are still published (fallback 8888) so the node can be
+  // located by port; `llmPort` itself is null (no probe behind it).
+  assert.deepEqual(defaultWorker.snapshot().llmPorts, [8888]);
+  assert.equal(defaultWorker.snapshot().llmPort, null);
 });

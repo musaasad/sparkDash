@@ -59,8 +59,13 @@ export interface FabricLink {
   kind: FabricLinkKind;
   /** CONFIG or DISCOVERY — never inferred from topology or node count. */
   provenance: FabricProvenance;
-  /** Discovered NIC speed in Mbps, else the CX7 nominal 200 Gb/s when unset. */
+  /** Discovered NIC speed in Mbps, or null when no endpoint measured one. */
   speedMbps: number | null;
+  /**
+   * True when `speedMbps` is null and only the CX7 NOMINAL 200 Gb/s applies —
+   * never printed as a measured value.
+   */
+  speedNominal: boolean;
   degraded: boolean;
   /**
    * PHYSICAL LINK health — endpoint reachability only. Node health (memory /
@@ -184,7 +189,7 @@ export function deriveFabric(sparks: SparkSnapshot[], deploymentViews: readonly 
     const speeds = [a.metrics?.network?.linkSpeedMbps, b.metrics?.network?.linkSpeedMbps].filter(
       (v): v is number => typeof v === "number"
     );
-    if (speeds.length === 0) return 200_000; // ConnectX-7 nominal 200 Gb/s
+    if (speeds.length === 0) return null;
     return Math.min(...speeds);
   };
 
@@ -199,13 +204,15 @@ export function deriveFabric(sparks: SparkSnapshot[], deploymentViews: readonly 
     if (a.id === b.id || seen.has(key)) return;
     seen.add(key);
     const degraded = !a.online || !b.online;
+    const measured = speedOverride ?? nominalSpeed(a, b);
     links.push({
       id: `${provenance}:${kind}:${key}`,
       from: a.id,
       to: b.id,
       kind,
       provenance,
-      speedMbps: speedOverride ?? nominalSpeed(a, b),
+      speedMbps: measured,
+      speedNominal: measured == null,
       degraded,
       // Link health is PHYSICAL reachability, never node memory pressure.
       health: degraded ? "warn" : "ok",

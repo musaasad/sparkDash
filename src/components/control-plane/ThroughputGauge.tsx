@@ -121,7 +121,9 @@ export const ThroughputGauge = memo(function ThroughputGauge({
   const cx = 20;
   const cy = 20;
   const r = 14.5;
-  const pct = (scaled ? scaled.fraction : 0.26) * 100;
+  // The value arc is only real once a range exists (<2 samples ⇒ null). Never
+  // draw a fabricated fixed fallback arc.
+  const pct = scaled ? scaled.fraction * 100 : 0;
 
   return (
     <div
@@ -136,8 +138,9 @@ export const ThroughputGauge = memo(function ThroughputGauge({
       <svg viewBox="0 0 40 40" width={size} height={size} aria-hidden="true">
         {/* restrained track */}
         <path className="cp-gauge-track" d={arcPath(cx, cy, r, START_DEG, START_DEG + SWEEP_DEG)} pathLength={100} fill="none" />
-        {/* value arc — animates smoothly, never snaps; omitted when calm */}
-        {calm ? null : (
+        {/* value arc — animates smoothly, never snaps; omitted when calm OR
+            when there is no real range yet (neutral track only) */}
+        {calm || !scaled ? null : (
           <path
             className="cp-gauge-fill"
             d={arcPath(cx, cy, r, START_DEG, START_DEG + SWEEP_DEG)}

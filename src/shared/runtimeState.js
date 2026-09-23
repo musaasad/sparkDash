@@ -11,6 +11,9 @@
  *
  * Semantics (canonical, non-negotiable):
  *  - COMPUTE ONLINE / OFFLINE — node reachability only.
+ *  - NOT-DETECTED — no endpoint evidence; OFFLINE only when the node is NOT
+ *    reachable. A reachable node with unobserved OPTIONAL telemetry is NEVER
+ *    offline (READY/UNKNOWN instead).
  *  - RUNTIME REACHABLE — the process answered (even a 401/403 proves liveness).
  *  - MODEL LOADED — a model id / slot pool is observed.
  *  - SERVING — observed ACTIVE generation (requestsRunning > 0 OR generationTps
@@ -174,10 +177,12 @@ export function deriveRuntimeState(input = {}) {
     staleMs = TELEMETRY_STALE_MS,
   } = input;
 
-  // 1. Explicit absence — the ONLY offline signals.
-  if (state === "stopped" || display === "stopped" || observed === "not-detected") {
-    return RUNTIME_STATE.OFFLINE;
-  }
+  // Reachability resolved FIRST: `not-detected` must be able to consult it.
+  const reachable = input.reachable === true || isObservedHealthyExternal(input);
+  const keyedWithoutKey = input.keyedWithoutKey === true;
+
+  // 1. Explicit absence — the ONLY absolute offline signals.
+  if (state === "stopped" || display === "stopped") return RUNTIME_STATE.OFFLINE;
 
   // 2. Starting / loading.
   if (display === "starting" || display === "loading") return RUNTIME_STATE.STARTING;
@@ -186,9 +191,14 @@ export function deriveRuntimeState(input = {}) {
   if (display === "degraded" || observed === "unhealthy") return RUNTIME_STATE.DEGRADED;
 
   const quality = telemetryQuality(telemetry, { telemetryAgeMs, staleMs });
-  const stale = quality === TELEMETRY_QUALITY.STALE;
+  const stale =
+    quality === TELEMETRY_QUALITY.STALE || (isNum(telemetryAgeMs) && telemetryAgeMs > staleMs);
 
-  // 4. Managed deployment whose readable probe hard-fails.
+  // 4. `not-detected` is OFFLINE ONLY when NOT reachable. A reachable node whose
+  //    OPTIONAL telemetry is simply unobserved falls through to READY/UNKNOWN.
+  if (observed === "not-detected" && !reachable) return RUNTIME_STATE.OFFLINE;
+
+  // 4b. Managed deployment whose readable probe hard-fails.
   if (
     managedBy !== "external" &&
     telemetry &&
@@ -199,33 +209,28 @@ export function deriveRuntimeState(input = {}) {
     return RUNTIME_STATE.DEGRADED;
   }
 
-  // 5. Reachable signals — explicit flag, or observed-healthy external runtime.
-  const reachable = input.reachable === true || isObservedHealthyExternal(input);
-  const keyedWithoutKey = input.keyedWithoutKey === true;
-
-  // 6. Keyed/gated reachable with no load confirmation → REACHABLE (never OFFLINE).
+  // 5. Keyed/gated reachable with no load confirmation → REACHABLE (never OFFLINE).
   if (keyedWithoutKey) return RUNTIME_STATE.REACHABLE;
 
-  if (!telemetry || telemetry.available !== true) {
-    if (reachable) return RUNTIME_STATE.READY;
-    return RUNTIME_STATE.UNKNOWN;
-  }
-
-  // 7. Live-active signals — suppressed to a calm state when the snapshot is STALE.
-  const active = (isNum(telemetry.requestsRunning) && telemetry.requestsRunning > 0)
-    || (isNum(telemetry.generationTps) && telemetry.generationTps > 0);
-  const waiting = isNum(telemetry.requestsWaiting) && telemetry.requestsWaiting > 0;
+  // 6. Observed ACTIVE generation is evaluated BEFORE the availability branch, so
+  //    a member reporting activity yields SERVING even when `available` is false.
+  //    Active signals are suppressed to a calm state when the snapshot is STALE.
+  const active = (isNum(telemetry?.requestsRunning) && telemetry.requestsRunning > 0)
+    || (isNum(telemetry?.generationTps) && telemetry.generationTps > 0);
+  const waiting = isNum(telemetry?.requestsWaiting) && telemetry.requestsWaiting > 0;
 
   if (!stale) {
     if (waiting) return RUNTIME_STATE.BUSY;
+    if (active) return RUNTIME_STATE.SERVING;
+  }
+
+  if (!telemetry || telemetry.available !== true) {
+    return reachable ? RUNTIME_STATE.READY : RUNTIME_STATE.UNKNOWN;
   }
 
   const loaded =
     (isNum(telemetry.slotsTotal) && telemetry.slotsTotal > 0) || !!telemetry.modelId;
 
-  if (!stale) {
-    if (active) return RUNTIME_STATE.SERVING;
-  }
   if (!loaded) return reachable ? RUNTIME_STATE.READY : RUNTIME_STATE.UNKNOWN;
 
   // IDLE is stale-safe: served before, no active claim.

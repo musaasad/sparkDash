@@ -92,6 +92,22 @@ describe("Overview health verdict", () => {
     expect(nodeWindow!.querySelector('[aria-pressed="true"]')?.textContent).toBe("Last 15m");
   });
 
+  it("F4: window RANKS, never drops — offline nodes stay and the count matches rows", () => {
+    cleanupRenders();
+    const old = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
+    const offline = spark({ id: "n-off", name: "Offline Node", online: false });
+    const activity = [{ seq: 1, kind: "node", subject: "n-off", summary: "off", ts: old, attribution: null, meta: null }] as never;
+    const { container } = render(
+      <OverviewSection sparks={[spark(), offline]} deployments={[]} recipes={[]} activity={activity} navigate={() => {}} loaded />
+    );
+    // The offline node is older than the window but must NOT vanish.
+    expect(container.querySelector(".cp-nodestrip")?.textContent).toContain("Offline Node");
+    const rows = container.querySelectorAll(".cp-nodestrip-row");
+    expect(rows).toHaveLength(2);
+    const band = [...container.querySelectorAll(".cp-section-band")].find((b) => b.textContent?.includes("Node telemetry"))!;
+    expect(band.querySelector(".cp-section-band-count")?.textContent?.trim()).toBe("2");
+  });
+
   it("shows a getting-started checklist for a fresh lab", () => {
     cleanupRenders();
     const { container } = render(<OverviewSection sparks={[]} deployments={[]} recipes={[]} navigate={() => {}} loaded />);

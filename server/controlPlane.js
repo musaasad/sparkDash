@@ -667,6 +667,7 @@ export function createControlPlane(deps) {
         port: b.port,
         sshUser: b.sshUser,
         sshAuth: b.sshAuth,
+        sshPassword: b.sshPassword,
         credRef: b.credRef,
         nodeId: b.nodeId,
       });
@@ -755,9 +756,16 @@ export function createControlPlane(deps) {
     return node ? llmProbeHost(node) : null;
   }
 
-  /** Primary snapshot for a deployment, resolved by stable member ids + port. */
+  /**
+   * Primary snapshot for a deployment, resolved by stable member ids + port.
+   * The port-membership test is a PREFERENCE, not a gate: a monitoring-off but
+   * online member (whose `llmPorts` no longer carries a probe) must still yield
+   * its snapshot so the deployment reads reachable + no-telemetry, never
+   * `not-detected`-as-offline.
+   */
   function deploymentPrimarySnapshot(recipe, dep) {
     const port = recipe?.endpoint?.port;
+    let fallback = null;
     for (const id of dep.nodeIds || []) {
       const monitor = monitors.get(id);
       if (!monitor) continue;
@@ -768,8 +776,9 @@ export function createControlPlane(deps) {
         continue;
       }
       if ((snap.llmPorts || []).includes(port)) return snap;
+      if (!fallback) fallback = snap;
     }
-    return null;
+    return fallback;
   }
 
   function recipeForDeployment(dep) {

@@ -138,9 +138,9 @@ export class ComputeDiscoveryService {
    * Bounded, read-only discovery of ONE host. Never throws on an unreachable
    * host — it reports reachable:false and leaves fields UNKNOWN.
    *
-   * @param {{host:string, port?:number|string, sshUser?:string, sshAuth?:"key"|"pass", credRef?:string, nodeId?:string}} input
+   * @param {{host:string, port?:number|string, sshUser?:string, sshAuth?:"key"|"pass", sshPassword?:string, credRef?:string, nodeId?:string}} input
    */
-  async discover({ host, port, sshUser, sshAuth, credRef, nodeId } = {}) {
+  async discover({ host, port, sshUser, sshAuth, sshPassword, credRef, nodeId } = {}) {
     const h = String(host || "").trim();
     const steps = [];
     if (!h) {
@@ -199,7 +199,10 @@ export class ComputeDiscoveryService {
         return null;
       }
     };
-    const sshCred = sshAuth === "pass" && !refHasPort ? resolveCred() : null;
+    const sshCred =
+      sshAuth === "pass"
+        ? sshPassword || (!refHasPort ? resolveCred() : null)
+        : null;
     const endpointCred = refHasPort ? resolveCred() : null;
 
     if (wantSsh) {

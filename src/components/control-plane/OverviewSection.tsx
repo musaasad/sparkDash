@@ -105,8 +105,19 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
   const history: TelemetryHistory = useTelemetryHistory(views);
 
   // Identity-keyed states: association by stable deployment key, never index.
+  // `reachable` = any member node online (a monitoring-off node is still
+  // reachable → READY/UNKNOWN, never OFFLINE). Age drives the STALE contract.
   const statesByKey = useMemo(
-    () => new Map(views.map((v) => [v.key, deriveRuntimeState(v.deployment, v.telemetry)])),
+    () =>
+      new Map(
+        views.map((v) => [
+          v.key,
+          deriveRuntimeState(v.deployment, v.telemetry, {
+            telemetryAgeMs: v.telemetry?.telemetryAgeMs ?? null,
+            reachable: v.nodes.some((n) => n.online),
+          }),
+        ])
+      ),
     [views]
   );
   const states = useMemo(() => views.map((v) => statesByKey.get(v.key)!), [views, statesByKey]);
@@ -154,9 +165,17 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
   const lastSeenAt = (id: string) =>
     activity.reduce((m, e) => (e.subject === id ? Math.max(m, Date.parse(e.ts)) : m), 0);
 
+  // The window RANKS, never drops: an offline node stays in the strip (canonical
+  // inventory promise) and the SectionBand count still equals the visible rows.
+  // Recently-seen nodes float to the top; offline nodes sink but never vanish.
   const windowedNodes = useMemo(() => {
     const cutoff = now - nodeWindow;
-    return nodes.filter((n) => n.online || lastSeenAt(n.id) === 0 || lastSeenAt(n.id) >= cutoff);
+    const rank = (n: SparkSnapshot) => {
+      if (n.online) return 2;
+      const seen = lastSeenAt(n.id);
+      return seen >= cutoff ? 1 : 0;
+    };
+    return [...nodes].sort((a, b) => rank(b) - rank(a) || lastSeenAt(b.id) - lastSeenAt(a.id));
   }, [nodes, now, nodeWindow, activity]);
 
   const recent = useMemo(() => {
@@ -284,9 +303,10 @@ export function OverviewSection({ sparks, deployments, recipes, navigate, loaded
                 key={v.key}
                 view={v}
                 role={roleOf(v, views)}
-                state={statesByKey.get(v.key) ?? deriveRuntimeState(v.deployment, v.telemetry)}
+                state={statesByKey.get(v.key) ?? deriveRuntimeState(v.deployment, v.telemetry, { telemetryAgeMs: v.telemetry?.telemetryAgeMs ?? null, reachable: v.nodes.some((n) => n.online) })}
                 history={history[v.key]?.samples ?? []}
                 lastRequestAt={history[v.key]?.lastRequestAt ?? null}
+                telemetryAgeMs={v.telemetry?.telemetryAgeMs ?? null}
                 now={now}
                 runtimeLabels={runtimeLabels}
                 runtimeMetrics={runtimeMetrics}

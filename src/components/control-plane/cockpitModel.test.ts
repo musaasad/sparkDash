@@ -273,6 +273,23 @@ describe("node telemetry honesty", () => {
     expect(power.title).toBeUndefined();
   });
 
+  it("F6: a FAILED gpu collection renders '—', not a default 0", () => {
+    const failed = spark({
+      metricsCollectSuccess: { gpu: false },
+      metrics: { ...spark().metrics, gpu: { temperature: 0, usage: 0, power: { draw: 0, limit: 120 }, vram: { used: 0, total: 0, percentage: 0, available: 0 } } as never },
+    });
+    const row = nodeTelemetryRow(failed, []);
+    expect(row.metrics.find((m) => m.key === "gpuTemp")?.value).toBe("—");
+    expect(row.metrics.find((m) => m.key === "util")?.value).toBe("—");
+    expect(row.metrics.find((m) => m.key === "power")?.value).toBe("—");
+    // A successful collection still reads the real measurement.
+    const ok = spark({
+      metricsCollectSuccess: { gpu: true },
+      metrics: { ...spark().metrics, gpu: { temperature: 55, usage: 40, power: { draw: 56, limit: 120 }, vram: { used: 1, total: 2, percentage: 50, available: 1 } } as never },
+    });
+    expect(nodeTelemetryRow(ok, []).metrics.find((m) => m.key === "util")?.value).toBe("40");
+  });
+
   it("marks a thermal-throttled node critical, a warm node warn, and offline unmistakably", () => {
     const throttled = spark({ metrics: { ...spark().metrics, gpu: { temperature: 91, usage: 10, power: { draw: 1, limit: 2 }, vram: { used: 1, total: 2, percentage: 1, available: 1 }, throttle: { thermal: true, hwSlowdown: true, powerCap: false, active: true, reason: "thermal", smClockMHz: null, smClockMaxMHz: null, smClockPct: null, detail: "" } } } });
     // provider thermal slowdown = real critical signal.

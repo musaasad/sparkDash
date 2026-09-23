@@ -20,6 +20,7 @@ import {
   type SecondaryInstrument,
 } from "./cockpitModel";
 import { fmtUptime } from "./fleetModel";
+import { TELEMETRY_STALE_MS } from "../../shared/runtimeState.js";
 import type { RuntimeLabelMap } from "./runtimeLabels";
 
 export interface DeploymentInstrumentProps {
@@ -28,6 +29,8 @@ export interface DeploymentInstrumentProps {
   state: RuntimeState;
   history: readonly number[];
   lastRequestAt: number | null;
+  /** Age of the oldest reporting member's llm sample (ms); stale ⇒ STALE marker. */
+  telemetryAgeMs?: number | null;
   now: number;
   runtimeLabels: RuntimeLabelMap;
   runtimeMetrics: Record<string, string[]>;
@@ -61,6 +64,7 @@ export function DeploymentInstrument({
   state,
   history,
   lastRequestAt,
+  telemetryAgeMs = null,
   now,
   runtimeLabels,
   runtimeMetrics,
@@ -77,6 +81,8 @@ export function DeploymentInstrument({
   // Auth-gated external runtimes have NO readable metrics — say so honestly.
   const telemetryReadable = view.telemetry != null && view.telemetry.available;
   const needsKey = !telemetryReadable && !!view.telemetry?.error && /auth|401|403/i.test(view.telemetry.error);
+  // A stale sample is never presented as current — visible marker, calm state.
+  const stale = telemetryAgeMs != null && telemetryAgeMs > TELEMETRY_STALE_MS;
 
   const thermal = hottestThermal(view.nodes, temperatureUnit);
   const agg = view.telemetry?.aggregation ?? aggregationLegend(view.telemetry?.membersReporting ?? 0, view.nodes.length);
@@ -116,6 +122,7 @@ export function DeploymentInstrument({
         <span className={`cp-inst-state tone-${tone}`}>
           <span className="cp-inst-state-dot" aria-hidden="true" />
           {stateLabel(state)}
+          {stale ? <span className="cp-inst-stale mono" title={`sample ${Math.round(telemetryAgeMs! / 1000)}s old`}> · STALE</span> : null}
         </span>
       </div>
 

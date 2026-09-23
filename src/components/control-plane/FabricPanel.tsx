@@ -305,7 +305,7 @@ export function FabricPanel({ sparks, views, navigate, onAddCompute }: FabricPan
                         />
                         <text className="cp-fabric-link-speed mono" x={mx} y={my - 3} textAnchor="middle">
                           {l.provenance === "configured" ? "CONFIG · " : "DISCOVERED · "}
-                          {l.kind.toUpperCase()} · {fmtSpeed(l.speedMbps)}
+                          {l.kind.toUpperCase()} · {l.speedNominal ? "~200 Gb/s nominal" : fmtSpeed(l.speedMbps)}
                         </text>
                       </g>
                     );

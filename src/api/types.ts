@@ -521,9 +521,11 @@ export interface SparkSnapshot {
   workerHeadId?: string | null;
   /** Standalone: whether LLM is probed (head always true, worker always false) */
   llmMonitoring?: boolean;
-  /** LLM server port (first port, for backward compat) */
-  llmPort: number;
-  /** All LLM server ports configured for this Spark */
+  /** LLM server port (first configured port). null when llmMonitoring is OFF
+   *  so consumers never see a port with no probe behind it. */
+  llmPort: number | null;
+  /** All LLM server ports configured for this Spark (published even when
+   *  llmMonitoring is off — configured, not probed). */
   llmPorts: number[];
   /** Ports with a stored LLM API key (key itself never exposed) */
   llmApiKeyPorts?: number[];
@@ -536,6 +538,13 @@ export interface SparkSnapshot {
   /** Hermes Agent update monitoring state (present in every snapshot). */
   hermes?: HermesStatus;
   hardware: HardwareInfo;
+  /**
+   * Per-domain last-successful-collection epoch (ms). Consumers derive a real
+   * telemetry AGE from this instead of presuming the latest sample is current.
+   */
+  updatedAt?: Record<string, number>;
+  /** Per-domain collection success; false ⇒ the domain object holds defaults. */
+  metricsCollectSuccess?: Record<string, boolean>;
   metrics: SparkMetrics;
 }
 
@@ -1376,6 +1385,8 @@ export interface ComputeDiscoveryRequest {
   port?: number | null;
   sshUser?: string;
   sshAuth?: "key" | "pass";
+  /** SSH password when sshAuth === "pass" (config-only; value never echoed). */
+  sshPassword?: string;
   /** Reference into the secrets store — the value is never echoed. */
   credRef?: string | null;
   /** Optional already-registered node id to match against. */

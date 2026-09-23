@@ -289,7 +289,7 @@ export function ModelsSection({ models, recipes, deployments, navigate, onSaved,
                       {v.nodes.length > 1 ? (
                         <div className="cp-node-cluster">
                           <span className="cp-node-cluster-label">
-                            {v.topology.toUpperCase()} · {v.nodes.length} nodes
+                            {(v.topology ?? "topology unknown").toUpperCase()} · {v.nodes.length} nodes
                           </span>
                           <span className="cp-node-cluster-chips">
                             {v.deployment.nodeIds.map((id) => {

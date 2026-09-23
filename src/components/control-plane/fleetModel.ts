@@ -45,7 +45,9 @@ export interface DeploymentView {
   rawModelId: string;
   nodes: SparkSnapshot[];
   runtime: string;
-  topology: RecipeTopology;
+  /** Recipe-declared topology, or null when the recipe carries none. Node count
+   *  NEVER fabricates a degree (a 3-node binding is not automatically TP2). */
+  topology: RecipeTopology | null;
   /** Recipe lifecycle badge (Draft/Validated/Proven/Deprecated/Archived). */
   lifecycleState: RecipeLifecycleState | null;
   contextLength: number | null;
@@ -86,7 +88,19 @@ export interface DeploymentTelemetry {
   totalOutputTokens: number | null;
   backend: LlmMetrics["backend"];
   modelId: string | null;
+  /**
+   * True when ANY member node reports a readable probe (so the aggregate is
+   * real). Coordinator-only fields stay null when the PRIMARY anchor is down —
+   * the object is marked partial, never nulled away.
+   */
   available: boolean;
+  /** True when the PRIMARY anchor itself reported (coordinator fields are real). */
+  primaryAvailable?: boolean;
+  /**
+   * Age of the OLDEST reporting member's llm sample (ms), from the snapshot's
+   * per-domain `updatedAt`. Feeds the staleness contract; null when unknown.
+   */
+  telemetryAgeMs?: number | null;
   /** Probe error string when the backend reported one. */
   error: string | null;
   /**
@@ -327,6 +341,12 @@ function llmForNode(s: SparkSnapshot | null | undefined, apiPort: number): LlmMe
 
 const optNum = (v: unknown): number | null => (isNum(v) ? v : null);
 
+/** Per-domain age in ms from a snapshot's `updatedAt`, or null when unknown. */
+function ageMsFor(s: SparkSnapshot | undefined, domain: string, now = Date.now()): number | null {
+  const at = s?.updatedAt?.[domain];
+  return isNum(at) ? Math.max(0, now - at) : null;
+}
+
 /**
  * Normalized telemetry for one deployment from its PRIMARY-node probe.
  *
@@ -352,6 +372,7 @@ export function deploymentTelemetry(sparks: SparkSnapshot[], d: DeploymentStatus
   let gpuMax: number | null = null;
   const missing: string[] = [];
   let reporting = 0;
+  let ageMax: number | null = null;
 
   for (const id of d.nodeIds) {
     const node = sparks.find((s) => s.id === id);
@@ -361,6 +382,8 @@ export function deploymentTelemetry(sparks: SparkSnapshot[], d: DeploymentStatus
       continue;
     }
     reporting++;
+    const age = ageMsFor(node, "llm");
+    if (age != null) ageMax = ageMax == null ? age : Math.max(ageMax, age);
     if (isNum(series.generationTps)) {
       genTotal += series.generationTps;
       genSeen = true;
@@ -377,7 +400,7 @@ export function deploymentTelemetry(sparks: SparkSnapshot[], d: DeploymentStatus
     if (isNum(series.gpuMemoryUtilization)) gpuMax = gpuMax == null ? series.gpuMemoryUtilization : Math.max(gpuMax, series.gpuMemoryUtilization);
   }
 
-  if (!llm && !genSeen) return null;
+  if (reporting === 0 && !llm) return null;
 
   return {
     generationTps: genSeen ? Math.round(genTotal) : null,
@@ -395,7 +418,9 @@ export function deploymentTelemetry(sparks: SparkSnapshot[], d: DeploymentStatus
     totalOutputTokens: optNum(llm?.totalOutputTokens),
     backend: llm?.backend ?? null,
     modelId: llm?.modelId ?? null,
-    available: Boolean(llm?.available),
+    available: reporting > 0,
+    primaryAvailable: Boolean(llm?.available),
+    telemetryAgeMs: ageMax,
     error: llm?.error ?? null,
     aggregation: aggregationLegend(reporting, d.nodeIds.length),
     membersReporting: reporting,
@@ -433,7 +458,7 @@ function isObservedHealthyExternal(d: DeploymentStatus): boolean {
 export function deriveRuntimeState(
   d: DeploymentStatus,
   telemetry: DeploymentTelemetry | null,
-  opts: { telemetryAgeMs?: number | null; staleMs?: number } = {}
+  opts: { telemetryAgeMs?: number | null; staleMs?: number; reachable?: boolean } = {}
 ): RuntimeState {
   const healthyExternal = isObservedHealthyExternal(d);
   const probe = probeOutcome({
@@ -441,7 +466,8 @@ export function deriveRuntimeState(
     hasKey: false,
     error: telemetry?.error ?? null,
   });
-  const reachable = telemetry?.available === true || healthyExternal || probe.reachable;
+  const reachable =
+    telemetry?.available === true || healthyExternal || probe.reachable || opts.reachable === true;
   return canonicalRuntimeState({
     state: d.state,
     display: d.display,
@@ -484,7 +510,8 @@ export function deploymentViews(
       rawModelId: deployment.modelId,
       nodes: deployment.nodeIds.map((id) => sparks.find((s) => s.id === id)).filter((s): s is SparkSnapshot => !!s),
       runtime: recipe?.runtime ?? "—",
-      topology: recipe?.topology ?? (deployment.nodeIds.length > 1 ? "tp2" : "single"),
+      // Topology is ONLY what the recipe declares — node count never decides.
+      topology: recipe?.topology ?? null,
       lifecycleState: recipe?.lifecycleState ?? null,
       contextLength: recipe?.serving?.contextLength ?? recipe?.contextLength ?? null,
       port: deployment.apiPort,

@@ -7,7 +7,7 @@
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act } from "react";
-import { ModelDetail } from "./ModelDetail";
+import { ModelDetail, PerformanceTab } from "./ModelDetail";
 import type { ModelEntry, RecipePublic, DeploymentStatus, SparkSnapshot } from "../../api/types";
 import { render, flush, cleanupRenders } from "../../testing/render";
 import { setDeployments } from "../../hooks/domainStore";
@@ -204,5 +204,28 @@ describe("ModelDetail IA", () => {
         "Benchmarks",
       ]);
     }
+  });
+});
+
+describe("PerformanceTab port association (F8)", () => {
+  const llmNode = (id: string, port: number, tps: number, modelId: string) =>
+    ({ id, name: `Node ${id}`, online: true, llmPorts: [port], metrics: { llm: [{ available: true, generationTps: tps, modelId }] } }) as SparkSnapshot;
+
+  it("aggregates across member nodes on the deployment apiPort", () => {
+    cleanupRenders();
+    const nodes = [llmNode("a", 8889, 10, "m-a"), llmNode("b", 8889, 20, "m-b")];
+    const { container } = render(<PerformanceTab sparks={nodes} recipe={recipe} deployment={{ ...dep, nodeIds: ["a", "b"] }} />);
+    expect(container.textContent).toContain("2 members (SUM)");
+    expect(container.textContent).toContain("port 8889");
+  });
+
+  it("nulls an unmatched port instead of charting index-0 of a wrong-port series", () => {
+    cleanupRenders();
+    // Node reports only on 8889; the deployment asks for 7777.
+    const node = llmNode("a", 8889, 10, "WRONG-model");
+    const { container } = render(<PerformanceTab sparks={[node]} recipe={recipe} deployment={{ ...dep, apiPort: 7777 }} />);
+    const served = [...container.querySelectorAll(".cp-metric")].find((m) => m.textContent?.includes("Model served"));
+    expect(served?.textContent).toContain("—");
+    expect(served?.textContent).not.toContain("WRONG-model");
   });
 });

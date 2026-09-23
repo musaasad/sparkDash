@@ -159,6 +159,17 @@ describe("council-pass helpers", () => {
     expect(views[0].contextLength).toBe(600000);
   });
 
+  it("F5: a null topology recipe never fabricates a degree from node count", () => {
+    const sparks = [spark({ id: "a" }), spark({ id: "b" }), spark({ id: "c" })];
+    const views = deploymentViews(
+      sparks,
+      [{ ...dep("r1", "running"), nodeIds: ["a", "b", "c"] }],
+      [recipe({ topology: undefined as never, nodeIds: ["a", "b", "c"] })]
+    );
+    expect(views[0].topology).toBeNull();
+    expect(views[0].nodes).toHaveLength(3);
+  });
+
   it("does NOT raise high unified-memory UTILISATION as an alert", () => {
     const mk = (id: string, name: string) =>
       spark({ id, name, metrics: { ...spark().metrics, unifiedMemory: { total: 128, used: 120, gpuUsed: 100, cpuUsed: 20, available: 8, percentage: 94, oomRisk: "high", bandwidth: { current: 0, peak: 0 } } } as never });
@@ -376,6 +387,24 @@ describe("deploymentTelemetry", () => {
     expect(t.aggregation).toContain("2/3 ranks reporting");
     expect(t.aggregation).toContain("SUM gen/queue");
     expect(t.aggregation).toContain("MAX kv/vram");
+  });
+
+  it("F2: aggregate.available is true when ANY member reports (primary down)", () => {
+    const d = { ...dep("r1", "running"), nodeIds: ["a", "b"] };
+    const a = spark({ id: "a", llmPorts: [8889], metrics: { ...spark().metrics, llm: [llm({ available: false })] } });
+    const b = nodeWithLlm("b", {}, { generationTps: 30 });
+    const t = deploymentTelemetry([a, b], d)!;
+    expect(t.available).toBe(true);
+    expect(t.primaryAvailable).toBe(false);
+    expect(t.generationTps).toBe(30);
+    expect(deriveRuntimeState(d, t)).toBe("serving");
+  });
+
+  it("F3: derives telemetryAgeMs from node updatedAt and degrades stale", () => {
+    const node = nodeWithLlm("a", { updatedAt: { llm: Date.now() - 60_000 } }, { generationTps: 30, modelId: "m", totalOutputTokens: 5 });
+    const t = deploymentTelemetry([node], { ...dep("r1", "running"), nodeIds: ["a"] })!;
+    expect(t.telemetryAgeMs).toBeGreaterThan(30_000);
+    expect(deriveRuntimeState(dep("r1", "running"), t, { telemetryAgeMs: t.telemetryAgeMs })).not.toBe("serving");
   });
 });
 

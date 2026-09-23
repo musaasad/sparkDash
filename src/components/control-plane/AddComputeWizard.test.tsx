@@ -177,4 +177,32 @@ describe("AddComputeWizard — guided, config-first", () => {
     act(() => btn.dispatchEvent(new MouseEvent("click", { bubbles: true })));
     expect(onAdvanced).toHaveBeenCalled();
   });
+
+  it("F11: exposes an sshAuth select and a conditional password input", () => {
+    const { container } = render(<AddComputeWizard existing={EXISTING} onCancel={() => {}} onSave={() => {}} />);
+    expect(container.querySelector("#ac-auth")).not.toBeNull();
+    // Key default: no password field.
+    expect(container.querySelector("#ac-password")).toBeNull();
+    setSelect(container, "ac-auth", "pass");
+    expect(container.querySelector("#ac-password")).not.toBeNull();
+    // Switching back hides it again.
+    setSelect(container, "ac-auth", "key");
+    expect(container.querySelector("#ac-password")).toBeNull();
+  });
+
+  it("F11: password auth is sent on discover and saved to config", async () => {
+    const onSave = vi.fn();
+    const { container } = render(<AddComputeWizard existing={EXISTING} onCancel={() => {}} onSave={onSave} />);
+    setInput(container, "ac-host", "192.168.1.170");
+    setInput(container, "ac-user", "musa");
+    setSelect(container, "ac-auth", "pass");
+    setInput(container, "ac-password", "s3cret");
+    const discover = [...container.querySelectorAll("button")].find((b) => b.textContent === "Discover (read-only)")!;
+    await act(async () => {
+      discover.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+    await flush();
+    expect(discoverCompute.mock.calls[0][0]).toMatchObject({ sshAuth: "pass", sshPassword: "s3cret" });
+  });
 });

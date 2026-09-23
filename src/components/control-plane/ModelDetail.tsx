@@ -27,7 +27,7 @@ import { RecipeEditor } from "./RecipeEditor";
 import { DeployControls } from "./DeployControls";
 import { LiveConsole } from "./LiveConsole";
 import { TimeSeriesChart, RangePicker, type Series } from "../ui/TimeSeriesChart";
-import { useTimedMetricsHistory } from "../../hooks/metricsStore";
+import { useTimedMetricsHistory, type MetricSample } from "../../hooks/metricsStore";
 import { externalConnectView, runtimeLabel, type ExternalConnect } from "./fleetModel";
 import { useRuntimeLabels, useRuntimeOptions } from "./runtimeLabels";
 
@@ -264,7 +264,7 @@ export function ModelDetail({ modelId, initialTab, initialReqId, sparks, navigat
       {/* Benchmarks + folded Performance */}
       {tab === "Benchmarks" ? (
         <div id="model-panel-Benchmarks" role="tabpanel" aria-labelledby="model-panel-Benchmarks-tab" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-          <PerformanceTab sparks={sparks} recipe={primaryRecipe} />
+          <PerformanceTab sparks={sparks} recipe={primaryRecipe} deployment={primaryDep ?? null} />
           <BenchmarksTab recipes={liveRecipes} sparks={sparks} navigate={navigate} />
         </div>
       ) : null}
@@ -408,36 +408,93 @@ function OverviewTab({
 }
 
 // ─── Performance tab ──────────────────────────────────────
-function PerformanceTab({ sparks, recipe }: { sparks: SparkSnapshot[]; recipe: RecipePublic | null }) {
-  const [windowMs, setWindowMs] = useState(30 * 60_000);
-  const nodeId = recipe?.nodeIds[0];
-  const node = sparks.find((s) => s.id === nodeId);
-  const port = recipe?.endpoint?.port ?? recipe?.apiPort;
-  // LLM metrics are index-aligned with snapshot.llmPorts (LlmMetrics has no port field).
-  const portIdx = node?.llmPorts?.indexOf(port ?? -1) ?? -1;
-  const llm = node?.metrics?.llm?.[portIdx >= 0 ? portIdx : 0];
-  const effectivePort = portIdx >= 0 ? port : node?.llmPorts?.[0];
 
-  const decode = useTimedMetricsHistory(nodeId ?? "", llm && effectivePort != null ? `llm:${effectivePort}.tps` : "");
-  const prefill = useTimedMetricsHistory(nodeId ?? "", llm && effectivePort != null ? `llm:${effectivePort}.prefill` : "");
+/** Merge several per-node timestamped series into one SUM series by timestamp. */
+function sumSeries(seriesList: ReadonlyArray<ReadonlyArray<{ at: number; value: number }>>, windowMs: number) {
+  const cutoff = Date.now() - windowMs;
+  const byAt = new Map<number, number>();
+  for (const series of seriesList) {
+    for (const s of series) {
+      if (s.at < cutoff) continue;
+      byAt.set(s.at, (byAt.get(s.at) ?? 0) + s.value);
+    }
+  }
+  return [...byAt.entries()].map(([at, value]) => ({ at, value })).sort((a, b) => a.at - b.at);
+}
+
+// Fixed-length member subscription: always MAX_MEMBERS hook calls so the hook
+// count never varies with membership (rules of hooks). Empty slots subscribe to
+// "" which resolves to an empty series. Returns exactly MAX_MEMBERS series.
+const MAX_MEMBERS = 8;
+function useMemberSeries(nodeIds: readonly string[], metric: string): readonly (readonly MetricSample[])[] {
+  const s0 = useTimedMetricsHistory(nodeIds[0] ?? "", metric);
+  const s1 = useTimedMetricsHistory(nodeIds[1] ?? "", metric);
+  const s2 = useTimedMetricsHistory(nodeIds[2] ?? "", metric);
+  const s3 = useTimedMetricsHistory(nodeIds[3] ?? "", metric);
+  const s4 = useTimedMetricsHistory(nodeIds[4] ?? "", metric);
+  const s5 = useTimedMetricsHistory(nodeIds[5] ?? "", metric);
+  const s6 = useTimedMetricsHistory(nodeIds[6] ?? "", metric);
+  const s7 = useTimedMetricsHistory(nodeIds[7] ?? "", metric);
+  return [s0, s1, s2, s3, s4, s5, s6, s7];
+}
+
+export function PerformanceTab({
+  sparks,
+  recipe,
+  deployment,
+}: {
+  sparks: SparkSnapshot[];
+  recipe: RecipePublic | null;
+  deployment: DeploymentStatus | null;
+}) {
+  const [windowMs, setWindowMs] = useState(30 * 60_000);
+  // Associate by the DEPLOYMENT apiPort against node membership — no index-0
+  // fallback. A node whose port is not found contributes nothing (null series).
+  const port = deployment?.apiPort ?? recipe?.endpoint?.port ?? recipe?.apiPort ?? null;
+  const memberIds = deployment?.nodeIds?.length ? deployment.nodeIds : recipe?.nodeIds ?? [];
+  const matched = memberIds
+    .map((id) => sparks.find((s) => s.id === id))
+    .filter((s): s is SparkSnapshot => !!s)
+    .map((node) => {
+      const idx = port == null ? -1 : (node.llmPorts ?? []).indexOf(port);
+      return { nodeId: node.id, llm: idx >= 0 ? node.metrics?.llm?.[idx] : undefined };
+    });
+  const matchedNodeIds = matched.map((m) => m.nodeId);
+  const primaryLlm = matched[0]?.llm;
+  const metricKey = port == null ? null : `llm:${port}`;
+
+  // Rules of hooks: the number of hook calls must be CONSTANT, so we subscribe a
+  // fixed MAX_MEMBERS slots (real nodeId or "" for empty slots — an empty key
+  // resolves to an empty series) instead of mapping a hook over a variable-length
+  // member list, which would crash when membership changes between renders.
+  const decodeSlots = useMemberSeries(matchedNodeIds, metricKey ? `${metricKey}.tps` : "");
+  const prefillSlots = useMemberSeries(matchedNodeIds, metricKey ? `${metricKey}.prefill` : "");
+
+  const decode = sumSeries(decodeSlots.slice(0, matchedNodeIds.length), windowMs);
+  const prefill = sumSeries(prefillSlots.slice(0, matchedNodeIds.length), windowMs);
 
   const series: Series[] = [
     { label: "Decode tok/s", color: "var(--color-accent)", data: decode },
     { label: "Prefill tok/s", color: "var(--color-info)", data: prefill },
   ];
 
+  const firstNode = sparks.find((s) => s.id === memberIds[0]);
+
   return (
     <div className="cp-panel">
       <div className="cp-panel-title">
-        <span>Throughput · {node?.name ?? "—"} · port {port ?? "—"}</span>
+        <span>
+          Throughput · {firstNode?.name ?? "—"} · port {port ?? "—"}
+          {matchedNodeIds.length > 1 ? ` · ${matchedNodeIds.length} members (SUM)` : ""}
+        </span>
         <RangePicker value={windowMs} onChange={setWindowMs} />
       </div>
       <TimeSeriesChart series={series} windowMs={windowMs} emptyLabel="No LLM telemetry for this deployment yet." />
       <div style={{ display: "flex", gap: 20, marginTop: 12, flexWrap: "wrap" }}>
-        <Metric label="Model served" value={llm?.modelId ?? "—"} />
-        <Metric label="Backend" value={llm?.backend ?? "—"} />
-        <Metric label="Active slots" value={llm?.slotsActive != null ? `${llm.slotsActive}/${llm.slotsTotal}` : "—"} />
-        <Metric label="GPU util" value={node?.metrics?.gpu ? `${Math.round(node.metrics.gpu.usage)}%` : "—"} />
+        <Metric label="Model served" value={primaryLlm?.modelId ?? "—"} />
+        <Metric label="Backend" value={primaryLlm?.backend ?? "—"} />
+        <Metric label="Active slots" value={primaryLlm?.slotsActive != null ? `${primaryLlm.slotsActive}/${primaryLlm.slotsTotal}` : "—"} />
+        <Metric label="GPU util" value={firstNode?.metrics?.gpu && firstNode.metricsCollectSuccess?.gpu !== false ? `${Math.round(firstNode.metrics.gpu.usage)}%` : "—"} />
       </div>
     </div>
   );

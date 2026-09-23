@@ -104,7 +104,8 @@ describe("deriveFabric", () => {
     expect(f.links[0].kind).toBe("fabric");
     expect(f.links[0].provenance).toBe("discovered");
     expect(f.links[0].degraded).toBe(true);
-    expect(f.links[0].speedMbps).toBe(200_000);
+    expect(f.links[0].speedMbps).toBeNull();
+    expect(f.links[0].speedNominal).toBe(true);
     expect(f.nodes.find((n) => n.id === "b")?.health).toBe("offline");
   });
 

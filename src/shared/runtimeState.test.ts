@@ -84,6 +84,47 @@ describe("canonical runtimeState vocabulary", () => {
     expect(state).toBe("idle");
   });
 
+  it("F1: not-detected is OFFLINE only when NOT reachable", () => {
+    // Unreachable + no endpoint evidence ⇒ OFFLINE (unchanged).
+    expect(deriveRuntimeState({ observed: "not-detected", reachable: false })).toBe("offline");
+    expect(deriveRuntimeState({ observed: "not-detected" })).toBe("offline");
+    // Reachable but telemetry simply unobserved ⇒ READY/UNKNOWN, NEVER offline.
+    const reachable = deriveRuntimeState({ observed: "not-detected", reachable: true, telemetry: null });
+    expect(reachable).not.toBe("offline");
+    expect(["ready", "unknown"]).toContain(reachable);
+    expect(reachable).toBe("ready");
+  });
+
+  it("F2: observed active generation is SERVING even when available=false", () => {
+    expect(
+      deriveRuntimeState({
+        observed: "running",
+        reachable: false,
+        telemetry: { available: false, generationTps: 42 },
+      })
+    ).toBe("serving");
+    expect(
+      deriveRuntimeState({
+        observed: "not-detected",
+        reachable: true,
+        telemetry: { available: false, requestsRunning: 1 },
+      })
+    ).toBe("serving");
+  });
+
+  it("F3: telemetry older than the threshold degrades to STALE (not current SERVING)", () => {
+    const state = deriveRuntimeState({
+      display: "running",
+      reachable: true,
+      telemetryAgeMs: 60_000,
+      staleMs: 30_000,
+      telemetry: { available: true, generationTps: 42, modelId: "m", totalOutputTokens: 9 },
+    });
+    expect(state).not.toBe("serving");
+    expect(["ready", "reachable", "degraded", "unknown", "idle"]).toContain(state);
+    expect(state).toBe("idle");
+  });
+
   it("compute online vocabulary", () => {
     expect(deriveComputeOnline({ online: true })).toBe("online");
     expect(deriveComputeOnline({ online: false })).toBe("offline");

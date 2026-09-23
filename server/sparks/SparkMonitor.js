@@ -444,7 +444,11 @@ export class SparkMonitor {
 
   /** Return a full snapshot of this Spark's metrics. */
   snapshot() {
-    const ports = this._llmMonitoringEnabled() ? this._llmPorts() : [];
+    // Configured ports are published REGARDLESS of llmMonitoring so a
+    // monitoring-off but online node can still be located by port. `llmPort`
+    // itself is null when there is no probe behind it (F12/F1).
+    const ports = this._llmPorts();
+    const llmMonitored = this._llmMonitoringEnabled();
     const comfyOn = this._comfyMonitoringEnabled();
     const tailscaleOn = this._tailscaleMonitoringEnabled();
     return {
@@ -468,8 +472,8 @@ export class SparkMonitor {
       // Derived display label (head model mirror). Raw workerLabel above is
       // untouched — frontend prefers a non-empty manual label over this.
       workerDerivedLabel: this.workerDerivedLabel(),
-      llmMonitoring: this._llmMonitoringEnabled(),
-      llmPort: ports[0] ?? LLM_PORT,
+      llmMonitoring: llmMonitored,
+      llmPort: llmMonitored ? ports[0] ?? LLM_PORT : null,
       llmPorts: ports,
       llmApiKeyPorts: Array.isArray(this.spark.llmApiKeyPorts)
         ? this.spark.llmApiKeyPorts
@@ -481,6 +485,17 @@ export class SparkMonitor {
       tailscaleMonitoring: tailscaleOn,
       hermes: this._hermes,
       hardware: this._hardwareSummary,
+      /**
+       * Per-domain last-successful-collection epoch (ms). Lets consumers derive a
+       * real telemetry AGE for the staleness contract instead of presuming the
+       * latest sample is current. A domain absent here was never collected.
+       */
+      updatedAt: { ...this._lastUpdate },
+      /**
+       * Per-domain collection SUCCESS. When false the domain object only holds
+       * defaults, so a 0 is a default — not a measurement (F6).
+       */
+      metricsCollectSuccess: { ...this._metricCollectionSuccessful },
       metrics: {
         // NOTE: no `timestamp` here on purpose. The broadcast path skips
         // snapshots whose JSON is byte-identical to the previous one (see

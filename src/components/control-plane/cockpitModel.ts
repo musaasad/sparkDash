@@ -529,10 +529,14 @@ export function nodeTelemetryRow(
 ): NodeTelemetryRow {
   const gpu = node.metrics?.gpu ?? null;
   const cpu = node.metrics?.cpu ?? null;
+  // A failed collection leaves only DEFAULTS — render '—', never a default 0 (F6).
+  // Absent flag (older fixtures) is treated as OK; only an explicit false gates.
+  const gpuOk = gpu != null && node.metricsCollectSuccess?.gpu !== false;
+  const cpuOk = cpu != null && node.metricsCollectSuccess?.cpu !== false;
   const metrics: NodeMetric[] = [];
 
-  if (gpu) metrics.push({ key: "gpuTemp", label: "GPU TEMP", value: fmtTemp(gpu.temperature, temperatureUnit), unit: tempUnit(temperatureUnit) });
-  if (cpu) metrics.push({ key: "cpuTemp", label: "CPU TEMP", value: fmtTemp(cpu.temperature, temperatureUnit), unit: tempUnit(temperatureUnit) });
+  if (gpu) metrics.push({ key: "gpuTemp", label: "GPU TEMP", value: gpuOk ? fmtTemp(gpu.temperature, temperatureUnit) : "—", unit: tempUnit(temperatureUnit) });
+  if (cpu) metrics.push({ key: "cpuTemp", label: "CPU TEMP", value: cpuOk ? fmtTemp(cpu.temperature, temperatureUnit) : "—", unit: tempUnit(temperatureUnit) });
 
   const unified = node.metrics?.unifiedMemory ?? null;
   const ram = unified ? null : node.metrics?.ram ?? null;
@@ -548,13 +552,13 @@ export function nodeTelemetryRow(
     });
   }
 
-  if (gpu) metrics.push({ key: "util", label: "GPU UTIL", value: fmtNum(gpu.usage), unit: "%", fraction: isFiniteNum(gpu.usage) ? Math.min(1, Math.max(0, gpu.usage / 100)) : undefined });
+  if (gpu) metrics.push({ key: "util", label: "GPU UTIL", value: gpuOk ? fmtNum(gpu.usage) : "—", unit: "%", fraction: gpuOk && isFiniteNum(gpu.usage) ? Math.min(1, Math.max(0, gpu.usage / 100)) : undefined });
   if (gpu?.power) {
     const limit = isFiniteNum(gpu.power.limit) && gpu.power.limit > 0 ? `${Math.round(gpu.power.limit)} W` : null;
     metrics.push({
       key: "power",
       label: "POWER",
-      value: fmtNum(gpu.power.draw),
+      value: gpuOk ? fmtNum(gpu.power.draw) : "—",
       unit: "W",
       title: limit ? `${Math.round(gpu.power.draw)}/${limit}` : undefined,
     });
