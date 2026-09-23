@@ -223,12 +223,19 @@ export function parseTabbyLog(text) {
     lastRequestAtMs != null &&
     activeIds.length === 0 &&
     now - lastRequestAtMs > TABBY_LOG_STALE_MS;
+  // The per-request PERF metrics (MTP / cache / TTFT / prefill) come from the
+  // last COMPLETED request. They are old whenever that completion is old — even
+  // while a NEW request is in flight (active), since metrics are logged only at
+  // completion. So this staleness is INDEPENDENT of active, unlike `stale`.
+  const perfMetricsStale =
+    lastRequestAtMs != null && now - lastRequestAtMs > TABBY_LOG_STALE_MS;
 
   return {
     recentRequest,
     lastRequest,
     active: activeIds.length > 0,
     activeIds,
+    perfMetricsStale,
     windowAvgTps,
     peakTps,
     lastRequestAtMs,
@@ -257,6 +264,7 @@ export function applyTabbyLog(entry, log) {
   entry.provenance = provenance;
   entry.lastRequestAtMs = log.lastRequestAtMs ?? null;
   entry.perfStale = !!log.stale;
+  entry.perfMetricsStale = !!log.perfMetricsStale;
   entry.requestActive = !!log.active;
   /** The tps/prefill here are LAST-REQUEST values, not a live instantaneous gauge. */
   entry.perfFromLastRequest = !log.active;
@@ -267,6 +275,7 @@ export function applyTabbyLog(entry, log) {
     file: log.file ?? null,
     lastRequestAtMs: log.lastRequestAtMs ?? null,
     stale: !!log.stale,
+    perfMetricsStale: !!log.perfMetricsStale,
     active: !!log.active,
     windowAvgTps: log.windowAvgTps ?? null,
     peakTps: log.peakTps ?? null,

@@ -357,6 +357,13 @@ export interface LlmMetrics {
   provenance?: string | null;
   lastRequestAtMs?: number | null;
   perfStale?: boolean;
+  /**
+   * The per-request perf metrics (MTP / cache / TTFT / prefill) are from the last
+   * COMPLETED request, which is old whenever that completion is old — even while
+   * a new request is in flight. Drives the perf tiles' "not current" treatment,
+   * independent of the active/idle state badge.
+   */
+  perfMetricsStale?: boolean;
   /** The log-derived tps is a LAST-REQUEST value, not a live instantaneous gauge. */
   perfFromLastRequest?: boolean;
   requestActive?: boolean | null;

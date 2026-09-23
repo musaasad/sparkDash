@@ -60,6 +60,30 @@ describe("DeploymentInstrument", () => {
     expect(labels).toEqual(["MTP", "TTFT"]);
   });
 
+  it("dims log-derived perf tiles when perfMetricsStale (last completion old, even if BUSY)", () => {
+    cleanupRenders();
+    const { container } = render(
+      <DeploymentInstrument view={view({ telemetry: telem({ provenance: "TabbyAPI log (x.log)", perfMetricsStale: true }) })}
+        role="PRIMARY" state="serving" history={[100, 120]} lastRequestAt={500}
+        now={1000} runtimeLabels={{}} runtimeMetrics={{ tabbyapi: ["mtpAcceptanceRate", "ttftSeconds"] }} onOpen={noop} />
+    );
+    const staleCells = [...container.querySelectorAll(".cp-inst-cell.is-stale")];
+    expect(staleCells.length).toBeGreaterThan(0);
+    const staleLabels = staleCells.map((c) => c.querySelector(".cp-inst-cell-label")?.textContent ?? "");
+    expect(staleLabels.some((l) => l.startsWith("MTP"))).toBe(true);
+    expect(staleLabels.some((l) => l.startsWith("TTFT"))).toBe(true);
+  });
+
+  it("keeps perf tiles bright when perfMetricsStale is false (fresh last completion)", () => {
+    cleanupRenders();
+    const { container } = render(
+      <DeploymentInstrument view={view({ telemetry: telem({ provenance: "TabbyAPI log (x.log)", perfMetricsStale: false }) })}
+        role="PRIMARY" state="serving" history={[100, 120]} lastRequestAt={990}
+        now={1000} runtimeLabels={{}} runtimeMetrics={{ tabbyapi: ["mtpAcceptanceRate", "ttftSeconds"] }} onOpen={noop} />
+    );
+    expect(container.querySelector(".cp-inst-cell.is-stale")).toBeNull();
+  });
+
   it("omits the whole secondary row when the runtime declares nothing", () => {
     cleanupRenders();
     const { container } = render(

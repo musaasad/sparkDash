@@ -98,6 +98,8 @@ export interface DeploymentTelemetry {
   lastRequestAtMs?: number | null;
   /** Perf values are HISTORICAL (older than the window, nothing in flight). */
   perfStale?: boolean;
+  /** The per-request perf tiles are from an OLD last completion (even if BUSY). */
+  perfMetricsStale?: boolean;
   /** The tps/prefill are a LAST-REQUEST value, not a live gauge. */
   perfFromLastRequest?: boolean;
   /** Log-derived window context (last-request provenance). */
@@ -441,6 +443,7 @@ export function deploymentTelemetry(sparks: SparkSnapshot[], d: DeploymentStatus
     requestActive: llm?.requestActive ?? null,
     lastRequestAtMs: optNum(llm?.lastRequestAtMs),
     perfStale: llm?.perfStale === true,
+    perfMetricsStale: llm?.perfMetricsStale === true,
     perfFromLastRequest: llm?.perfFromLastRequest === true,
     windowAvgTps: optNum(llm?.windowAvgTps),
     peakTps: optNum(llm?.peakTps),

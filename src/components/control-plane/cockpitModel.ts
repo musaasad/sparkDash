@@ -309,6 +309,12 @@ export interface SecondaryInstrument {
   fraction?: number;
   /** Accessible full value when the rendered one is abbreviated. */
   title?: string;
+  /**
+   * True when this tile's value is NOT current — e.g. a TabbyAPI log-derived
+   * per-request metric whose last COMPLETED request is old (even while a new
+   * request is in flight). The tile is then dimmed so it is never read as live.
+   */
+  stale?: boolean;
 }
 
 const METRIC_LABEL: Record<string, string> = {

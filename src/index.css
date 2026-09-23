@@ -4625,6 +4625,10 @@ button.cp-link { background: none; border: none; padding: 0; cursor: pointer; fo
   align-content: end;
 }
 .cp-inst-cell { display: flex; flex-direction: column; gap: 2px; }
+/* Log-derived perf whose last completion is old recedes so it is never read as
+   live — the value stays (history) but is clearly not current. */
+.cp-inst-cell.is-stale { opacity: 0.42; }
+.cp-inst-cell-stale-dot { color: var(--color-muted); }
 .cp-inst-cell-label { font-size: 10px; letter-spacing: 0.1em; color: var(--color-muted); }
 .cp-inst-cell-value { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .cp-inst-cell-unit { font-size: 10px; color: var(--color-muted); font-weight: 400; }

@@ -90,6 +90,12 @@ export function DeploymentInstrument({
   // Log-derived numbers are labelled with their provenance so nobody reads them
   // as a live instantaneous gauge.
   const provenance = view.telemetry?.provenance ?? null;
+  // The per-request perf tiles (MTP / cache / TTFT / prefill) come from the last
+  // COMPLETED request. That number is old whenever the last completion is old —
+  // even while a NEW request is in flight (BUSY), since TabbyAPI logs metrics
+  // only at completion. The collector flags this (perfMetricsStale) on a 5-min
+  // window, independent of the active/idle state badge. Only log-derived backends.
+  const perfTilesStale = provenance != null && view.telemetry?.perfMetricsStale === true;
 
   const thermal = hottestThermal(view.nodes, temperatureUnit);
   const agg = view.telemetry?.aggregation ?? aggregationLegend(view.telemetry?.membersReporting ?? 0, view.nodes.length);
@@ -98,7 +104,10 @@ export function DeploymentInstrument({
   // Latency/queue micro-gauges first, then the hottest node's physical read-outs
   // — subordinate to the dominant throughput number, never competing with it.
   const secondary: SecondaryInstrument[] = [
-    ...secondaryInstruments(declaredMetrics(view.runtime, runtimeMetrics), view.telemetry, 5),
+    ...secondaryInstruments(declaredMetrics(view.runtime, runtimeMetrics), view.telemetry, 5).map((s) => ({
+      ...s,
+      stale: perfTilesStale,
+    })),
     ...nodeInstruments(node, temperatureUnit, 6),
   ].slice(0, 8);
 
@@ -212,9 +221,12 @@ export function DeploymentInstrument({
         {secondary.length > 0 ? (
           <div className="cp-inst-secondary">
             {secondary.map((s) => (
-              <div key={s.key} className="cp-inst-cell">
-                <span className="cp-inst-cell-label mono">{s.label}</span>
-                <span className="cp-inst-cell-value mono" title={s.title}>
+              <div key={s.key} className={`cp-inst-cell${s.stale ? " is-stale" : ""}`}>
+                <span className="cp-inst-cell-label mono">
+                  {s.label}
+                  {s.stale ? <span className="cp-inst-cell-stale-dot" aria-hidden="true" title="not current — from the last completed request"> ·</span> : null}
+                </span>
+                <span className="cp-inst-cell-value mono" title={s.stale ? `${s.title ?? s.label} · from the last completed request (not current)` : s.title}>
                   {s.value}
                   {s.unit ? <span className="cp-inst-cell-unit"> {s.unit}</span> : null}
                 </span>
