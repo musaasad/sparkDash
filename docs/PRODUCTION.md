@@ -29,7 +29,33 @@ Mac mini / MacBook Pro / MacBook Air / trusted LAN + Tailscale devices
 - **Production directory (source):** `~/sparkDash-production` (on DGX #1)
 - **Persistent config/secrets:** `~/sparkDash-production-config/` (outside git)
 - **Container / image:** `sparkDash` / `sparkdash-production:<commit>` (tag `:latest` too)
-- **Auth mode:** bearer token (`SPARKDASH_TOKEN`), LAN bind `0.0.0.0`, fail-closed if the token is ever missing.
+- **Auth mode:** bearer token (`SPARKDASH_TOKEN`), fail-closed if the token is ever missing.
+- **Bind:** `BIND_HOST=192.168.1.173` (the LAN IP), **not** `0.0.0.0` — see "Bind & Tailscale".
+
+## Bind & Tailscale (read before changing the bind)
+
+DGX #1 runs `tailscale serve` which already binds `:5555` on the **tailnet**
+interface (`100.77.26.68:5555` + IPv6). Binding sparkDash to `0.0.0.0:5555`
+therefore collides with tailscaled and crashes with `EADDRINUSE`. The production
+container binds the **LAN IP `192.168.1.173:5555`** instead — a distinct address,
+so it coexists with tailscaled and still enforces token auth (a non-loopback bind
+is what turns remote auth on; a loopback bind would leave GETs open).
+
+The Docker `HEALTHCHECK`, compose healthcheck and deploy probe resolve the probe
+host from `BIND_HOST` (loopback/`0.0.0.0` → `127.0.0.1`, else the bind IP), so a
+LAN-IP bind self-probes correctly.
+
+`tailscale serve` is repointed to proxy the tailnet to the LAN IP so tailnet
+access keeps working on the same `:5555` URL:
+
+```bash
+# persistent (run once; re-run after any tailscaled restart)
+tailscale serve --http=5555 --bg http://192.168.1.173:5555
+```
+
+If a foreground/ephemeral listener blocks the `--bg` re-add, clear it with
+`tailscale serve --http=5555 off` first. This only affects the sparkDash tailnet
+entry point; the unrelated `:11002` serve is left untouched.
 
 Model identities are **not** hard-coded — live-first discovery + backend adapters
 (vLLM native, TabbyAPI log-stream) resolve serving models automatically, so future
@@ -58,6 +84,8 @@ $EDITOR ~/sparkDash-production-config/deploy.env   # see template below
 SPARKDASH_TOKEN=<strong-random-token>
 SPARKDASH_CONFIG_DIR=/home/musaasad/sparkDash-production-config
 SPARKDASH_SSH_KEY=/home/musaasad/.ssh/id_ed25519_nvsync_cluster_assistant
+BIND_HOST=192.168.1.173          # LAN IP (see "Bind & Tailscale"); never 0.0.0.0 here
+SPARKDASH_ALLOW_OPEN_REMOTE=0    # fail-closed: no token => 401 on the remote bind
 ```
 
 Generate a strong token: `openssl rand -hex 32`.
