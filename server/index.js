@@ -19,6 +19,7 @@ import {
 } from "./validate.js";
 import { authorizeUpgrade, configuredToken, createAuthMiddleware, requireRemoteAuth } from "./auth.js";
 import { inspectHealth } from "./health.js";
+import { inspectVersion } from "./version.js";
 import { getSettings, updateSettings, loadSettings } from "./settings.js";
 import { broadcastForLanIp, effectiveMac, normalizeMac, sendWol } from "./wol.js";
 import {
@@ -349,6 +350,11 @@ const controlPlane = createControlPlane({
 
 app.get("/api/health", (_req, res) => {
   res.json(inspectHealth(process.env.BIND_HOST || "127.0.0.1"));
+});
+
+// Build/version visibility — which commit/mode this process is serving.
+app.get("/api/version", (_req, res) => {
+  res.json(inspectVersion());
 });
 
 function clientKey(req) {

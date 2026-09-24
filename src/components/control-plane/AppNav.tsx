@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { ReactNode } from "react";
 import type { Route, Section } from "../../hooks/router";
 import { sectionOf } from "../../hooks/router";
+import { BuildBadge } from "./BuildBadge";
 import {
   ActivityIcon,
   BoltIcon,
@@ -143,6 +144,7 @@ export function AppNav({
             aria-label={stale ? "Telemetry stale" : connected ? "Live telemetry" : "Disconnected"}
           />
         </div>
+        <BuildBadge />
       </div>
     </aside>
   );

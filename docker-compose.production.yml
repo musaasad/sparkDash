@@ -1,0 +1,83 @@
+# ============================================================================
+# sparkDash — PRODUCTION compose (DGX Spark #1 canonical host)
+# ----------------------------------------------------------------------------
+# Differences from the dev docker-compose.yml:
+#   • No `--watch` — runs the baked image CMD (node server/index.js). Code is
+#     compiled into the image; there are NO source bind mounts.
+#   • Exposed on the LAN on purpose: BIND_HOST=0.0.0.0 + a required
+#     SPARKDASH_TOKEN (existing bearer auth). Never tokenless on a remote bind —
+#     SPARKDASH_ALLOW_OPEN_REMOTE=0 fails closed if the token is ever missing.
+#   • Persistent config/secrets live OUTSIDE the source tree (SPARKDASH_CONFIG_DIR)
+#     so re-checkouts never touch them.
+#   • Container healthcheck + bounded json-file logging.
+#
+# Secrets/config are supplied by an --env-file (see scripts/deploy-production.sh
+# and docs/PRODUCTION.md). This file contains NO secrets.
+# ============================================================================
+services:
+  sparkdash:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      platforms:
+        - linux/arm64
+      args:
+        VITE_HISTORY_HOURS: ${VITE_HISTORY_HOURS:-8}
+        # Baked build/version info → /api/version. The deploy script passes the
+        # exact commit being promoted.
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
+        BUILD_DATE: ${BUILD_DATE:-unknown}
+    image: ${SPARKDASH_IMAGE:-sparkdash-production:latest}
+    container_name: ${SPARKDASH_CONTAINER:-sparkDash}
+    # Canonical always-on service; respects an intentional `docker stop`.
+    restart: ${SPARKDASH_RESTART:-unless-stopped}
+    # Host network so local LLM probes reach loopback-bound servers AND the
+    # dashboard is reachable on the LAN via BIND_HOST (no per-Mac SSH tunnel).
+    network_mode: host
+    privileged: true
+    pid: host
+    volumes:
+      # Persistent config + encrypted secrets, kept OUTSIDE the git checkout.
+      - ${SPARKDASH_CONFIG_DIR:-./config}:/app/config
+      # SSH identity for remote Spark monitoring (mount the private key read-only).
+      - ${SPARKDASH_SSH_KEY:?SPARKDASH_SSH_KEY must be set to the monitoring key}:/root/.ssh/id_ed25519:ro
+      # Host telemetry mounts (local Spark metrics / GPU).
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro
+      - /usr/bin/nvidia-smi:/usr/bin/nvidia-smi:ro
+      - /usr/lib/aarch64-linux-gnu/libnvidia-ml.so.1:/usr/lib/aarch64-linux-gnu/libnvidia-ml.so.1:ro
+    environment:
+      # LAN exposure WITH authentication. BIND_HOST=0.0.0.0 is intentional here.
+      - BIND_HOST=${BIND_HOST:-0.0.0.0}
+      - SPARKDASH_TOKEN=${SPARKDASH_TOKEN:-}
+      # Fail closed: a remote bind without a token must NOT serve open telemetry.
+      - SPARKDASH_ALLOW_OPEN_REMOTE=${SPARKDASH_ALLOW_OPEN_REMOTE:-0}
+      - PORT=${PORT:-5555}
+      - LLM_PORT=${LLM_PORT:-8888}
+      - NODE_ENV=production
+      - APP_MODE=production
+      - HOST_PROC_PATH=/host/proc
+      - HOST_SYS_PATH=/host/sys
+      - HOST_ROOT_PATH=/host/root
+      - SSH_IDENTITY_FILE=${SSH_IDENTITY_FILE:-/root/.ssh/id_ed25519}
+      - SSH_CONTROL_PERSIST_SECONDS=${SSH_CONTROL_PERSIST_SECONDS:-60}
+    healthcheck:
+      # node global fetch (no curl in the slim runtime); token from env so the
+      # gated /api/health passes on a remote bind.
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:'+(process.env.PORT||5555)+'/api/health',{headers:{Authorization:'Bearer '+(process.env.SPARKDASH_TOKEN||'')}}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

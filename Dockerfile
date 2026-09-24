@@ -69,4 +69,20 @@ ENV PORT=5555
 ENV LLM_PORT=8888
 ENV NODE_ENV=production
 
+# Build/version visibility — baked at image build (the deploy script passes
+# --build-arg GIT_COMMIT=<sha>). /api/version reports these so any machine can
+# answer "which sparkDash is this?". APP_MODE=production marks a real image build
+# (as opposed to a source checkout that merely sets NODE_ENV).
+ARG GIT_COMMIT=unknown
+ARG BUILD_DATE=unknown
+ENV GIT_COMMIT=${GIT_COMMIT}
+ENV BUILD_DATE=${BUILD_DATE}
+ENV APP_MODE=production
+
+# Container healthcheck. Uses node's global fetch (no curl in the slim runtime).
+# A remote bind gates /api/health behind SPARKDASH_TOKEN, so pass it from env;
+# a loopback/dev bind leaves it open and the empty header is ignored.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||5555)+'/api/health',{headers:{Authorization:'Bearer '+(process.env.SPARKDASH_TOKEN||'')}}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
 CMD ["node", "server/index.js"]

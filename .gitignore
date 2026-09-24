@@ -1,6 +1,11 @@
 node_modules/
 dist/
 .env
+.env.*
+!.env.example
+deploy.env
+*.env
+!deploy.env.example
 sparks.json
 config/sparks-secrets.json
 config/.secrets-key
