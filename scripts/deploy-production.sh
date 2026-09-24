@@ -53,7 +53,9 @@ probe() {
   local c="$1" port="$2" path="$3" expect="${4:-}"
   docker exec "$c" node -e '
     const p=process.argv[1], path=process.argv[2], expect=process.argv[3]||"";
-    fetch("http://127.0.0.1:"+p+path,{headers:{Authorization:"Bearer "+(process.env.SPARKDASH_TOKEN||"")}})
+    const b=process.env.BIND_HOST||"";
+    const h=(b===""||b==="0.0.0.0"||b==="::"||b==="[::]")?"127.0.0.1":b;
+    fetch("http://"+h+":"+p+path,{headers:{Authorization:"Bearer "+(process.env.SPARKDASH_TOKEN||"")}})
       .then(r=>r.ok?r.json():Promise.reject("HTTP "+r.status))
       .then(j=>{ if(expect && j.commit!==expect){console.error("commit "+j.commit+" != "+expect);process.exit(1);} console.log(JSON.stringify(j)); })
       .catch(e=>{console.error(String(e));process.exit(1);});
@@ -169,7 +171,7 @@ fi
 
 # 6. Controlled cutover: start the new canonical on :$PROD_PORT (LAN + token).
 cleanup_canary
-log "cutover: starting canonical $CONTAINER on :$PROD_PORT (BIND_HOST=0.0.0.0)"
+log "cutover: starting canonical $CONTAINER on :$PROD_PORT (BIND_HOST=${BIND_HOST:-0.0.0.0})"
 GIT_COMMIT="$SHA" BUILD_DATE="$BUILD_DATE" \
   docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d \
   >/tmp/sparkdash-cutover-$SHORT.log 2>&1 || { log "CUTOVER up failed — see /tmp/sparkdash-cutover-$SHORT.log"; }

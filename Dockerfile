@@ -80,9 +80,11 @@ ENV BUILD_DATE=${BUILD_DATE}
 ENV APP_MODE=production
 
 # Container healthcheck. Uses node's global fetch (no curl in the slim runtime).
-# A remote bind gates /api/health behind SPARKDASH_TOKEN, so pass it from env;
-# a loopback/dev bind leaves it open and the empty header is ignored.
+# Targets the actual bind address: a loopback/0.0.0.0 bind is probed via 127.0.0.1,
+# a specific-interface bind (e.g. a LAN IP) via that IP. A remote bind gates
+# /api/health behind SPARKDASH_TOKEN, so pass it from env; a loopback/dev bind
+# leaves it open and the empty header is ignored.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||5555)+'/api/health',{headers:{Authorization:'Bearer '+(process.env.SPARKDASH_TOKEN||'')}}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "const p=process.env.PORT||5555;const b=process.env.BIND_HOST||'';const h=(b===''||b==='0.0.0.0'||b==='::'||b==='[::]')?'127.0.0.1':b;fetch('http://'+h+':'+p+'/api/health',{headers:{Authorization:'Bearer '+(process.env.SPARKDASH_TOKEN||'')}}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 CMD ["node", "server/index.js"]
