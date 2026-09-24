@@ -32,7 +32,21 @@ export function extractBearer(req) {
   const match = /^Bearer\s+(.+)$/i.exec(header);
   if (match) return match[1].trim();
   const query = req.query?.token;
-  return typeof query === "string" ? query.trim() : "";
+  if (typeof query === "string" && query.trim()) return query.trim();
+  // A raw WebSocket-upgrade request is a plain http.IncomingMessage: Express has
+  // not populated req.query, so the browser's `?token=` (see useSnapshot WS_URL)
+  // must be parsed from the URL here or the live socket would 401 on a remote bind.
+  const url = req.url || "";
+  const qIdx = url.indexOf("?");
+  if (qIdx >= 0) {
+    try {
+      const t = new URLSearchParams(url.slice(qIdx + 1)).get("token");
+      if (t) return t.trim();
+    } catch {
+      /* malformed query — treat as absent */
+    }
+  }
+  return "";
 }
 
 export function authenticate(req) {
