@@ -46,16 +46,24 @@ host from `BIND_HOST` (loopback/`0.0.0.0` → `127.0.0.1`, else the bind IP), so
 LAN-IP bind self-probes correctly.
 
 `tailscale serve` is repointed to proxy the tailnet to the LAN IP so tailnet
-access keeps working on the same `:5555` URL:
+access keeps working on the same `:5555` URL. It is set **persistently** (`--bg`),
+so it survives reboots / tailscaled restarts:
 
 ```bash
-# persistent (run once; re-run after any tailscaled restart)
 tailscale serve --http=5555 --bg http://192.168.1.173:5555
 ```
 
-If a foreground/ephemeral listener blocks the `--bg` re-add, clear it with
-`tailscale serve --http=5555 off` first. This only affects the sparkDash tailnet
-entry point; the unrelated `:11002` serve is left untouched.
+Tailnet clients reach it by **MagicDNS name**, not the raw tailnet IP — serve
+matches the vhost, so `http://edgexpert-40f8.tail922b5e.ts.net:5555` (or the short
+`http://edgexpert-40f8:5555`) works, while `http://100.77.26.68:5555` returns 404.
+
+Gotcha: a `tailscale serve` run **without** `--bg` from an interactive session
+creates a *foreground* (session-tied) listener that `tailscale serve --http=5555
+off` cannot remove ("handler does not exist") and that blocks a `--bg` re-add
+("listener already exists"). To clear an orphaned foreground listener without a
+tailscaled restart, use `tailscale serve reset` and then re-add **every** serve
+persistently — including the unrelated `:11002` service
+(`tailscale serve --http=80 --bg http://127.0.0.1:11002`), which reset also drops.
 
 Model identities are **not** hard-coded — live-first discovery + backend adapters
 (vLLM native, TabbyAPI log-stream) resolve serving models automatically, so future
