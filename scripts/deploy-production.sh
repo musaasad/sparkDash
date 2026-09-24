@@ -117,20 +117,6 @@ PREV_SHA="$(git rev-parse HEAD 2>/dev/null || echo none)"
 log "deploying $SHORT ($SHA)  [previous checkout HEAD $(git rev-parse --short "$PREV_SHA" 2>/dev/null || echo none)]"
 git checkout --quiet --detach "$SHA"
 
-# 2. Preserve the current canonical container for instant rollback (rename+stop).
-STAMP="$(date +%Y%m%d-%H%M%S)"
-mkdir -p "$ROLLBACK_ROOT"
-if docker ps -a --format '{{.Names}}' | grep -qx "$CONTAINER"; then
-  RB_NAME="${CONTAINER}-rollback-${STAMP}"
-  docker update --restart=no "$CONTAINER" >/dev/null 2>&1 || true
-  docker stop "$CONTAINER" >/dev/null 2>&1 || true
-  docker rename "$CONTAINER" "$RB_NAME"
-  echo "$RB_NAME" > "$ROLLBACK_ROOT/last-rollback-container"
-  log "previous container preserved as $RB_NAME (stopped)"
-else
-  log "no existing $CONTAINER container (first production deploy)"
-fi
-
 cleanup_canary() { docker rm -f "$CANARY_CONTAINER" >/dev/null 2>&1 || true; }
 trap cleanup_canary EXIT
 
@@ -166,7 +152,22 @@ if [[ "$DRY_RUN" == 1 ]]; then
   exit 0
 fi
 
-# 5. Controlled cutover: start the new canonical on :$PROD_PORT (LAN + token).
+# 5. Preserve the current canonical container for instant rollback (rename+stop) —
+#    only now, after the canary passed and this is a real (non-dry) deploy.
+STAMP="$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$ROLLBACK_ROOT"
+if docker ps -a --format '{{.Names}}' | grep -qx "$CONTAINER"; then
+  RB_NAME="${CONTAINER}-rollback-${STAMP}"
+  docker update --restart=no "$CONTAINER" >/dev/null 2>&1 || true
+  docker stop "$CONTAINER" >/dev/null 2>&1 || true
+  docker rename "$CONTAINER" "$RB_NAME"
+  echo "$RB_NAME" > "$ROLLBACK_ROOT/last-rollback-container"
+  log "previous container preserved as $RB_NAME (stopped)"
+else
+  log "no existing $CONTAINER container (first production deploy)"
+fi
+
+# 6. Controlled cutover: start the new canonical on :$PROD_PORT (LAN + token).
 cleanup_canary
 log "cutover: starting canonical $CONTAINER on :$PROD_PORT (BIND_HOST=0.0.0.0)"
 GIT_COMMIT="$SHA" BUILD_DATE="$BUILD_DATE" \
