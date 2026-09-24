@@ -100,7 +100,13 @@ cd "$REPO_DIR"
 set -a; # shellcheck disable=SC1090
 source "$ENV_FILE"
 set +a
-[[ -n "${SPARKDASH_TOKEN:-}" ]] || die "SPARKDASH_TOKEN empty in $ENV_FILE"
+# A bearer token is required for a remote bind UNLESS the owner has explicitly
+# enabled tokenless LAN/tailnet access (SPARKDASH_ALLOW_OPEN_REMOTE=1). In that
+# intentional mode an empty token is valid — auth.js opens remote GETs on a
+# non-loopback bind only when that flag is set, so this stays fail-closed by default.
+if [[ "${SPARKDASH_ALLOW_OPEN_REMOTE:-0}" != "1" ]]; then
+  [[ -n "${SPARKDASH_TOKEN:-}" ]] || die "SPARKDASH_TOKEN empty in $ENV_FILE (or set SPARKDASH_ALLOW_OPEN_REMOTE=1 for intentional tokenless access)"
+fi
 [[ -n "${SPARKDASH_CONFIG_DIR:-}" ]] || die "SPARKDASH_CONFIG_DIR empty in $ENV_FILE"
 [[ -n "${SPARKDASH_SSH_KEY:-}" ]] || die "SPARKDASH_SSH_KEY empty in $ENV_FILE"
 [[ -f "$SPARKDASH_SSH_KEY" ]] || die "SSH key not found: $SPARKDASH_SSH_KEY"
