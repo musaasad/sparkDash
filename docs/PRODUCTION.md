@@ -69,6 +69,28 @@ Model identities are **not** hard-coded — live-first discovery + backend adapt
 (vLLM native, TabbyAPI log-stream) resolve serving models automatically, so future
 model swaps appear without config edits.
 
+## Telemetry timezone (read before changing TZ)
+
+The container **must run in the same timezone the monitored Sparks write their
+logs.** TabbyAPI (DGX #3) writes *naive* local timestamps (`2026-09-24 11:33:11`,
+no TZ) and `TabbyLogProbe` parses them in the **runtime's** local zone, then
+compares to `Date.now()`. If the container is in a different zone than the Sparks,
+every completion looks N hours stale → `perfMetricsStale=true` → the Qwen
+throughput **dial renders null and never moves** (the card looks alive but the
+gauge is blank). This bit us when the container ran `Etc/UTC` while DGX #1/#3 run
+`America/New_York` (-0400): the dial moved on the Mac mini dev server (shares the
+lab zone) but was frozen on production.
+
+Fix is baked into the deploy: `docker-compose.production.yml` sets
+`TZ=${TZ:-America/New_York}` and `deploy.env` sets `TZ=America/New_York`. If the
+fleet ever moves zones, update `TZ` in `deploy.env` to the Sparks' zone (the zone
+name, not a fixed offset — that keeps DST correct). Verify after any TZ change:
+
+```bash
+docker exec sparkDash date "+%Z %z"          # must match the Sparks (e.g. EDT -0400)
+# perfMetricsStale must be false in the live snapshot for the dial to render/move
+```
+
 ## First-time setup (once)
 
 ```bash
