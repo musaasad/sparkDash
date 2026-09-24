@@ -29,7 +29,7 @@ Mac mini / MacBook Pro / MacBook Air / trusted LAN + Tailscale devices
 - **Production directory (source):** `~/sparkDash-production` (on DGX #1)
 - **Persistent config/secrets:** `~/sparkDash-production-config/` (outside git)
 - **Container / image:** `sparkDash` / `sparkdash-production:<commit>` (tag `:latest` too)
-- **Auth mode:** bearer token (`SPARKDASH_TOKEN`), fail-closed if the token is ever missing.
+- **Auth mode:** currently **OPEN** (no token) per owner decision — `SPARKDASH_TOKEN` empty + `SPARKDASH_ALLOW_OPEN_REMOTE=1`. The compose default is fail-closed; see "Authentication / access" to re-enable the bearer token.
 - **Bind:** `BIND_HOST=192.168.1.173` (the LAN IP), **not** `0.0.0.0` — see "Bind & Tailscale".
 
 ## Bind & Tailscale (read before changing the bind)
@@ -145,14 +145,33 @@ Full snapshots of the pre-production install are under `~/sparkdash-rollback/<ts
 
 ## Authentication / access
 
-- The dashboard uses sparkDash's existing bearer auth (`SPARKDASH_TOKEN`).
-- A trusted device opens `http://192.168.1.173:5555/?token=<TOKEN>` **once**; the
-  token is stored in that browser's localStorage and stripped from the URL. After
-  that, plain `http://192.168.1.173:5555` works on that device.
-- No per-Mac SSH tunnel is required. LAN/Tailscale only — **do not** expose `:5555`
-  to the public internet; scope any firewall to the trusted LAN/tailnet.
-- LLM/TabbyAPI keys are used **server-side only** (encrypted in
-  `sparks-secrets.json` under `.secrets-key`); they are never sent to the browser.
+**Current state (owner decision, 2026-09): the LAN bind runs OPEN — no token.**
+`http://192.168.1.173:5555` works directly from any trusted LAN/tailnet device.
+This is set in `deploy.env` by leaving `SPARKDASH_TOKEN=` empty and
+`SPARKDASH_ALLOW_OPEN_REMOTE=1`. Because sparkDash's auth is all-or-nothing on a
+remote bind, an empty token also leaves **mutating endpoints open** — anyone on
+the LAN/tailnet can act on the dashboard, not just view it. LLM/TabbyAPI keys are
+still **server-side only** (encrypted in `sparks-secrets.json` under
+`.secrets-key`) and are never sent to the browser. Keep `:5555` scoped to the
+trusted LAN/tailnet — **do not** expose it to the public internet.
+
+The compose default stays secure (`SPARKDASH_ALLOW_OPEN_REMOTE=${...:-0}`); only
+this host's `deploy.env` opts into open access.
+
+**To re-enable token auth** (the previous posture):
+
+```bash
+cd ~/sparkDash-production-config
+cp -p deploy.env.auth-disabled deploy.env     # restores the token + ALLOW_OPEN_REMOTE=0
+cd ~/sparkDash-production
+docker compose -f docker-compose.production.yml \
+  --env-file ~/sparkDash-production-config/deploy.env up -d --force-recreate
+```
+
+The authed env is preserved at `deploy.env.auth-disabled` (chmod 600). When auth
+is on, a device opens `http://192.168.1.173:5555/?token=<TOKEN>` once (token stored
+in localStorage, URL stripped), after which the plain URL works on that device.
+No per-Mac SSH tunnel is required either way.
 
 ## Safety rails
 
