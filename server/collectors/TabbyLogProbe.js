@@ -405,6 +405,15 @@ export class TabbyLogState {
     this.file = file;
     this.active.clear();
     this._seenIds.clear();
+    // A new file is a NEW timestamp space (a fresh TabbyAPI launch, possibly after
+    // a clock jump or a terminal→systemd handoff). Carry over the completion-id
+    // high-water (ids stay monotonic across files) but RESET the freshness baseline
+    // so it rebuilds from this file's replay — otherwise a `_maxTsMs` left ahead of
+    // the new file's stamps (e.g. the previous log ran later, or the clock jumped)
+    // would reject every live START via the freshness guard and latch IDLE forever
+    // while completions keep folding. This is what caused the systemd-conversion
+    // regression: BUSY never lit although the log streamed live.
+    this._maxTsMs = null;
     return true;
   }
 
@@ -452,6 +461,10 @@ export class TabbyLogState {
         // A START far older than the newest line already seen is a replayed start
         // whose completion scrolled out — finished, not in flight. Skip it so it
         // cannot latch a phantom BUSY. Live starts are ~contemporaneous → pass.
+        // NOTE: this baseline (`_maxTsMs`) is reset on every log-file change
+        // (see setFile) so a rotation/clock jump cannot leave it stuck ahead of the
+        // new file's stamps and silently reject every live START (the systemd-
+        // conversion regression this guards against).
         if (ev.tsMs != null && prevMaxTsMs != null && prevMaxTsMs - ev.tsMs > TABBY_LOG_START_FRESH_MS) return false;
         this.startedTotal++;
         this.lastStart = ev;

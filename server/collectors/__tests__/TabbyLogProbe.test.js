@@ -541,6 +541,27 @@ test("TabbyLogState: a replayed START far older than newer lines does NOT open (
   assert.equal(st.snapshot().activeCount, 1, "a live contemporaneous start opens normally");
 });
 
+test("TabbyLogState: setFile resets the freshness baseline so a live start after a log rotation opens (systemd-conversion regression)", () => {
+  const st = new TabbyLogState();
+  st.setFile("old.log");
+  // The previous (terminal-launched) log ran to a LATER timestamp than the new
+  // file's stamps. Before the fix this left `_maxTsMs` stuck ahead of the new log,
+  // so every live START failed the freshness guard and BUSY never lit even though
+  // the new log streamed live — the exact systemd-conversion regression.
+  const LATE_OLD = COMPLETION.replace("08:43:06.141", "09:20:00.000").replace("#67897", "#500");
+  st.ingestLine(LATE_OLD); // _maxTsMs -> 09:20
+  // systemd handoff creates a NEW log whose first requests are stamped EARLIER.
+  st.setFile("new.log"); // must reset the freshness baseline (new timestamp space)
+  st.onReconnect();
+  const NEW_START = START.replace("08:43:00.000", "08:44:00.000").replace("#67897", "#600");
+  st.ingestLine(NEW_START); // ~36 min "older" than the stale old-log clock
+  assert.equal(
+    st.snapshot().activeCount,
+    1,
+    "a live start on the new file opens despite the previous log's later clock"
+  );
+});
+
 test("TabbyLogState: orphan reaper closes a start far below the completed high-water id", () => {
   const st = new TabbyLogState();
   st.setFile("x.log");
